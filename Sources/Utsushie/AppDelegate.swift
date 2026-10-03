@@ -11,6 +11,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let overlay = OverlayController()
     private let capture = CaptureService()
     private let thumbnails = ThumbnailController()
+    private let recordingBorder = RecordingBorder()
+    private var recordingState = RecordingState()
+    private var activeRecording: RecordingService?
+    private var recordingStartTask: Task<Void, Never>?
+    private var recordingToken: UUID?
+    private var recordingTimer: Timer?
+    private var recordingHostStart: Double = 0
+    private var recordingDate = Date()
+    private var recordingConfig = UtsushieConfig()
+    private var stopWhenStarted = false
+    private var quitAfterRecording = false
+    private var borderRect: CGRect?
+    private var shootItem: NSMenuItem!
     private var lastArea: LastArea?
     private var busy = false
     private var warningItem: NSMenuItem!
@@ -22,9 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         lastArea = LastArea.load(from: lastURL)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "UTSUSHIE")
-        let menu = NSMenu(); menu.delegate = self
+        let menu = NSMenu(); menu.delegate = self; menu.autoenablesItems = false
         for (title, selector) in [("撮影", #selector(shoot)), ("保存フォルダを開く", #selector(openFolder)), ("設定ファイルを開く", #selector(openConfig))] {
             let item = NSMenuItem(title: title, action: selector, keyEquivalent: ""); item.target = self; menu.addItem(item)
+            if selector == #selector(shoot) { shootItem = item }
         }
         warningItem = NSMenuItem(title: "", action: #selector(showWarnings), keyEquivalent: "")
         warningItem.target = self; menu.addItem(warningItem)
@@ -33,13 +47,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
         reloadConfig()
         hotkey.onPress = { [weak self] in self?.shoot() }
-        overlay.onCapture = { [weak self] request, remember in self?.take(request, remember: remember) }
+        overlay.onCapture = { [weak self] request, remember, output in
+            guard let self else { return }
+            if output == .video { self.startRecording(request, remember: remember) }
+            else { self.take(request, remember: remember) }
+        }
         overlay.onMoveLast = { [weak self] rect in self?.persistLast(rect) }
-        overlay.onCancel = { [weak self] in self?.thumbnails.setSuspended(false) }
+        overlay.onCancel = { [weak self] in
+            self?.recordingStartTask?.cancel()
+            self?.thumbnails.setSuspended(false)
+        }
         overlay.onAccessibilityNeeded = { [weak self] in self?.openPrivacy("Privacy_Accessibility") }
     }
-    func applicationWillTerminate(_ notification: Notification) { hotkey.stop(); overlay.close() }
-    func menuWillOpen(_ menu: NSMenu) { reloadConfig() }
+    func applicationWillTerminate(_ notification: Notification) { hotkey.stop(); overlay.close(); recordingBorder.close(); recordingTimer?.invalidate() }
+    func menuWillOpen(_ menu: NSMenu) {
+        if recordingState.phase == .idle { reloadConfig() }
+        shootItem.isEnabled = recordingState.phase == .recording || !busy && recordingState.phase == .idle
+    }
     private func reloadConfig() {
         let result = ConfigLoader.load()
         config = result.config; warnings = result.warnings
@@ -52,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc private func showWarnings() { alert("UTSUSHIEの警告", warnings.joined(separator: "\n")) }
     @objc private func shoot() {
+        if recordingState.phase == .recording { stopRecording(); return }
         guard !busy else { return }
         if overlay.isVisible { overlay.repeatCapture(); return }
         reloadConfig()
@@ -64,6 +89,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let last = lastArea.flatMap { CaptureGeometry.isVisible($0.rect, displays: ScreenGeometry.displays) ? $0.rect : nil }
         thumbnails.setSuspended(true)
         overlay.show(last: last)
+    }
+    private func startRecording(_ request: CaptureRequest, remember: Bool) {
+        guard !busy else { return }
+        guard VideoGeometry.display(containing: request.rect, displays: ScreenGeometry.displays) != nil else {
+            overlay.showError(CaptureError.unavailable("動画は1つのディスプレイの中で選んでください")); return
+        }
+        guard recordingState.begin() else { return }
+        busy = true; stopWhenStarted = false
+        let token = UUID(); recordingToken = token
+        recordingConfig = config; recordingDate = Date()
+        updateRecordingStatus()
+        recordingStartTask = Task {
+            var prepared: RecordingService?
+            do {
+                // オーバーレイを出したままcontentを取得し、除外対象の自アプリを確実に列挙する。
+                // 準備中のEscはTaskを取消し、非同期処理の後から録画が始まることを防ぐ。
+                let session = try await RecordingService.prepare(request: request, config: recordingConfig.video,
+                    directory: recordingConfig.outputURL(), onStop: { [weak self] in
+                        // 古いSCStreamの遅延通知で次の録画を止めない。
+                        guard let self, self.recordingToken == token else { return }
+                        self.streamStopped()
+                    })
+                prepared = session
+                try Task.checkCancellation()
+                activeRecording = session
+                overlay.close()
+                borderRect = request.rect; recordingBorder.show(rect: request.rect)
+                recordingHostStart = ProcessInfo.processInfo.systemUptime
+                try await session.start()
+                recordingState.didStart()
+                if remember { persistLast(request.rect) }
+                thumbnails.setSuspended(false)
+                updateRecordingStatus()
+                recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.recordingTick() }
+                }
+                recordingStartTask = nil
+                if stopWhenStarted || quitAfterRecording { stopRecording() }
+            } catch {
+                await prepared?.abort()
+                activeRecording = nil; recordingToken = nil; recordingState.reset(); busy = false
+                recordingBorder.close(); borderRect = nil; thumbnails.setSuspended(false)
+                recordingStartTask = nil; updateRecordingStatus()
+                if !(error is CancellationError) {
+                    if overlay.isVisible { overlay.showError(error) }
+                    else { alert("録画を開始できませんでした", error.localizedDescription) }
+                }
+                if quitAfterRecording { NSApp.terminate(nil) }
+            }
+        }
+    }
+    private func streamStopped() {
+        if recordingState.phase == .starting { stopWhenStarted = true }
+        else { stopRecording() }
+    }
+    private func recordingTick() {
+        guard recordingState.phase == .recording, let session = activeRecording else { return }
+        updateRecordingStatus()
+        guard ScreenGeometry.displays.contains(where: { $0.id == session.displayID }) else { stopRecording(); return }
+        if case let .window(id, _) = session.request {
+            let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]]
+            guard let bounds = info?.first?[kCGWindowBounds as String] as? [String: Any],
+                  let cgRect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { stopRecording(); return }
+            let rect = ScreenGeometry.appKit(cgRect)
+            if rect != borderRect { borderRect = rect; recordingBorder.show(rect: rect) }
+        }
+    }
+    private func updateRecordingStatus() {
+        let recording = recordingState.phase == .recording
+        statusItem.length = recordingState.phase == .idle ? NSStatusItem.squareLength : NSStatusItem.variableLength
+        statusItem.button?.imagePosition = recordingState.phase == .idle ? .imageOnly : .imageLeading
+        statusItem.button?.image = NSImage(systemSymbolName: recording ? "record.circle" : "viewfinder", accessibilityDescription: "UTSUSHIE")
+        switch recordingState.phase {
+        case .idle: statusItem.button?.title = ""
+        case .starting: statusItem.button?.title = "準備中"
+        case .recording: statusItem.button?.title = " ● \(MediaFormatting.elapsed(ProcessInfo.processInfo.systemUptime - recordingHostStart))"
+        case .finalizing: statusItem.button?.title = " 保存中"
+        }
+        shootItem.title = recording ? "録画を停止" : "撮影"
+        shootItem.isEnabled = recording || !busy && recordingState.phase == .idle
+    }
+    private func stopRecording() {
+        guard let session = activeRecording, recordingState.stop() else { return }
+        let stoppedAt = ProcessInfo.processInfo.systemUptime
+        let duration = max(0, stoppedAt - recordingHostStart)
+        recordingTimer?.invalidate(); recordingTimer = nil
+        recordingBorder.close(); borderRect = nil; updateRecordingStatus()
+        let screen = NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == session.displayID }
+        Task {
+            // finalizeが終わるまではファイルを共有させない。寿命も完了後から数える。
+            let pending = SharedArtifact(url: recordingConfig.outputURL(), kind: .mp4, width: session.width,
+                height: session.height, byteCount: 0, duration: duration)
+            let cardID = thumbnails.add(pending, image: await session.firstFrame(), copied: false,
+                seconds: recordingConfig.thumbnailSeconds, screen: screen, finalizing: true)
+            await session.stop()
+            var temporary: URL?
+            do {
+                let result = try await session.finish(hostTime: stoppedAt)
+                temporary = result.temporaryURL
+                let url = try ArtifactStore.publishVideo(from: result.temporaryURL, date: recordingDate)
+                temporary = nil
+                let bytes = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
+                let artifact = SharedArtifact(url: url, kind: .mp4, width: result.width, height: result.height,
+                    byteCount: bytes, duration: result.duration)
+                let copied = ClipboardWriter.copy(artifact, mode: recordingConfig.clipboard)
+                thumbnails.complete(cardID, artifact: artifact, image: result.image, copied: copied)
+            } catch {
+                if let temporary { try? FileManager.default.removeItem(at: temporary) }
+                thumbnails.remove(cardID)
+                alert("録画を保存できませんでした", error.localizedDescription)
+            }
+            activeRecording = nil; recordingToken = nil; recordingState.reset(); busy = false; updateRecordingStatus()
+            if quitAfterRecording { NSApp.terminate(nil) }
+        }
     }
     private func take(_ request: CaptureRequest, remember: Bool) {
         guard !busy else { return }
@@ -119,5 +258,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate()
         let alert = NSAlert(); alert.messageText = title; alert.informativeText = body; alert.runModal()
     }
-    @objc private func quitApp() { NSApp.terminate(nil) }
+    @objc private func quitApp() {
+        if recordingState.phase != .idle {
+            quitAfterRecording = true
+            if recordingState.phase == .starting { recordingStartTask?.cancel() }
+            else { stopRecording() }
+        } else { NSApp.terminate(nil) }
+    }
 }

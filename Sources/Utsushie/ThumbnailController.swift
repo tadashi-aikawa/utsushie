@@ -1,12 +1,14 @@
 import AppKit
+import UtsushieCore
 
 @MainActor
 final class ThumbnailController {
     private var cards: [ThumbnailCard] = []
     private var suspended = false
 
-    func add(_ artifact: SharedArtifact, image: CGImage, copied: Bool, seconds: Double, screen: NSScreen?) {
-        let card = ThumbnailCard(artifact: artifact, image: image, copied: copied, seconds: seconds)
+    @discardableResult
+    func add(_ artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, screen: NSScreen?, finalizing: Bool = false) -> UUID {
+        let card = ThumbnailCard(artifact: artifact, image: image, copied: copied, seconds: seconds, finalizing: finalizing)
         card.screen = screen ?? NSScreen.main ?? NSScreen.screens.first
         card.onClose = { [weak self, weak card] in
             guard let self, let card else { return }
@@ -17,6 +19,13 @@ final class ThumbnailController {
         cards.append(card)
         layout()
         if !suspended { card.show() }
+        return card.id
+    }
+    func complete(_ id: UUID, artifact: SharedArtifact, image: CGImage, copied: Bool) {
+        cards.first { $0.id == id }?.complete(artifact: artifact, image: image, copied: copied)
+    }
+    func remove(_ id: UUID) {
+        cards.first { $0.id == id }?.onClose?()
     }
     func setSuspended(_ value: Bool) {
         suspended = value
@@ -38,6 +47,7 @@ final class ThumbnailController {
 
 @MainActor
 private final class ThumbnailCard {
+    let id = UUID()
     let panel: CapturePanel
     var artifact: SharedArtifact
     var screen: NSScreen?
@@ -51,18 +61,25 @@ private final class ThumbnailCard {
     private var dragging = false
     private var saving = false
     private var keyMonitor: Any?
+    private(set) var finalizing: Bool
 
-    init(artifact: SharedArtifact, image: CGImage, copied: Bool, seconds: Double) {
-        self.artifact = artifact; remaining = seconds
+    init(artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, finalizing: Bool) {
+        self.artifact = artifact; remaining = seconds; self.finalizing = finalizing
         panel = CapturePanel(contentRect: CGRect(x: 0, y: 0, width: 264, height: 216), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.level = .floating; panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         view = ThumbnailView(frame: CGRect(x: 0, y: 0, width: 264, height: 216))
         view.card = self
-        view.image = NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height))
+        if let image { view.image = NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height)) }
         view.copied = copied
         panel.contentView = view
+    }
+    func complete(artifact: SharedArtifact, image: CGImage, copied: Bool) {
+        self.artifact = artifact; finalizing = false
+        view.image = NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height))
+        view.copied = copied; view.needsDisplay = true
+        resumeTimer()
     }
     func show() {
         visible = true; panel.orderFrontRegardless(); resumeTimer()
@@ -76,7 +93,7 @@ private final class ThumbnailCard {
         timer?.invalidate(); timer = nil; started = nil
     }
     private func resumeTimer() {
-        guard visible, !hovered, !dragging, !saving, timer == nil else { return }
+        guard visible, !hovered, !dragging, !saving, !finalizing, timer == nil else { return }
         started = Date()
         timer = Timer.scheduledTimer(withTimeInterval: max(0.01, remaining), repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.onClose?() }
@@ -106,9 +123,12 @@ private final class ThumbnailCard {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
     }
-    func reveal() { NSWorkspace.shared.activateFileViewerSelecting([artifact.url]) }
+    func reveal() {
+        guard !finalizing else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([artifact.url])
+    }
     func saveAs() {
-        guard !saving else { return }
+        guard !saving, !finalizing else { return }
         saving = true; pauseTimer(); stopKeys()
         let save = NSSavePanel()
         save.nameFieldStringValue = artifact.url.lastPathComponent
@@ -170,7 +190,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         }
     }
     override func mouseDragged(with event: NSEvent) {
-        guard !dragged, let downEvent, let card else { return }
+        guard !dragged, let downEvent, let card, !card.finalizing else { return }
         let a = convert(downEvent.locationInWindow, from: nil), b = convert(event.locationInWindow, from: nil)
         guard hypot(a.x - b.x, a.y - b.y) > 4 else { return }
         dragged = true; card.dragStarted()
@@ -192,11 +212,18 @@ private final class ThumbnailView: NSView, NSDraggingSource {
             let size = CGSize(width: image.size.width * factor, height: image.size.height * factor)
             image.draw(in: CGRect(x: preview.midX - size.width / 2, y: preview.midY - size.height / 2, width: size.width, height: size.height), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         }
-        let info = "\(card.artifact.kind.label)  \(card.artifact.width)×\(card.artifact.height)  \(max(1, Int((Double(card.artifact.byteCount) / 1024).rounded())))KB"
+        let info: String
+        if let duration = card.artifact.duration {
+            info = MediaFormatting.videoInfo(width: card.artifact.width, height: card.artifact.height, duration: duration, bytes: card.artifact.byteCount)
+        } else {
+            info = "\(card.artifact.kind.label)  \(card.artifact.width)×\(card.artifact.height)  \(max(1, Int((Double(card.artifact.byteCount) / 1024).rounded())))KB"
+        }
         text(info, at: CGPoint(x: 14, y: 160), size: 12)
-        text(copied ? "Copied" : "Saved", at: CGPoint(x: 14, y: 189), size: 12)
-        text("S", at: CGPoint(x: 162, y: 187), size: 14)
-        text("O", at: CGPoint(x: 198, y: 187), size: 14)
+        text(card.finalizing ? "保存中" : copied ? "Copied" : "Saved", at: CGPoint(x: 14, y: 189), size: 12)
+        if !card.finalizing {
+            text("S", at: CGPoint(x: 162, y: 187), size: 14)
+            text("O", at: CGPoint(x: 198, y: 187), size: 14)
+        }
         text("×", at: CGPoint(x: 234, y: 187), size: 17)
     }
     private func text(_ string: String, at point: CGPoint, size: Double) {

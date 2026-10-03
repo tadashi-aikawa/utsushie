@@ -2,9 +2,7 @@
 
 ## プロダクト
 
-UTSUSHIE(写絵)は、画面をWebPで撮影し、クリップボードと共有カードから渡すmacOSネイティブアプリです。
-
-フェーズ1は画像撮影のみです。Videoの状態は定義しています。録画処理は後から追加します。
+UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリップボードと共有カードから渡すmacOSネイティブアプリです。
 
 ## リポジトリ構成
 
@@ -14,6 +12,7 @@ UTSUSHIE(写絵)は、画面をWebPで撮影し、クリップボードと共有
   - `CaptureState.swift`: 対象と出力の状態、物理キーの遷移。
   - `SelectionGesture.swift`: クリック取り消しの閾値、範囲選択と前回枠移動のジェスチャー。
   - `FileNaming.swift`: ファイル名と前回範囲の永続化。
+  - `Video.swift`: 動画の偶数寸法・単一画面判定・録画状態・VFRの時間計算・表示文言。
 - `Sources/Utsushie/`: AppKit・ScreenCaptureKit・ApplicationServicesの実行ターゲット。Swift 6。
   - `AppDelegate.swift`: メニュー、権限、設定の再読込、撮影から共有までの流れ。
   - `GlobalHotkey.swift`: Carbonのグローバルホットキー。
@@ -21,11 +20,14 @@ UTSUSHIE(写絵)は、画面をWebPで撮影し、クリップボードと共有
   - `ScreenGeometry.swift`: NSScreenからCoreの座標モデルを作る境界。
   - `ChromeArea.swift`: Chromeの最前面ウィンドウからAXWebAreaを探索。
   - `CaptureService.swift`: 自アプリ除外、画面ごとの撮影と合成、単一ウィンドウ撮影。
+  - `RecordingService.swift`: SCStreamの構成、単一画面の領域録画、移動を追うウィンドウ録画。
+  - `MP4Writer.swift`: 専用キューでcompleteフレームをH.264/MP4へ書く。末尾保持とfinalize。
+  - `RecordingBorder.swift`: 入力を透過する範囲外の赤枠。
   - `WebPEncoder.swift`: sRGBへの変換とlibwebpエンコード。
-  - `Sharing.swift`: 画像と後続の動画が共有するファイル・クリップボード層。
+  - `Sharing.swift`: 画像と動画が共有するファイル・クリップボード層。
   - `ThumbnailController.swift`: 非アクティブカード、寿命、D&D、追加保存。
 - `Tests/UtsushieCoreTests/`: 設定・座標・状態・ファイル名のswift-testing。
-- `Tests/UtsushieAppTests/`: WebP実エンコード、保存の衝突、クリップボードの形式。
+- `Tests/UtsushieAppTests/`: WebP実エンコード、MP4実書き込みと再生時間、保存の衝突、クリップボードの形式。
 - `Resources/Info.plist`: bundle ID、LSUIElement、macOS 26。
 - `scripts/make-app.sh`: `.build/UTSUSHIE.app`の組み立て、ライセンス同梱と署名。
 
@@ -38,8 +40,19 @@ UTSUSHIE(写絵)は、画面をWebPで撮影し、クリップボードと共有
   - 注意: CG/AXの反転には主画面の高さを使います。全画面のmaxYは使いません。
 - クリップボードには要求されたファイルURLとWebPデータだけを載せます。
   - 注意: NSImageをpasteboardへ渡すとPNG/TIFFなどが追加されます。
+- 動画は設定によらずファイルURLだけを載せます。
+  - 理由: MP4のバイト列をクリップボードへ載せても対応アプリが少なく、メモリを消費します。
+- SCStreamとAVAssetWriterの可変状態は専用のシリアルキューで扱います。
+  - 注意: SwiftのSendableを付けるだけで任意スレッドから操作してよい訳ではありません。
+- complete以外のSCStreamフレームは書きません。
+  - 時間: VFRの時刻差を保ち、停止時に最後のcompleteフレームを複製して静止時間を保持します。
+- 完成前のMP4は同じ保存先の隠し一時ファイルへ書きます。
+  - 公開: finalize成功後に衝突を避けて改名します。共有とカードの寿命は完成後に始めます。
+- ウィンドウの移動は独立ウィンドウのフィルターで追います。
+  - 注意: 枠の座標を追うタイマーは録画内容をクロップしません。出力寸法は開始時の値を保ちます。
 - 自アプリの除外はSCContentFilterで行います。
   - 理由: パネルを隠すタイミングだけでは合成直前の写り込みを保証できません。
+  - 手順: 録画準備ではオーバーレイ表示中に自アプリを列挙し、その後で選択画面を閉じます。
 - IMEへ渡る前のlocal monitorで物理keyCodeを判定します。
   - 注意: modifierFlagsの`.function`は修飾キーの判定へ含めません。
 - 非アクティブパネルのビューは`acceptsFirstMouse`を明示します。
@@ -68,10 +81,10 @@ swift test
 権限と入力の受入試験は組み立てた`.app`で行います。
 
 - ユニットテストはCoreロジックと形式の契約を確かめます。
-  - 限界: ホットキー、IME、AX、非アクティブのクリック、外部アプリの貼り付け対応は保証しません。
+  - 限界: ホットキー、IME、AX、実画面のSCStream、非アクティブのクリック、外部アプリの貼り付け対応は保証しません。
 - 試験コードは一時フォルダとNSPasteboardItemを使います。
   - 効果: 利用者の保存フォルダや一般クリップボードを変更しません。
 
 ## リリース方法
 
-フェーズ1ではリリース自動化は未構築です。`make-app.sh release <version>`でローカル成果物を作れます。
+リリース自動化は未構築です。`make-app.sh release <version>`でローカル成果物を作れます。

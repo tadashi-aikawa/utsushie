@@ -70,11 +70,11 @@ func escapeDuringDragPreventsLaterMouseUp(_ movingLast: Bool) {
     #expect(state.pointerUp(at: CGPoint(x: 100, y: 100)) == .none)
 }
 
-@Test func videoClickCancelsAndDragRemainsUnavailable() {
+@Test func videoClickCancelsAndDragSelectsArea() {
     var state = CaptureState()
     _ = state.key(48, hasLast: false)
     _ = state.pointerDown(at: .zero, last: nil)
     #expect(state.pointerUp(at: .zero) == .cancel)
     _ = state.pointerDown(at: .zero, last: nil)
-    #expect(state.pointerUp(at: CGPoint(x: 10, y: 10)) == .videoUnavailable)
+    #expect(state.pointerUp(at: CGPoint(x: 10, y: 10)) == .captureArea(CGRect(x: 0, y: 0, width: 10, height: 10)))
 }

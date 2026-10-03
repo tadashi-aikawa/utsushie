@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 public enum PointerAction: Equatable, Sendable {
-    case none, cancel, captureWindow, videoUnavailable
+    case none, cancel, captureWindow
     case captureArea(CGRect), moveLast(CGRect)
 }
 

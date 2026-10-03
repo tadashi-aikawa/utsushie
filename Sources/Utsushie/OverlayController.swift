@@ -17,7 +17,7 @@ final class OverlayController {
     private(set) var message = ""
     private var panels: [CapturePanel] = []
     private var keyMonitor: Any?
-    var onCapture: ((CaptureRequest, Bool) -> Void)?
+    var onCapture: ((CaptureRequest, Bool, CaptureOutput) -> Void)?
     var onMoveLast: ((CGRect) -> Void)?
     var onCancel: (() -> Void)?
     var onAccessibilityNeeded: (() -> Void)?
@@ -74,11 +74,10 @@ final class OverlayController {
         switch action {
         case .none: break
         case .cancel: close(); onCancel?()
-        case .videoUnavailable: message = "Videoは未実装です。TabでImageへ戻れます"
         case .captureLast:
-            if let last { onCapture?(.region(last), true) }
+            if let last { onCapture?(.region(last), true, state.output) }
         case .captureChrome:
-            do { onCapture?(.region(try ChromeArea.rect()), false) }
+            do { onCapture?(.region(try ChromeArea.rect()), false, state.output) }
             catch {
                 state.fallbackToArea(); highlighted = nil; message = error.localizedDescription
                 if !AXIsProcessTrusted() { onAccessibilityNeeded?() }
@@ -124,9 +123,8 @@ final class OverlayController {
         case .cancel: perform(.cancel)
         case .captureWindow:
             updateWindow()
-            if let highlighted { onCapture?(highlighted, false) }
-        case .videoUnavailable: perform(.videoUnavailable)
-        case let .captureArea(rect): onCapture?(.region(rect), true)
+            if let highlighted { onCapture?(highlighted, false, state.output) }
+        case let .captureArea(rect): onCapture?(.region(rect), true, state.output)
         case let .moveLast(rect):
             if CaptureGeometry.isVisible(rect, displays: ScreenGeometry.displays) {
                 last = rect; onMoveLast?(rect)
@@ -181,7 +179,7 @@ private final class OverlayView: NSView {
         label("\(image)                       Tab: output", at: CGPoint(x: strip.minX + 18, y: strip.maxY - 30), size: 15)
         label("drag: Area   W: Window   C: Chrome", at: CGPoint(x: strip.minX + 18, y: strip.maxY - 56), size: 14)
         label("Enter: Last   Esc: Cancel", at: CGPoint(x: strip.minX + 18, y: strip.maxY - 81), size: 14)
-        let status = controller.state.output == .video ? "Videoは未実装です。TabでImageへ戻れます" : controller.message
+        let status = controller.message
         if !status.isEmpty {
             let messageRect = CGRect(x: max(16, (bounds.width - 640) / 2), y: strip.minY - 66, width: min(640, bounds.width - 32), height: 54)
             NSColor.black.withAlphaComponent(0.8).setFill()

@@ -2,6 +2,12 @@ import Foundation
 import TOMLKit
 
 public enum ClipboardMode: String, Sendable, CaseIterable { case both, file, data }
+public struct VideoConfig: Equatable, Sendable {
+    public var fps = 30
+    public var downscale = true
+    public var showsCursor = true
+    public init() {}
+}
 public struct Hotkey: Equatable, Sendable {
     public var keyCode: UInt32
     /// Carbonの修飾ビット。CoreにAppKit/Carbonを入れない。
@@ -18,6 +24,7 @@ public struct UtsushieConfig: Equatable, Sendable {
     public var lossless = false
     public var clipboard: ClipboardMode = .both
     public var thumbnailSeconds: Double = 5
+    public var video = VideoConfig()
     public init() {}
     public func outputURL(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
         outputDir.hasPrefix("~/") ? home.appendingPathComponent(String(outputDir.dropFirst(2))) : URL(fileURLWithPath: outputDir)
@@ -51,7 +58,7 @@ public enum ConfigLoader {
             return root[key]?.tomlValue
         }
         func warn(_ name: String) { warnings.append("\(name) が不正なため既定値を使います") }
-        for section in ["hotkey", "webp", "clipboard", "thumbnail"] {
+        for section in ["hotkey", "webp", "clipboard", "thumbnail", "video"] {
             if let item = root[section], item.tomlValue.table == nil { warn(section) }
         }
         if let item = value(nil, "outputDir") {
@@ -75,6 +82,15 @@ public enum ConfigLoader {
         if let item = value("thumbnail", "seconds") {
             if let number = item.double ?? item.int.map(Double.init), number.isFinite, (0.1...300).contains(number) { config.thumbnailSeconds = number }
             else { warn("thumbnail.seconds") }
+        }
+        if let item = value("video", "fps") {
+            if let fps = item.int, (1...60).contains(fps) { config.video.fps = fps }
+            else { warn("video.fps") }
+        }
+        for (key, assign) in [("downscale", { (v: Bool) in config.video.downscale = v }), ("showsCursor", { (v: Bool) in config.video.showsCursor = v })] {
+            if let item = value("video", key) {
+                if let bool = item.bool { assign(bool) } else { warn("video.\(key)") }
+            }
         }
         var hotkeyValid = true
         if let item = value("hotkey", "keyCode") {
@@ -109,6 +125,11 @@ public enum ConfigLoader {
     downscale = true # 見た目の1xへ縮小
     quality = 80 # 0〜100
     lossless = false
+
+    [video]
+    fps = 30 # 1〜60
+    downscale = true # H.264の寸法は偶数へ切り下げ
+    showsCursor = true
 
     [clipboard]
     mode = "both" # both / file / data
