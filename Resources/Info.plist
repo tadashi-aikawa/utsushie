@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.tadashi-aikawa.utsushie</string>
+    <key>CFBundleName</key>
+    <string>UTSUSHIE</string>
+    <key>CFBundleDisplayName</key>
+    <string>UTSUSHIE</string>
+    <key>CFBundleExecutable</key>
+    <string>UTSUSHIE</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.0.0-development</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>26.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>選択した画面の範囲やウィンドウを画像として保存するために画面収録を使います。</string>
+</dict>
+</plist>
