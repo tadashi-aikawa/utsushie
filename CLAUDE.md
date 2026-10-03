@@ -29,11 +29,15 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
 - `Tests/UtsushieCoreTests/`: 設定・座標・状態・ファイル名のswift-testing。
 - `Tests/UtsushieAppTests/`: WebP実エンコード、MP4実書き込みと再生時間、保存の衝突、クリップボードの形式。
 - `Resources/Info.plist`: bundle ID、LSUIElement、macOS 26。
-- `scripts/make-app.sh`: `.build/UTSUSHIE.app`の組み立て、ライセンス同梱と署名。
+- `Resources/utsushie.png` / `utsushie.icns`: ロゴの元画像とアプリアイコン。管理は [ロゴの管理](docs/logo.md)
+- `scripts/make-app.sh`: `.build/UTSUSHIE.app`の組み立て、ICNS・ライセンス同梱と署名。
+- `scripts/make-icon.sh`: PNGからICNSを再生成する。
+- `scripts/build_release.sh` / `render_cask.sh` / `update_tap.sh`: リリース用。下の「リリース方法」
 
 ## 変える前に知っておくこと
 
-- 仕様と設定の正本は[README](README.md)です。
+- 利用者向けの操作と設定の正本は[README](README.md)です。
+  - READMEには利用者が使う情報だけを書きます。設計の理由や内部の挙動はこのファイルかコードのコメントに書きます。
 - 設定ファイルへ状態を書き戻しません。
   - 理由: ユーザーが編集する設定の正本を保つためです。前回範囲だけ別JSONへ保存します。
 - Coreの座標はAppKitの主ディスプレイ左下原点です。
@@ -70,13 +74,21 @@ Conventional Commits形式で日本語のdescriptionを使います。
 
 owleryメンバーの作業ではauthorをメンバー名にします。委譲時のコミット禁止指示があればそちらを優先します。
 
-## テスト実行
+## ビルドとテスト
+
+macOS 26以降とSwift 6.2以降が必要です。
 
 ```sh
 swift build
 swift test
-./scripts/make-app.sh
+./scripts/make-app.sh release
+open .build/UTSUSHIE.app
 ```
+
+- 署名はUTSUSHIE専用の自己署名証明書`utsushie-dev`を使います。
+  - 設定: 別の証明書は`CODESIGN_IDENTITY`で指定できます。
+  - 証明書がなければad-hoc署名になり、再ビルドのたびに権限の再許可が要ることがあります。
+- 依存は`Package.swift`を参照してください。libwebpはSwiftPMでCソースから同梱し、ライセンスとPATENTSを`.app`に含めます。
 
 権限と入力の受入試験は組み立てた`.app`で行います。
 
