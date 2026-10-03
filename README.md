@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Resources/utsushie.png" alt="UTSUSHIEの撮影の判子" width="180">
+</p>
+
 # UTSUSHIE
 
 UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画にして、コピーとドラッグで共有するmacOSのメニューバーアプリです。
@@ -175,6 +179,22 @@ seconds = 5
   - 例外: TOMLの構文が壊れている場合は設定全体を既定へ戻します。
 - ホットキーにはCommand・Option・Controlのいずれかが必要です。
   - 理由: 通常の文字入力を奪う設定を避けるためです。
+
+## ロゴ
+
+元画像は [Resources/utsushie.png](Resources/utsushie.png) です。
+
+- READMEとアプリアイコンは同じ元画像を使います。
+- メニューバーの待機中にはロゴを18ポイントで表示します。
+  - 動作: 録画中・準備中・保存中には従来の状態表示を使います。
+
+配布用アイコンを再生成するときは次のコマンドを実行します。
+
+```sh
+./scripts/make-icon.sh
+```
+
+制作記録と管理方法は [ロゴの管理](docs/logo.md) を参照してください。
 
 ## 依存
 

@@ -30,11 +30,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var configURL: URL { ConfigLoader.defaultPath() }
     private var lastURL: URL { ConfigLoader.directory().appendingPathComponent("last-area.json") }
 
+    // バンドル済みのアイコンを共有し、状態の更新ごとに読み直さない。
+    private static let logoIcon: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "utsushie", withExtension: "icns"),
+              let image = NSImage(contentsOf: url) else { return nil }
+        image.size = NSSize(width: 18, height: 18)
+        image.isTemplate = false
+        image.accessibilityDescription = "UTSUSHIE 待機中"
+        return image
+    }()
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         lastArea = LastArea.load(from: lastURL)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "UTSUSHIE")
+        statusItem.button?.imagePosition = .imageOnly
+        statusItem.button?.imageScaling = .scaleProportionallyDown
+        statusItem.button?.image = Self.logoIcon ?? NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "UTSUSHIE")
         let menu = NSMenu(); menu.delegate = self; menu.autoenablesItems = false
         for (title, selector) in [("撮影", #selector(shoot)), ("保存フォルダを開く", #selector(openFolder)), ("設定ファイルを開く", #selector(openConfig))] {
             let item = NSMenuItem(title: title, action: selector, keyEquivalent: ""); item.target = self; menu.addItem(item)
@@ -160,7 +172,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let recording = recordingState.phase == .recording
         statusItem.length = recordingState.phase == .idle ? NSStatusItem.squareLength : NSStatusItem.variableLength
         statusItem.button?.imagePosition = recordingState.phase == .idle ? .imageOnly : .imageLeading
-        statusItem.button?.image = NSImage(systemSymbolName: recording ? "record.circle" : "viewfinder", accessibilityDescription: "UTSUSHIE")
+        if recordingState.phase == .idle, let logo = Self.logoIcon {
+            statusItem.button?.image = logo
+        } else {
+            statusItem.button?.image = NSImage(systemSymbolName: recording ? "record.circle" : "viewfinder", accessibilityDescription: "UTSUSHIE")
+        }
         switch recordingState.phase {
         case .idle: statusItem.button?.title = ""
         case .starting: statusItem.button?.title = "準備中"
