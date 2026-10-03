@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# swift build → UTSUSHIE.app → KIKIGAKIと同じ固定証明書で署名
+# swift build → UTSUSHIE.app → 専用の固定証明書で署名
 set -euo pipefail
 
 CONFIG="${1:-debug}"
@@ -25,11 +25,12 @@ cp "$ROOT/.build/checkouts/libwebp-Xcode/libwebp/PATENTS" "$APP/Contents/Resourc
 cp "$ROOT/.build/checkouts/TOMLKit/LICENSE" "$APP/Contents/Resources/Licenses/TOMLKit.txt"
 cp "$ROOT/Resources/tomlplusplus-LICENSE.txt" "$APP/Contents/Resources/Licenses/tomlplusplus.txt"
 
-# 同じ開発者の証明書は複数のbundle IDに使用できる。
-# KIKIGAKIの既存固定証明書を既定とし、別証明書は環境変数で選べる。
+# UTSUSHIE専用の固定証明書を既定とし、別証明書は環境変数で選べる。
+# bundle IDと証明書を固定して、更新時のTCC許可を維持する。
 # validのみの-vは付けない。自己署名の「信頼」設定と署名可能かは別。
-IDENTITY="${CODESIGN_IDENTITY:-kikigaki-dev}"
-if security find-identity -p codesigning | rg -F -q -- "$IDENTITY" &&
+IDENTITY="${CODESIGN_IDENTITY:-utsushie-dev}"
+# grepは入力を最後まで読み、pipefail下でfind-identityのSIGPIPEを防ぐ。
+if security find-identity -p codesigning | grep -F -- "$IDENTITY" >/dev/null &&
   codesign --force --timestamp=none --sign "$IDENTITY" "$APP"; then
   echo "Signed with: $IDENTITY"
 else

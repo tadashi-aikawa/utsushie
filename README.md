@@ -2,7 +2,27 @@
 
 UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画にして、コピーとドラッグで共有するmacOSのメニューバーアプリです。
 
-## 導入
+## インストール
+
+Homebrewで導入します。
+
+- 配布は準備中です。
+  - 条件: 初回リリース後に次のコマンドを利用できます。
+
+```sh
+brew install --cask tadashi-aikawa/tap/utsushie
+```
+
+更新は次のコマンドです。
+
+```sh
+brew upgrade --cask utsushie
+```
+
+- UTSUSHIEは自己署名の未公証アプリです。
+  - 手順: 初回起動がブロックされた場合は、システム設定 → プライバシーとセキュリティ → 「このまま開く」で許可してください。
+
+### ソースからビルドする場合
 
 macOS 26以降とSwift 6.2以降のCommand Line Toolsが必要です。
 
@@ -15,7 +35,7 @@ open .build/UTSUSHIE.app
 
 `.build/UTSUSHIE.app`を`/Applications`などの固定した場所へコピーして利用してください。
 
-- 署名はKIKIGAKIと同じ自己署名証明書`kikigaki-dev`を使います。
+- 署名はUTSUSHIE専用の自己署名証明書`utsushie-dev`を使います。
   - 理由: bundle IDと証明書を固定し、再ビルド時の権限を維持するためです。
   - 設定: 別の固定証明書は`CODESIGN_IDENTITY`で指定できます。
 - 証明書がなければad-hoc署名になります。

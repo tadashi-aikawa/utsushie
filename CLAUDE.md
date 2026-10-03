@@ -87,4 +87,9 @@ swift test
 
 ## リリース方法
 
-リリース自動化は未構築です。`make-app.sh release <version>`でローカル成果物を作れます。
+- `.github/workflows/release.yml`をmainで手動起動します。
+  - 処理: semantic-releaseがバージョンを決め、GitHub ReleasesへZIPを公開し、Homebrew tapのCaskを更新します。
+- `scripts/build_release.sh <version>`でローカルの配布用ZIPを作れます。
+  - 出力: `dist/UTSUSHIE-<version>.zip`
+  - 署名: 既定の固定証明書は`utsushie-dev`です。CIでは専用証明書の署名を必須にします。
+- `scripts/render_cask.sh <version> <sha256>`でCaskを標準出力へ書き出せます。
