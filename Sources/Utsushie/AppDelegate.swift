@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let overlay = OverlayController()
     private let capture = CaptureService()
     private let thumbnails = ThumbnailController()
+    private var recentCaptures: RecentCaptureMenu!
     private let annotationNavigationDiagnostics = AnnotationNavigationDiagnostics()
     private let recordingBorder = RecordingBorder()
     private var recordingState = RecordingState()
@@ -56,6 +57,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if selector == #selector(shoot) { shootItem = item }
             if selector == #selector(shoot) { menu.addItem(.separator()) }
         }
+        recentCaptures = RecentCaptureMenu(directory: { [weak self] in self?.config.outputURL() ?? UtsushieConfig().outputURL() },
+            onFiles: { [weak self] files in self?.thumbnails.pruneMemory(to: files) },
+            onSelect: { [weak self] url in self?.restoreCapture(url) })
+        let recentItem = NSMenuItem(title: "最近の撮影", action: nil, keyEquivalent: "")
+        recentItem.submenu = recentCaptures.menu; menu.insertItem(recentItem, at: 2)
+        thumbnails.onArtifactsChange = { [weak self] in self?.recentCaptures.refresh() }
         warningItem = NSMenuItem(title: "", action: #selector(showWarnings), keyEquivalent: "")
         warningItem.target = self; menu.addItem(warningItem)
         warningItem.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "設定の警告")
@@ -69,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.target = self; statusItem.button?.action = #selector(statusClicked)
         reloadConfig()
         warnings += VideoEditStore.cleanupAtLaunch(directory: config.outputURL())
+        recentCaptures.refresh()
         updateWarnings()
         hotkey.onPress = { [weak self] in self?.shoot() }
         overlay.onCapture = { [weak self] request, remember, output in
@@ -87,8 +95,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         annotationNavigationDiagnostics.stop()
         hotkey.stop(); overlay.close(); recordingBorder.close(); recordingTimer?.invalidate()
     }
-    func menuWillOpen(_ menu: NSMenu) {
+    func menuNeedsUpdate(_ menu: NSMenu) {
         if recordingState.phase == .idle { reloadConfig() }
+        recentCaptures.refresh()
         shootItem.isEnabled = recordingState.phase == .recording || !busy && recordingState.phase == .idle
     }
     private func reloadConfig() {
@@ -116,6 +125,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         warningItem?.title = "設定の警告 \(warnings.count)件…"
     }
     @objc private func showWarnings() { alert("UTSUSHIEの警告", warnings.joined(separator: "\n")) }
+    private func restoreCapture(_ url: URL) {
+        let seconds = config.thumbnailSeconds
+        Task {
+            do { try await thumbnails.restore(url, seconds: seconds, screen: NSScreen.main) }
+            catch { alert("撮影のカードを開けませんでした", error.localizedDescription) }
+        }
+    }
     @objc private func shoot() {
         if recordingState.phase == .recording { stopRecording(); return }
         guard !busy else { return }

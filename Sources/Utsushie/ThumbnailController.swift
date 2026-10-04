@@ -3,15 +3,31 @@ import UtsushieCore
 
 @MainActor
 final class ThumbnailController {
-    private var cards: [ThumbnailCard] = []
+    private(set) var cards: [ThumbnailCard] = []
     private var suspended = false
+    private var editingCards: Set<UUID> = []
     private var keyboardTargetID: UUID?
+    let recentImages = RecentImageMemory()
     var annotationConfig: () -> UtsushieConfig = { ConfigLoader.load().config }
+    var editorFocus = AnnotationApplicationFocus()
+    var onArtifactsChange: (() -> Void)?
 
     @discardableResult
-    func add(_ artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, screen: NSScreen?, finalizing: Bool = false) -> UUID {
-        let card = ThumbnailCard(artifact: artifact, image: image, copied: copied, seconds: seconds, finalizing: finalizing)
+    func add(_ artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, screen: NSScreen?, finalizing: Bool = false,
+             imageState: ImageEditState? = nil) -> UUID {
+        let card = ThumbnailCard(artifact: artifact, image: image, copied: copied, seconds: seconds, finalizing: finalizing, imageState: imageState)
         card.screen = screen ?? NSScreen.main ?? NSScreen.screens.first
+        card.editorFocus = editorFocus
+        card.onEditingChange = { [weak self, weak card] editing in
+            guard let self, let card else { return }
+            if editing { editingCards.insert(card.id) } else { editingCards.remove(card.id) }
+            for other in cards { other.setEditingSuspended(!editingCards.isEmpty, restart: !editing) }
+        }
+        card.setEditingSuspended(!editingCards.isEmpty)
+        card.onArtifactChange = { [weak self, weak card] in
+            guard let self, let card else { return }
+            rememberImage(card)
+        }
         card.annotationConfig = { [weak self] in self?.annotationConfig() ?? UtsushieConfig() }
         card.onStills = { [weak self, weak card] stills in
             guard let self, let card else { return }
@@ -34,6 +50,7 @@ final class ThumbnailController {
             self.layout()
         }
         cards.append(card)
+        if !finalizing { rememberImage(card) }
         keyboardTargetID = card.id
         updateKeyboardTarget()
         layout()
@@ -42,6 +59,7 @@ final class ThumbnailController {
     }
     func complete(_ id: UUID, artifact: SharedArtifact, image: CGImage, copied: Bool) {
         cards.first { $0.id == id }?.complete(artifact: artifact, image: image, copied: copied)
+        if !cards.contains(where: { $0.id == id }) { onArtifactsChange?() }
     }
     func remove(_ id: UUID) {
         cards.first { $0.id == id }?.onClose?()
@@ -49,6 +67,32 @@ final class ThumbnailController {
     func setSuspended(_ value: Bool) {
         suspended = value
         cards.forEach { value ? $0.hide() : $0.show() }
+    }
+    func card(for url: URL) -> ThumbnailCard? {
+        cards.first { $0.artifact.url.standardizedFileURL == url.standardizedFileURL }
+    }
+    func pruneMemory(to files: [RecentCaptureFile]) { recentImages.retain(files) }
+    private func rememberImage(_ card: ThumbnailCard) {
+        if let files = try? RecentCaptureStore.files(in: card.artifact.url.deletingLastPathComponent()) {
+            if let state = card.imageState { recentImages.remember(state, at: card.artifact.url, among: files) }
+            else { pruneMemory(to: files) }
+        }
+        onArtifactsChange?()
+    }
+    @discardableResult
+    func restore(_ url: URL, seconds: Double, screen: NSScreen?) async throws -> UUID {
+        if let existing = card(for: url) { bringForward(existing); return existing.id }
+        let file = RecentCaptureFile(url: url.standardizedFileURL, date: Date())
+        let state = recentImages.state(for: url)
+        let capture = try await RecentCaptureStore.load(file, maximumPixelSize: state != nil || file.kind == .mp4 ? 320 : nil)
+        // 読み込みを待つ間に同じファイルが選ばれても、カードを重ねて増やさない。
+        if let existing = card(for: url) { bringForward(existing); return existing.id }
+        return add(capture.artifact, image: capture.image, copied: false, seconds: seconds, screen: screen, imageState: state)
+    }
+    private func bringForward(_ card: ThumbnailCard) {
+        keyboardTargetID = card.id; updateKeyboardTarget()
+        card.restartLifetime()
+        if !suspended { card.bringForward() }
     }
     private func updateKeyboardTarget() {
         for card in cards { card.setKeyboardTarget(card.id == keyboardTargetID) }
@@ -75,32 +119,39 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     var onClose: (() -> Void)?
     var onRequestKeys: (() -> Void)?
     var onStills: (([VideoStillArtifact]) -> Void)?
+    var onEditingChange: ((Bool) -> Void)?
+    var onArtifactChange: (() -> Void)?
     private var view: ThumbnailView!
-    private var timer: Timer?
+    private(set) var timer: Timer?
     private var remaining: Double
     private var started: Date?
     private var hovered = false
     private var visible = false
     private var dragging = false
     private var saving = false
+    private var editingSuspended = false
     private var keyMonitor: Any?
     private var previousApplication: NSRunningApplication?
     private var isKeyboardTarget = false
     private let lifetime: Double
-    private let originalImage: CGImage?
-    private var annotations = AnnotationDocument()
-    private var editor: AnnotationEditorController?
-    private var videoEditor: VideoEditorController?
+    let imageState: ImageEditState?
+    private(set) var editor: AnnotationEditorController?
+    private(set) var videoEditor: VideoEditorController?
     private var videoSession: VideoEditSession?
     private var closed = false
     var annotationConfig: () -> UtsushieConfig = { UtsushieConfig() }
     var canShow: () -> Bool = { true }
-    var canEdit: Bool { !finalizing && (artifact.kind == .mp4 || originalImage != nil) }
+    var editorFocus = AnnotationApplicationFocus()
+    var copyImage: (SharedArtifact, Data, ClipboardMode) -> Bool = {
+        ClipboardWriter.copy($0, data: $1, mode: $2, to: .general, preservingOnFailure: true)
+    }
+    var canEdit: Bool { !finalizing && (artifact.kind == .mp4 || imageState != nil) }
     private(set) var finalizing: Bool
 
-    init(artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, finalizing: Bool) {
+    init(artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, finalizing: Bool, imageState: ImageEditState? = nil) {
         self.artifact = artifact; remaining = seconds; self.finalizing = finalizing
-        lifetime = seconds; originalImage = artifact.kind == .webP ? image : nil
+        lifetime = seconds
+        self.imageState = artifact.kind == .webP ? imageState ?? image.map { ImageEditState(original: $0) } : nil
         panel = ThumbnailPanel(contentRect: CGRect(x: 0, y: 0, width: 264, height: 216), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         panel.delegate = self
@@ -121,6 +172,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         self.artifact = artifact; finalizing = false
         view.image = NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height))
         view.copied = copied; view.refreshControls(); view.needsDisplay = true
+        onArtifactChange?()
         resumeTimer()
     }
     func show(claimKeyboard: Bool = true) {
@@ -134,10 +186,22 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     }
     func close() {
         closed = true
+        editor?.window.close(); videoEditor?.window.close()
         if !finalizing { videoSession?.close() }
         let restore = panel.isKeyWindow
         hide(); panel.close(); onClose = nil
         if restore { restoreFocus() }
+    }
+    func bringForward() {
+        if let editor { editor.window.orderFrontRegardless(); editor.window.makeKey(); return }
+        if let videoEditor { videoEditor.window.orderFrontRegardless(); videoEditor.window.makeKey(); return }
+        show()
+    }
+    func restartLifetime() { pauseTimer(); remaining = lifetime; resumeTimer() }
+    func setEditingSuspended(_ value: Bool, restart: Bool = false) {
+        pauseTimer(); editingSuspended = value
+        if restart { remaining = lifetime }
+        resumeTimer()
     }
     func setKeyboardTarget(_ value: Bool) {
         isKeyboardTarget = value
@@ -183,20 +247,21 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     @objc func dismiss() { onClose?() }
     @objc func edit() {
         if artifact.kind == .mp4 { editVideo(); return }
-        guard canEdit, editor == nil, let originalImage else { return }
+        guard canEdit, editor == nil, let imageState else { return }
         hide()
-        let controller = AnnotationEditorController(image: originalImage, document: annotations, screen: screen,
-                                                    privacyConfig: annotationConfig().privacy)
+        let controller = AnnotationEditorController(image: imageState.original, document: imageState.history.document, screen: screen,
+            applicationFocus: editorFocus, privacyConfig: annotationConfig().privacy, history: imageState.history)
         editor = controller
-        controller.onComplete = { [weak self] image, document in
-            guard let self else { return }
+        onEditingChange?(true)
+        controller.onComplete = { [weak self, weak controller] image, _ in
+            guard let self, let controller else { return }
             let config = self.annotationConfig()
             let data = try await Task.detached(priority: .userInitiated) {
                 try WebPEncoder.encode(image, quality: config.quality, lossless: config.lossless)
             }.value
             let updated = try AnnotationSave.commit(data: data, artifact: self.artifact, mode: config.clipboard,
-                                                    imageSize: CGSize(width: image.width, height: image.height))
-            self.annotations = document
+                imageSize: CGSize(width: image.width, height: image.height), copy: self.copyImage)
+            imageState.history = controller.canvas.history
             self.complete(artifact: updated, image: image, copied: true)
         }
         controller.onClose = { [weak self] in
@@ -204,6 +269,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             self.editor = nil; self.remaining = self.lifetime
             // 編集パネルが手放したキーを貼り付け先へ返す。ホバー時には再び取得できる。
             if self.canShow() { self.show(claimKeyboard: false) }
+            self.onEditingChange?(false)
         }
         controller.show()
     }
@@ -212,12 +278,14 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         hide()
         if videoSession == nil { videoSession = VideoEditSession(artifact: artifact, fps: annotationConfig().video.fps) }
         guard let session = videoSession else { return }
-        let controller = VideoEditorController(source: session.sourceURL, document: session.document, screen: screen)
+        let controller = VideoEditorController(source: session.sourceURL, document: session.document, screen: screen, focus: editorFocus)
         videoEditor = controller
+        onEditingChange?(true)
         controller.onClose = { [weak self] in
             guard let self else { return }
             videoEditor = nil; remaining = lifetime
             if canShow() { show(claimKeyboard: false) }
+            onEditingChange?(false)
         }
         controller.onComplete = { [weak self] document in
             guard let self else { return }
@@ -257,7 +325,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         timer?.invalidate(); timer = nil; started = nil
     }
     private func resumeTimer() {
-        guard visible, editor == nil, videoEditor == nil, !closed, !hovered, !dragging, !saving, !finalizing, timer == nil else { return }
+        guard visible, editor == nil, videoEditor == nil, !closed, !hovered, !dragging, !saving, !finalizing, !editingSuspended, timer == nil else { return }
         started = Date()
         timer = Timer.scheduledTimer(withTimeInterval: max(0.01, remaining), repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.onClose?() }

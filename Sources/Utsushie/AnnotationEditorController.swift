@@ -44,11 +44,12 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     var onClose: (() -> Void)?
 
     init(image: CGImage, document: AnnotationDocument, screen: NSScreen?, applicationFocus: AnnotationApplicationFocus = AnnotationApplicationFocus(),
-         privacyConfig: PrivacyConfig = PrivacyConfig(), privacyService: PrivacyDetectionService = PrivacyDetectionService()) {
-        initial = document
+         privacyConfig: PrivacyConfig = PrivacyConfig(), privacyService: PrivacyDetectionService = PrivacyDetectionService(),
+         history: AnnotationHistory? = nil) {
+        initial = history?.document ?? document
         self.applicationFocus = applicationFocus
         self.privacyConfig = privacyConfig; self.privacyService = privacyService
-        canvas = AnnotationCanvas(image: image, document: document, tool: Self.lastTool)
+        canvas = AnnotationCanvas(image: image, document: document, tool: Self.lastTool, history: history)
         let visible = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let size = CGSize(width: min(max(CGFloat(image.width) + 240, 1180), visible.width - 40),
                           height: min(max(CGFloat(image.height) + 292, 420), visible.height - 80) + AnnotationToolbarPresentation.height - 52)
@@ -407,8 +408,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     override var acceptsFirstResponder: Bool { true }
     override var needsPanelToBecomeKey: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    init(image: CGImage, document: AnnotationDocument, tool: AnnotationTool) {
-        original = image; history = AnnotationHistory(document); self.tool = tool
+    init(image: CGImage, document: AnnotationDocument, tool: AnnotationTool, history: AnnotationHistory? = nil) {
+        original = image; self.history = history ?? AnnotationHistory(document); self.tool = tool
         super.init(frame: .zero)
         // macOS 14以降のNSViewは既定でクリップしない。文字入力の子ビューも領域内に留める。
         clipsToBounds = true

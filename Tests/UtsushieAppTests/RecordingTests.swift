@@ -330,3 +330,27 @@ private func editableVideo(in directory: URL) async throws -> RecordedVideo {
     editor.goToEnd(); editor.captureFrame()
     #expect(editor.timeline.document.stills.map(\.time) == [0.3, 214000.0 / 60000])
 }
+
+@MainActor @Test func recentMP4ReadsDurationThumbnailAndRestoresAnEditableVideoCard() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    let file = try #require(RecentCaptureStore.files(in: dir).first)
+    let loaded = try await RecentCaptureStore.load(file, maximumPixelSize: 32)
+    #expect(loaded.artifact.kind == .mp4 && loaded.artifact.width == 64 && loaded.artifact.height == 48)
+    #expect(abs((loaded.artifact.duration ?? 0) - source.duration) < 0.001)
+    #expect(loaded.image.width <= 32 && loaded.image.height <= 32)
+    #expect(RecentCaptures.title(file: file, width: 64, height: 48, duration: loaded.artifact.duration).hasSuffix("MP4 0:03"))
+    let controller = ThumbnailController(); controller.editorFocus = .init(activate: {}, restore: { _ in })
+    defer { for card in controller.cards { controller.remove(card.id) } }
+    let id = try await controller.restore(file.url, seconds: 5, screen: nil)
+    let card = try #require(controller.card(for: file.url))
+    #expect(card.canEdit && card.id == id && card.timer?.isValid == true)
+    #expect(abs(try #require(card.timer).fireDate.timeIntervalSinceNow - 5) < 0.5)
+    card.edit()
+    let editor = try #require(card.videoEditor)
+    #expect(abs(editor.timeline.document.duration - source.duration) < 0.001)
+    editor.window.close()
+    #expect(abs(try #require(card.timer).fireDate.timeIntervalSinceNow - 5) < 0.5)
+}
