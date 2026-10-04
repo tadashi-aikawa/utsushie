@@ -30,9 +30,23 @@ private final class VideoExportJob: @unchecked Sendable {
     private let sourceDuration: Double
     private let width: Int
     private let height: Int
+    private let fps: Int
+    private let renderer: VideoTransitionRenderer
+    private struct HeldFrame {
+        var sample: CMSampleBuffer
+        var start: Double
+        var speed: Int
+    }
+    private var heldFastForward: HeldFrame?
     private var current: CMSampleBuffer?
     private var next: CMSampleBuffer?
-    private var pending: [CMSampleBuffer] = []
+    private enum Emission {
+        case sample(CMSampleBuffer)
+        case transition(before: CMSampleBuffer, after: CMSampleBuffer, kind: VideoTransitionKind, progress: Double, start: Double, duration: Double)
+    }
+    private var pending: [Emission] = []
+    private var precedingFrame: CMSampleBuffer?
+    private var emittedJunctions: Set<Int> = []
     private var image: CGImage?
     private var completed = false
     private var continuation: CheckedContinuation<RecordedVideo, Error>?
@@ -42,15 +56,16 @@ private final class VideoExportJob: @unchecked Sendable {
         guard plan.duration > 0 else { throw CaptureError.unavailable("残す範囲がありません") }
         self.destination = destination; self.plan = plan; self.sourceDuration = sourceDuration
         self.width = width; self.height = height
+        self.fps = max(1, fps); renderer = try VideoTransitionRenderer(width: width, height: height)
         reader = try AVAssetReader(asset: asset)
         output = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
         output.alwaysCopiesSampleData = false
         guard reader.canAdd(output) else { throw CaptureError.unavailable("動画の読み取り設定を作れません") }
         reader.add(output)
         writer = try AVAssetWriter(outputURL: destination, fileType: .mp4)
-        writer.shouldOptimizeForNetworkUse = true
+        writer.shouldOptimizeForNetworkUse = true; writer.movieTimeScale = 60000
         input = AVAssetWriterInput(mediaType: .video, outputSettings: VideoEncoding.settings(width: width, height: height, fps: fps))
-        input.expectsMediaDataInRealTime = false; input.transform = transform
+        input.expectsMediaDataInRealTime = false; input.transform = transform; input.mediaTimeScale = 60000
         guard writer.canAdd(input) else { throw CaptureError.unavailable("H.264の書き出し設定を作れません") }
         writer.add(input)
     }
@@ -72,10 +87,15 @@ private final class VideoExportJob: @unchecked Sendable {
         do {
             while input.isReadyForMoreMediaData {
                 if !pending.isEmpty {
-                    let sample = pending.removeFirst()
+                    let sample: CMSampleBuffer
+                    switch pending.removeFirst() {
+                    case .sample(let ready): sample = ready
+                    case let .transition(before, after, kind, progress, start, duration):
+                        sample = try renderer.transition(before: before, after: after, kind: kind, progress: progress, start: start, duration: duration)
+                    }
                     guard input.append(sample) else { throw writer.error ?? CaptureError.unavailable("動画のコマを書けません") }
                     if image == nil, let pixels = sample.imageBuffer {
-                        image = CIContext().createCGImage(CIImage(cvPixelBuffer: pixels), from: CGRect(x: 0, y: 0, width: width, height: height))
+                        image = renderer.context.createCGImage(CIImage(cvPixelBuffer: pixels), from: CGRect(x: 0, y: 0, width: width, height: height))
                     }
                     continue
                 }
@@ -89,9 +109,37 @@ private final class VideoExportJob: @unchecked Sendable {
                 let b = next?.presentationTimeStamp.seconds ?? sourceDuration
                 guard a.isFinite, b.isFinite, b > a else { throw CaptureError.unavailable("動画のコマの時刻が不正です") }
                 // 静止画が保持されている途中を切る場合も、境界の画像を先頭へ置く。
-                for segment in plan.segments where segment.source.start < b && segment.source.end > a {
+                for (index, segment) in plan.segments.enumerated() where segment.source.start < b && segment.source.end > a {
+                    if let junction = plan.junctions.first(where: { $0.followingSegment == index }),
+                       (junction.transition.kind == .fade || junction.transition.kind == .dissolve),
+                       !emittedJunctions.contains(index), let precedingFrame {
+                        // 黒のコマを必ず0.25秒へ置く。バッファは描画直前まで2枚を共有する。
+                        let count = max(1, Int(ceil(Double(fps) * 0.25))) * 2
+                        for frame in 0..<count {
+                            let offset = Double(frame) * 0.5 / Double(count)
+                            pending.append(.transition(before: precedingFrame, after: sample, kind: junction.transition.kind,
+                                progress: Double(frame) / Double(count), start: junction.outputTime + offset, duration: 0.5 / Double(count)))
+                        }
+                        emittedJunctions.insert(index)
+                    }
                     let start = max(a, segment.source.start), end = min(b, segment.source.end)
-                    pending.append(try retimed(sample, start: segment.outputStart + start - segment.source.start, duration: end - start))
+                    let outputStart = segment.outputTime(forSource: start)
+                    if segment.speed > 1 {
+                        if let held = heldFastForward {
+                            if outputStart - held.start >= 1 / Double(fps) - 1e-9 {
+                                pending.append(.sample(try renderer.fastForward(held.sample, speed: held.speed, start: held.start, duration: outputStart - held.start)))
+                                heldFastForward = HeldFrame(sample: sample, start: outputStart, speed: segment.speed)
+                            }
+                        } else { heldFastForward = HeldFrame(sample: sample, start: outputStart, speed: segment.speed) }
+                        if end == segment.source.end, let held = heldFastForward {
+                            pending.append(.sample(try renderer.fastForward(held.sample, speed: held.speed, start: held.start,
+                                duration: segment.outputStart + segment.outputDuration - held.start)))
+                            heldFastForward = nil
+                        }
+                    } else {
+                        pending.append(.sample(try retimed(sample, start: outputStart, duration: end - start)))
+                        precedingFrame = sample
+                    }
                 }
                 current = next; next = output.copyNextSampleBuffer()
             }
@@ -99,8 +147,8 @@ private final class VideoExportJob: @unchecked Sendable {
         } catch { fail(error) }
     }
     private func finish() {
-        completed = true; current = nil; next = nil
-        writer.endSession(atSourceTime: CMTime(seconds: plan.duration, preferredTimescale: 60000))
+        completed = true; current = nil; next = nil; precedingFrame = nil; heldFastForward = nil
+        writer.endSession(atSourceTime: VideoExportTiming.time(plan.duration))
         input.markAsFinished()
         writer.finishWriting {
             self.queue.async {
@@ -115,13 +163,13 @@ private final class VideoExportJob: @unchecked Sendable {
     }
     private func fail(_ error: Error) {
         completed = true; reader.cancelReading(); writer.cancelWriting()
-        current = nil; next = nil; pending = []
+        current = nil; next = nil; pending = []; precedingFrame = nil; heldFastForward = nil
         try? FileManager.default.removeItem(at: destination)
         continuation?.resume(throwing: error); continuation = nil
     }
     private func retimed(_ sample: CMSampleBuffer, start: Double, duration: Double) throws -> CMSampleBuffer {
-        var timing = CMSampleTimingInfo(duration: CMTime(seconds: duration, preferredTimescale: 60000),
-            presentationTimeStamp: CMTime(seconds: start, preferredTimescale: 60000), decodeTimeStamp: .invalid)
+        var timing = CMSampleTimingInfo(duration: VideoExportTiming.time(duration),
+            presentationTimeStamp: VideoExportTiming.time(start), decodeTimeStamp: .invalid)
         var copy: CMSampleBuffer?
         let status = CMSampleBufferCreateCopyWithNewTiming(allocator: kCFAllocatorDefault, sampleBuffer: sample,
             sampleTimingEntryCount: 1, sampleTimingArray: &timing, sampleBufferOut: &copy)

@@ -38,7 +38,10 @@ public enum VideoToolbarPresentation {
         return ToolbarHint(document.completionText, keys: document.isTrimmed || !document.stills.isEmpty ? [] : ["⏎"])
     }
     public static func length(document: VideoEditDocument) -> String {
-        String(format: "残す %.1f秒 / %.1f秒", document.outputDuration, document.duration)
+        if document.transitionDuration > 0 {
+            return String(format: "残す %.1f秒 + つなぎ %.1f秒 / %.1f秒", document.keptDuration, document.transitionDuration, document.duration)
+        }
+        return String(format: "残す %.1f秒 / %.1f秒", document.keptDuration, document.duration)
     }
 }
 

@@ -9,16 +9,16 @@ import UtsushieCore
 // サンプルは作成後に変更しない。SCStream同様、保持してwriterの専用キューへ渡す。
 private struct ImmutableSample: @unchecked Sendable { let buffer: CMSampleBuffer }
 
-private func sample(time: Double, status: SCFrameStatus = .complete, gray: UInt8 = 255) throws -> ImmutableSample {
+private func sample(time: Double, status: SCFrameStatus = .complete, gray: UInt8 = 255, width: Int = 64, height: Int = 48) throws -> ImmutableSample {
     var pixels: CVPixelBuffer?
-    let created = CVPixelBufferCreate(kCFAllocatorDefault, 64, 48, kCVPixelFormatType_32BGRA,
+    let created = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
         [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &pixels)
     #expect(created == kCVReturnSuccess)
     let image = try #require(pixels)
     CVPixelBufferLockBaseAddress(image, [])
     memset(CVPixelBufferGetBaseAddress(image), 255, CVPixelBufferGetDataSize(image))
     if gray != 255, let base = CVPixelBufferGetBaseAddress(image) {
-        for y in 0..<48 { for x in 0..<64 {
+        for y in 0..<height { for x in 0..<width {
             let offset = y * CVPixelBufferGetBytesPerRow(image) + x * 4
             for channel in 0..<3 { base.storeBytes(of: gray, toByteOffset: offset + channel, as: UInt8.self) }
         } }
@@ -101,13 +101,93 @@ func videoClipboardAlwaysContainsOnlyFileURL(_ mode: ClipboardMode) {
     #expect(!FileManager.default.fileExists(atPath: first.path) && !FileManager.default.fileExists(atPath: second.path))
 }
 
-private func editableVideo(in directory: URL) async throws -> RecordedVideo {
-    let writer = try MP4Writer(url: directory.appendingPathComponent("recording.mp4"), width: 64, height: 48, fps: 30)
+private func editableVideo(in directory: URL, width: Int = 64, height: Int = 48) async throws -> RecordedVideo {
+    let writer = try MP4Writer(url: directory.appendingPathComponent("recording.mp4"), width: width, height: height, fps: 30)
     for (time, gray) in [(0.0, UInt8(30)), (0.3, 80), (1.4, 140), (2.7, 200)] {
-        await feed(writer, sample: try sample(time: 100 + time, gray: gray), host: 1000 + time)
+        await feed(writer, sample: try sample(time: 100 + time, gray: gray, width: width, height: height), host: 1000 + time)
         try await Task.sleep(for: .milliseconds(100))
     }
     return try await writer.finish(hostTime: 1003.6)
+}
+
+@Test func fastForwardExportRetimesVFRAndBurnsBadgeOnlyIntoAcceleratedFrames() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir, width: 640, height: 360)
+    var document = VideoEditDocument(duration: source.duration, kept: [.init(0, 0.6), .init(2.6, 3.6)])
+    document.setTransition(for: .init(0.6, 2.6), kind: .fastForward, speed: 4)
+    let target = dir.appendingPathComponent("fast-forward.mp4")
+    _ = try await VideoEditExporter.export(source: source.temporaryURL, destination: target, document: document, fps: 30)
+    #expect(abs(try await AVURLAsset(url: target).load(.duration).seconds - 2.1) < 0.001)
+    let times = try await VideoEditMedia.frameTimes(url: target)
+    #expect(times.map { Int(($0 * 60000).rounded()) } == [0, 18000, 36000, 48000, 66000, 72000, 124000])
+    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: target))
+    generator.requestedTimeToleranceBefore = .zero; generator.requestedTimeToleranceAfter = .zero
+    for (time, expected) in [(0.3, 80), (0.8, 140), (1.1, 140), (1.2, 200)] {
+        let frame = try await generator.image(at: CMTime(seconds: time, preferredTimescale: 60000))
+        let pixels = try #require(frame.image.dataProvider?.data) as Data
+        #expect(abs(Int(pixels[1]) - expected) < 8)
+        if time == 0.8 {
+            let badge = VideoFastForwardBadge.rect(width: 640, height: 360, speed: 4)
+            let x = Int(badge.midX), y = 360 - Int(badge.minY + 3)
+            let offset = y * frame.image.bytesPerRow + x * (frame.image.bitsPerPixel / 8)
+            #expect(Int(pixels[offset + 1]) < 95)
+        }
+    }
+}
+
+@Test func fastForwardExportThinsDenseFramesToConfiguredFPS() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    // 録画用Writerのリアルタイム間引きを避け、全コマを確実に用意する。
+    let source = dir.appendingPathComponent("dense.mp4")
+    let writer = try AVAssetWriter(outputURL: source, fileType: .mp4)
+    let input = AVAssetWriterInput(mediaType: .video, outputSettings: VideoEncoding.settings(width: 64, height: 48, fps: 30))
+    input.expectsMediaDataInRealTime = false; writer.add(input)
+    #expect(writer.startWriting()); writer.startSession(atSourceTime: .zero)
+    for index in 0..<90 {
+        while !input.isReadyForMoreMediaData {
+            if writer.status == .failed { throw try #require(writer.error) }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(input.append(try sample(time: Double(index) / 30).buffer))
+    }
+    writer.endSession(atSourceTime: CMTime(seconds: 3, preferredTimescale: 60000)); input.markAsFinished()
+    await writer.finishWriting(); #expect(writer.status == .completed)
+    #expect(try await VideoEditMedia.frameTimes(url: source).count == 90)
+    var document = VideoEditDocument(duration: 3, kept: [.init(0, 0.5), .init(2.5, 3)])
+    document.setTransition(for: .init(0.5, 2.5), kind: .fastForward, speed: 4)
+    let target = dir.appendingPathComponent("thin.mp4")
+    _ = try await VideoEditExporter.export(source: source, destination: target, document: document, fps: 10)
+    let times = try await VideoEditMedia.frameTimes(url: target).filter { $0 >= 0.5 && $0 < 1 }
+    #expect(times.count == 5)
+    #expect(zip(times, times.dropFirst()).allSatisfy { $1 - $0 >= 0.1 - 0.0001 })
+}
+
+@Test(arguments: [VideoTransitionKind.fade, .dissolve])
+func transitionExportFreezesBoundaryFramesAndAddsHalfSecond(_ kind: VideoTransitionKind) async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    var document = VideoEditDocument(duration: source.duration, kept: [.init(0.15, 0.8), .init(2.9, 3.3)])
+    document.setTransition(for: .init(0.8, 2.9), kind: kind)
+    let target = dir.appendingPathComponent("fade.mp4")
+    _ = try await VideoEditExporter.export(source: source.temporaryURL, destination: target, document: document, fps: 30)
+    #expect(abs(try await AVURLAsset(url: target).load(.duration).seconds - 1.55) < 0.001)
+    let times = try await VideoEditMedia.frameTimes(url: target)
+    let transitionTimes: [Int] = (0..<16).map { 39000 + $0 * 1875 }
+    let expectedTimes: [Int] = [0, 9000] + transitionTimes + [69000]
+    #expect(times.map { Int(($0 * 60000).rounded()) } == expectedTimes)
+    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: target))
+    generator.requestedTimeToleranceBefore = .zero; generator.requestedTimeToleranceAfter = .zero
+    for (time, gray) in [(0.65, 80), (0.9, kind == .fade ? 0 : 140), (1.15, 200)] {
+        let frame = try await generator.image(at: CMTime(seconds: time, preferredTimescale: 60000))
+        let pixelData = try #require(frame.image.dataProvider?.data) as Data
+        #expect(abs(Int(pixelData[1]) - gray) <= 6)
+    }
 }
 
 @Test func videoExportKeepsVFRAndClipsHeldFramesAtEveryJoin() async throws {
@@ -186,6 +266,92 @@ private func editableVideo(in directory: URL) async throws -> RecordedVideo {
     session.close()
     #expect(!FileManager.default.fileExists(atPath: original.path))
     #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["recording.mp4"])
+}
+
+@MainActor @Test func transitionOnlyReeditReexportsOriginalAndRetainsChoicesAfterFailedCopy() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    let originalBytes = try Data(contentsOf: source.temporaryURL)
+    let artifact = SharedArtifact(url: source.temporaryURL, kind: .mp4, width: 64, height: 48, byteCount: originalBytes.count,
+        duration: source.duration, videoFPS: 30)
+    let session = VideoEditSession(artifact: artifact, fps: 60, rememberDirectory: { _ in })
+    session.document = VideoEditDocument(duration: 3.6, kept: [.init(0, 0.6), .init(2.6, 3.6)])
+    let range = session.document.interiorCuts[0]
+    session.document.setTransition(for: range, kind: .fastForward, speed: 4)
+    let (first, _) = try await session.save(artifact: artifact) { _ in true }
+    #expect(first.duration == 2.1 && !session.needsExport)
+    let savedBytes = try Data(contentsOf: first.url)
+    session.document.setTransition(for: range, kind: .dissolve)
+    #expect(session.needsExport)
+    do {
+        _ = try await session.save(artifact: first) { _ in false }
+        Issue.record("コピー失敗が成功扱いになりました")
+    } catch {
+        #expect(try Data(contentsOf: first.url) == savedBytes)
+        #expect(session.needsExport && session.document.transitions[0].kind == .dissolve)
+        #expect(session.document.transitions[0].multiplier == 4)
+    }
+    let (second, _) = try await session.save(artifact: first) { _ in true }
+    #expect(second.duration == 2.1 && !session.needsExport)
+    #expect(try Data(contentsOf: session.sourceURL) == originalBytes)
+    session.document.setTransition(for: range, kind: .fastForward)
+    #expect(session.document.transitions[0].multiplier == 4)
+    session.close()
+}
+
+@Test func mixedTransitionsExportInSourceOrderIncludingMultipleJoinsWithinOneHeldFrame() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    var document = VideoEditDocument(duration: 3.6,
+        kept: [.init(0, 0.2), .init(0.5, 0.6), .init(0.8, 1), .init(1.2, 3.6)])
+    document.setTransition(for: .init(0.2, 0.5), kind: .fastForward, speed: 3)
+    document.setTransition(for: .init(0.6, 0.8), kind: .fade)
+    document.setTransition(for: .init(1, 1.2), kind: .dissolve)
+    let target = dir.appendingPathComponent("mixed.mp4")
+    let result = try await VideoEditExporter.export(source: source.temporaryURL, destination: target, document: document, fps: 30)
+    #expect(abs(result.duration - 4) < 0.000001)
+    #expect(abs(try await AVURLAsset(url: target).load(.duration).seconds - 4) < 0.0001)
+    let times = try await VideoEditMedia.frameTimes(url: target)
+    #expect(times.first == 0 && zip(times, times.dropFirst()).allSatisfy { $0 < $1 })
+    #expect(times.contains { abs($0 - 0.4) < 0.00001 })
+    #expect(times.contains { abs($0 - 1.1) < 0.00001 })
+    #expect(times.contains { abs($0 - 1.6) < 0.00001 })
+}
+
+@MainActor @Test(arguments: [VideoTransitionKind.fade, .dissolve])
+func seekingDuringTransitionPreviewCancelsAnimationAndDoesNotResumePlayback(_ kind: VideoTransitionKind) async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    var document = VideoEditDocument(duration: 3.6, kept: [.init(0, 0.8), .init(2.9, 3.6)])
+    document.setTransition(for: .init(0.8, 2.9), kind: kind)
+    let editor = VideoEditorController(source: source.temporaryURL, document: document, screen: nil,
+        focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    for _ in 0..<100 where !editor.canCapture { try await Task.sleep(for: .milliseconds(20)) }
+    #expect(editor.canCapture)
+    let preview = try #require(editor.window.contentView?.subviews.first { view in
+        view.layer?.sublayers?.contains { $0 is AVPlayerLayer } == true
+    })
+    editor.seek(to: 0.6, resume: true)
+    var sawTransition = false
+    for _ in 0..<150 {
+        if preview.layer?.sublayers?.contains(where: { $0.contents != nil && !$0.isHidden }) == true {
+            sawTransition = true; break
+        }
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(sawTransition)
+    editor.seek(to: 1.4)
+    try await Task.sleep(for: .milliseconds(700))
+    #expect(!editor.timeline.playing && editor.player.rate == 0)
+    #expect(editor.position == 1.4)
+    #expect(preview.layer?.sublayers?.allSatisfy { $0 is AVPlayerLayer || $0.contents == nil || $0.isHidden } == true)
 }
 
 @Test func videoOriginalRenameFailureAndLaunchCleanupPreservePublicFiles() throws {

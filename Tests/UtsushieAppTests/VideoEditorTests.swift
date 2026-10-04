@@ -136,3 +136,43 @@ private final class VideoRunningApplication: NSRunningApplication, @unchecked Se
     editor.goToStart()
     #expect(!bar.discardButton.armed && bar.discardButton.title == "破棄")
 }
+
+@MainActor @Test func cutTransitionMenuEditsIntegerSpeedAndUsesEditorUndoHistory() throws {
+    var document = VideoEditDocument(duration: 24.1, kept: [.init(2.4, 6.2), .init(11, 21.8)])
+    let range = document.interiorCuts[0]
+    let editor = VideoEditorController(source: URL(fileURLWithPath: "/tmp/utsushie-test-missing.mp4"),
+        document: document, screen: nil, focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    editor.window.contentView?.layoutSubtreeIfNeeded()
+    let menu = VideoTransitionMenu(transition: document.transition(for: range)) { kind, speed in
+        var next = editor.timeline.document; next.setTransition(for: range, kind: kind, speed: speed)
+        editor.timeline.onEdit?(next, true)
+    }
+    let buttons = menu.view.subviews.compactMap { $0 as? NSButton }
+    #expect(buttons.count == 4)
+    let fastForward = try #require(buttons.first { $0.tag == 1 }); fastForward.performClick(nil)
+    #expect(editor.timeline.document.transitions[0].multiplier == 5)
+    #expect(editor.toolbar.length.stringValue == "残す 14.6秒 + つなぎ 1.0秒 / 24.1秒")
+    let field = try #require(menu.view.subviews.compactMap { $0 as? NSTextField }.first { $0.isEditable })
+    field.stringValue = "8"; menu.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification))
+    #expect(editor.timeline.document.transitions[0].multiplier == 8)
+    let stepper = try #require(menu.view.subviews.compactMap { $0 as? NSStepper }.first)
+    stepper.integerValue = 9; _ = NSApp.sendAction(stepper.action!, to: stepper.target, from: stepper)
+    #expect(editor.timeline.document.transitions[0].multiplier == 9)
+    editor.undo(); #expect(editor.timeline.document.transitions[0].multiplier == 8)
+    editor.undo(); #expect(editor.timeline.document.transitions[0].multiplier == 5)
+    editor.undo(); #expect(editor.timeline.document.transitions[0].kind == .none)
+    editor.redo(); #expect(editor.timeline.document.transitions[0].kind == .fastForward)
+    let fade = try #require(buttons.first { $0.tag == 2 }); fade.performClick(nil)
+    menu.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification))
+    #expect(editor.timeline.document.transitions[0].kind == .fade)
+    field.stringValue = "2.5"; menu.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification))
+    #expect(editor.timeline.document.transitions[0].kind == .fade)
+    fastForward.performClick(nil)
+    document = editor.timeline.document
+    let reopened = VideoEditorController(source: URL(fileURLWithPath: "/tmp/utsushie-test-missing.mp4"),
+        document: document, screen: nil, focus: .init(activate: {}, restore: { _ in }))
+    defer { reopened.window.close() }
+    #expect(reopened.timeline.document.transitions[0].multiplier == 9)
+    #expect(reopened.toolbar.trays.count == 2)
+}

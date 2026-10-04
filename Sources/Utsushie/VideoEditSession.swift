@@ -6,7 +6,7 @@ final class VideoEditSession {
     private(set) var originalURL: URL?
     var document: VideoEditDocument
     private var savedDocument: VideoEditDocument
-    var needsExport: Bool { document.kept != savedDocument.kept }
+    var needsExport: Bool { document.kept != savedDocument.kept || document.transitions != savedDocument.transitions }
     private let url: URL
     private let fps: Int
     private let rememberDirectory: @MainActor (URL) -> Void
