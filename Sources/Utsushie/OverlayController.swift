@@ -30,6 +30,8 @@ final class OverlayController {
     var onAccessibilityNeeded: (() -> Void)?
     var isVisible: Bool { !panels.isEmpty }
 
+    init(state: CaptureState = CaptureState()) { self.state = state }
+
     func show(last: CGRect?) {
         close()
         state = CaptureState()
@@ -260,12 +262,11 @@ final class OverlayView: NSView {
     private func drawHUD(_ controller: OverlayController, visible: CGRect) {
         let items = OverlayPresentation.items(output: controller.state.output, target: controller.state.target, hasLast: controller.last != nil)
         let font = NSFont.systemFont(ofSize: 12.5, weight: .medium)
-        let keyFont = NSFont.systemFont(ofSize: 10.5, weight: .medium)
-        func width(_ text: String, font: NSFont) -> CGFloat { ceil((text as NSString).size(withAttributes: [.font: font]).width) }
         let widths = items.map { item in
-            width(item.title, font: font) + 14 + (item.key.map { width($0, font: keyFont) + ($0 == "ドラッグ" ? 6 : 14) } ?? 0)
+            ToolbarDrawing.itemWidth(title: item.title, key: item.key, recording: item.recording, face: item.title == "やめる" ? .secondary : .tool)
         }
-        let stripWidth = max(620, widths.reduce(0, +) + 78)
+        let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: ToolbarDrawing.keyWidth("Tab"))
+        let stripWidth = layout.width
         let factor = min(1, (visible.width - 24) / stripWidth)
         let hasError = !controller.message.isEmpty
         let errorWidth = min(640, visible.width - 24)
@@ -277,27 +278,12 @@ final class OverlayView: NSView {
         NSGraphicsContext.saveGraphicsState()
         let transform = NSAffineTransform(); transform.translateX(by: origin.x, yBy: origin.y); transform.scale(by: factor); transform.concat()
         UIDrawing.fill(CGRect(x: 0, y: 0, width: stripWidth, height: 40), color: UITheme.ink.withAlphaComponent(0.94), radius: 12)
-        var x: CGFloat = 8
+        ToolbarDrawing.tray(layout.outputTray)
+        ToolbarDrawing.tray(layout.targetTray)
+        ToolbarDrawing.key("Tab", in: layout.tab)
         for (index, item) in items.enumerated() {
-            if index == 2 {
-                UIDrawing.key("Tab", in: CGRect(x: x + 4, y: 11.5, width: 28, height: 17)); x += 38
-                divider(x); x += 8
-            } else if index == 6 { divider(x + 3); x += 10 }
-            let cell = CGRect(x: x, y: 7, width: widths[index], height: 26)
-            if item.selected {
-                UIDrawing.fill(cell, color: item.recording ? UITheme.redFace : NSColor.white.withAlphaComponent(0.15), radius: 6)
-            }
-            let color = !item.enabled ? UITheme.key : item.selected ? NSColor.white : UITheme.text
-            UIDrawing.text(item.title, in: CGRect(x: x + 7, y: 12, width: width(item.title, font: font), height: 17), size: 12.5, color: color)
-            if let key = item.key {
-                let keyX = x + 7 + width(item.title, font: font) + 6
-                if key == "ドラッグ" {
-                    UIDrawing.text(key, in: CGRect(x: keyX, y: 13, width: widths[index] - (keyX - x), height: 15), size: 10.5, color: UITheme.key)
-                } else {
-                    UIDrawing.key(key, in: CGRect(x: keyX, y: 11.5, width: width(key, font: keyFont) + 8, height: 17))
-                }
-            }
-            x += widths[index] + 2
+            ToolbarDrawing.item(title: item.title, key: item.key, in: layout.items[index],
+                style: index == 6 ? .secondary : .tool, selected: item.selected, recording: item.recording, dimmed: !item.enabled)
         }
         NSGraphicsContext.restoreGraphicsState()
         if hasError {
@@ -309,8 +295,5 @@ final class OverlayView: NSView {
             (controller.message as NSString).draw(in: CGRect(x: box.minX + 40, y: box.minY + 10, width: box.width - 54, height: box.height - 20),
                 withAttributes: [.font: font, .foregroundColor: UITheme.text, .paragraphStyle: paragraph])
         }
-    }
-    private func divider(_ x: CGFloat) {
-        NSColor.white.withAlphaComponent(0.14).setFill(); CGRect(x: x, y: 10, width: 1, height: 20).fill()
     }
 }

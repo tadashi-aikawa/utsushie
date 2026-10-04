@@ -107,7 +107,7 @@ private final class PrivacyTimings: @unchecked Sendable {
     defer { editor.window.close() }
     #expect(!editor.handlePrivacyKey(try privacyKey(4, flags: .shift)))
     #expect(editor.handlePrivacyKey(try privacyKey(4, flags: .function)))
-    #expect(editor.hintText == "設定で有効にすると使えます" && !editor.isFindingPrivacy)
+    #expect(editor.hintText == AnnotationToolbarPresentation.aiDisabled && !editor.isFindingPrivacy)
     #expect(editor.canvas.document.annotations.isEmpty)
 }
 
@@ -124,7 +124,7 @@ private final class PrivacyTimings: @unchecked Sendable {
     let editor = AnnotationEditorController(image: try privacyImage(), document: initial, screen: nil, privacyConfig: config, privacyService: service)
     defer { editor.window.close() }
     editor.canvas.keyDown(with: try privacyKey(4))
-    #expect(editor.isFindingPrivacy && editor.hintText.contains("探しています"))
+    #expect(editor.isFindingPrivacy && editor.toolbar.aiButton.title == "探しています" && editor.toolbar.aiButton.key == "Esc")
     editor.canvas.keyDown(with: try privacyKey(4))
     editor.canvas.keyDown(with: try privacyKey(4, repeating: true))
     editor.canvas.keyDown(with: try privacyKey(15))

@@ -80,6 +80,14 @@ private func uiPixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
         let overlayBitmap = try #require(overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds))
         overlay.cacheDisplay(in: overlay.bounds, to: overlayBitmap)
         try overlayBitmap.representation(using: .png, properties: [:])?.write(to: url.appendingPathComponent("overlay.png"))
+        var videoState = CaptureState()
+        _ = videoState.key(48, hasLast: false)
+        let videoController = OverlayController(state: videoState)
+        overlay.controller = videoController
+        let videoBitmap = try #require(overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds))
+        overlay.cacheDisplay(in: overlay.bounds, to: videoBitmap)
+        try videoBitmap.representation(using: .png, properties: [:])?.write(to: url.appendingPathComponent("overlay-video.png"))
+        overlay.controller = controller
         controller.showError(CaptureError.unavailable("Chrome撮影にはアクセシビリティの許可が必要です。Escで閉じ、システム設定で許可してください。"))
         let errorBitmap = try #require(overlay.bitmapImageRepForCachingDisplay(in: overlay.bounds))
         overlay.cacheDisplay(in: overlay.bounds, to: errorBitmap)

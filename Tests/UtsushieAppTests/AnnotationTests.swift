@@ -632,7 +632,7 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     let fit = editor.canvas.imageRect, output = editor.canvas.exportLayout
     let initialImage = try AnnotationRenderer.compose(editor.canvas.original, document: doc)
     #expect(editor.handleEquivalent(try annotationKeyEvent(keyCode: 24, characters: "=", flags: [.command, .shift])))
-    #expect(editor.canvas.displayScale == 1.25 && editor.zoomLabel.stringValue == "125%")
+    #expect(editor.canvas.displayScale == 1.25 && editor.toolbar.zoomButton.title == "125%")
     #expect(editor.handleEquivalent(try annotationKeyEvent(keyCode: 27, characters: "-", flags: .command)))
     #expect(editor.canvas.displayScale == 1)
     editor.canvas.pan(by: CGPoint(x: -120, y: 40))
@@ -640,7 +640,7 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     #expect(editor.canvas.imageRect == fit)
     editor.canvas.zoom(to: 4, around: CGPoint(x: 260, y: 160))
     #expect(editor.handleEquivalent(try annotationKeyEvent(keyCode: 18, characters: "1", flags: .command)))
-    #expect(editor.canvas.displayScale == 1 && editor.zoomLabel.stringValue == "100%")
+    #expect(editor.canvas.displayScale == 1 && editor.toolbar.zoomButton.title == "100%")
     #expect(editor.canvas.document == doc && editor.canvas.exportLayout == output)
     #expect(!editor.canvas.history.canUndo)
     let after = try AnnotationRenderer.compose(editor.canvas.original, document: editor.canvas.document)
@@ -860,7 +860,7 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     let canvas = editor.canvas
     #expect(canvas.clipsToBounds)
     #expect(root.subviews.first === canvas)
-    let bar = try #require(root.subviews.last as? NSStackView)
+    let bar = try #require(root.subviews.last as? AnnotationToolbarView)
     let bitmap = try #require(root.bitmapImageRepForCachingDisplay(in: root.bounds))
     root.cacheDisplay(in: root.bounds, to: bitmap)
     let scaleX = CGFloat(bitmap.pixelsWide) / root.bounds.width
@@ -872,7 +872,7 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     #expect(canvas.imageRect.minY < 0)
     root.cacheDisplay(in: root.bounds, to: bitmap)
     #expect(bitmap.colorAt(x: x, y: y) == toolbarBefore)
-    let imageColor = try #require(bitmap.colorAt(x: x, y: Int(72 * scaleY))?.usingColorSpace(.sRGB))
+    let imageColor = try #require(bitmap.colorAt(x: x, y: Int((bar.frame.maxY + 20) * scaleY))?.usingColorSpace(.sRGB))
     #expect(imageColor.redComponent > 0.99 && imageColor.greenComponent > 0.99 && imageColor.blueComponent > 0.99)
     canvas.tool = .text
     canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 80, y: 50)))
