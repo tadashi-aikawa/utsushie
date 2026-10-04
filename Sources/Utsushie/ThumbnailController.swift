@@ -5,18 +5,31 @@ import UtsushieCore
 final class ThumbnailController {
     private var cards: [ThumbnailCard] = []
     private var suspended = false
+    private var keyboardTargetID: UUID?
+    var annotationConfig: () -> UtsushieConfig = { ConfigLoader.load().config }
 
     @discardableResult
     func add(_ artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, screen: NSScreen?, finalizing: Bool = false) -> UUID {
         let card = ThumbnailCard(artifact: artifact, image: image, copied: copied, seconds: seconds, finalizing: finalizing)
         card.screen = screen ?? NSScreen.main ?? NSScreen.screens.first
+        card.annotationConfig = { [weak self] in self?.annotationConfig() ?? UtsushieConfig() }
+        card.canShow = { [weak self] in self?.suspended == false }
+        card.onRequestKeys = { [weak self, weak card] in
+            guard let self, let card, self.cards.contains(where: { $0 === card }) else { return }
+            self.keyboardTargetID = card.id
+            self.updateKeyboardTarget()
+        }
         card.onClose = { [weak self, weak card] in
             guard let self, let card else { return }
             card.close()
             self.cards.removeAll { $0 === card }
+            if self.keyboardTargetID == card.id { self.keyboardTargetID = self.cards.last?.id }
+            self.updateKeyboardTarget()
             self.layout()
         }
         cards.append(card)
+        keyboardTargetID = card.id
+        updateKeyboardTarget()
         layout()
         if !suspended { card.show() }
         return card.id
@@ -30,6 +43,9 @@ final class ThumbnailController {
     func setSuspended(_ value: Bool) {
         suspended = value
         cards.forEach { value ? $0.hide() : $0.show() }
+    }
+    private func updateKeyboardTarget() {
+        for card in cards { card.setKeyboardTarget(card.id == keyboardTargetID) }
     }
     private func layout() {
         // 配列は古い順。逆順に下から置くので最新が最下段。
@@ -46,12 +62,13 @@ final class ThumbnailController {
 }
 
 @MainActor
-private final class ThumbnailCard {
+private final class ThumbnailCard: NSObject, NSWindowDelegate {
     let id = UUID()
-    let panel: CapturePanel
+    let panel: ThumbnailPanel
     var artifact: SharedArtifact
     var screen: NSScreen?
     var onClose: (() -> Void)?
+    var onRequestKeys: (() -> Void)?
     private var view: ThumbnailView!
     private var timer: Timer?
     private var remaining: Double
@@ -61,11 +78,25 @@ private final class ThumbnailCard {
     private var dragging = false
     private var saving = false
     private var keyMonitor: Any?
+    private var previousApplication: NSRunningApplication?
+    private var isKeyboardTarget = false
+    private let lifetime: Double
+    private let originalImage: CGImage?
+    private var annotations = AnnotationDocument()
+    private var editor: AnnotationEditorController?
+    var annotationConfig: () -> UtsushieConfig = { UtsushieConfig() }
+    var canShow: () -> Bool = { true }
+    var canEdit: Bool { artifact.kind == .webP && originalImage != nil && !finalizing }
     private(set) var finalizing: Bool
 
     init(artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, finalizing: Bool) {
         self.artifact = artifact; remaining = seconds; self.finalizing = finalizing
-        panel = CapturePanel(contentRect: CGRect(x: 0, y: 0, width: 264, height: 216), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        lifetime = seconds; originalImage = artifact.kind == .webP ? image : nil
+        panel = ThumbnailPanel(contentRect: CGRect(x: 0, y: 0, width: 264, height: 216), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        super.init()
+        panel.delegate = self
+        panel.isReleasedWhenClosed = false
+        panel.becomesKeyOnlyIfNeeded = false
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.level = .floating; panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -81,43 +112,102 @@ private final class ThumbnailCard {
         view.copied = copied; view.needsDisplay = true
         resumeTimer()
     }
-    func show() {
-        visible = true; panel.orderFrontRegardless(); resumeTimer()
+    func show(claimKeyboard: Bool = true) {
+        guard editor == nil else { return }
+        visible = true; panel.orderFrontRegardless()
+        if claimKeyboard { claimKeys() }
+        resumeTimer()
     }
     func hide() {
-        visible = false; pauseTimer(); stopKeys(); hovered = false; panel.orderOut(nil)
+        visible = false; pauseTimer(); releaseKeys(); hovered = false; panel.orderOut(nil)
     }
-    func close() { hide(); onClose = nil }
+    func close() {
+        let restore = panel.isKeyWindow
+        hide(); panel.close(); onClose = nil
+        if restore { restoreFocus() }
+    }
+    func setKeyboardTarget(_ value: Bool) {
+        isKeyboardTarget = value
+        if !value { releaseKeys() }
+    }
+    private func claimKeys() {
+        guard isKeyboardTarget, visible, editor == nil, !saving, !dragging else { return }
+        if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            previousApplication = front
+        }
+        // 非アクティブのまま指定されたカードへキーだけを渡す。キー取得だけでは寿命を止めない。
+        panel.receivesKeyboard = true
+        panel.makeKey(); panel.makeFirstResponder(view)
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.isKeyboardTarget, self.visible, self.panel.isKeyWindow, event.window === self.panel,
+                  event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
+            switch event.keyCode {
+            case 14: if !event.isARepeat { self.edit() }; return nil // E。動画では何もしない。
+            case 1: if !event.isARepeat { self.saveAs() }; return nil // S
+            case 31: if !event.isARepeat { self.reveal() }; return nil // O
+            case 7, 53: self.onClose?(); return nil // X, Esc
+            default: return event
+            }
+        }
+    }
+    private func releaseKeys() {
+        stopKeys()
+        if panel.isKeyWindow { panel.resignKey() }
+        panel.receivesKeyboard = false
+    }
+    private func restoreFocus() {
+        guard let previousApplication, previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+        NSApp.yieldActivation(to: previousApplication)
+        _ = previousApplication.activate(options: [])
+    }
+    func windowDidResignKey(_ notification: Notification) {
+        // 別のアプリをクリックしたときは取り戻さない。次のshowまたは明示的なホバーで再取得する。
+        stopKeys()
+    }
+    func edit() {
+        guard canEdit, editor == nil, let originalImage else { return }
+        hide()
+        let controller = AnnotationEditorController(image: originalImage, document: annotations, screen: screen)
+        editor = controller
+        controller.onComplete = { [weak self] image, document in
+            guard let self else { return }
+            let config = self.annotationConfig()
+            let data = try await Task.detached(priority: .userInitiated) {
+                try WebPEncoder.encode(image, quality: config.quality, lossless: config.lossless)
+            }.value
+            let updated = try AnnotationSave.commit(data: data, artifact: self.artifact, mode: config.clipboard)
+            self.annotations = document
+            self.complete(artifact: updated, image: image, copied: true)
+        }
+        controller.onClose = { [weak self] in
+            guard let self else { return }
+            self.editor = nil; self.remaining = self.lifetime
+            // 編集パネルが手放したキーを貼り付け先へ返す。ホバー時には再び取得できる。
+            if self.canShow() { self.show(claimKeyboard: false) }
+        }
+        controller.show()
+    }
     private func pauseTimer() {
         if let started { remaining = max(0, remaining - Date().timeIntervalSince(started)) }
         timer?.invalidate(); timer = nil; started = nil
     }
     private func resumeTimer() {
-        guard visible, !hovered, !dragging, !saving, !finalizing, timer == nil else { return }
+        guard visible, editor == nil, !hovered, !dragging, !saving, !finalizing, timer == nil else { return }
         started = Date()
         timer = Timer.scheduledTimer(withTimeInterval: max(0.01, remaining), repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.onClose?() }
         }
     }
     func hover(_ value: Bool) {
+        guard editor == nil, visible else { return }
         hovered = value
         if value {
             pauseTimer()
-            // nonactivatingPanelだけではキーは届かない。キー化とfirst responderを明示する。
-            panel.makeKey(); panel.makeFirstResponder(view)
-            if keyMonitor == nil {
-                keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                    guard let self, self.hovered,
-                          event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
-                    switch event.keyCode {
-                    case 1: if !event.isARepeat { self.saveAs() }; return nil // S
-                    case 31: if !event.isARepeat { self.reveal() }; return nil // O
-                    case 7, 53: self.onClose?(); return nil // X, Esc
-                    default: return event
-                    }
-                }
-            }
-        } else { stopKeys(); panel.resignKey(); resumeTimer() }
+            // 古いカードでもホバーを契機に受け手を切り替え、ほかのカードはキーを手放す。
+            onRequestKeys?()
+            claimKeys()
+        } else { resumeTimer() }
     }
     private func stopKeys() {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
@@ -129,7 +219,7 @@ private final class ThumbnailCard {
     }
     func saveAs() {
         guard !saving, !finalizing else { return }
-        saving = true; pauseTimer(); stopKeys()
+        saving = true; pauseTimer(); releaseKeys()
         let save = NSSavePanel()
         save.nameFieldStringValue = artifact.url.lastPathComponent
         save.directoryURL = artifact.url.deletingLastPathComponent()
@@ -149,14 +239,23 @@ private final class ThumbnailCard {
             }
             self.saving = false
             self.hovered = self.panel.frame.contains(NSEvent.mouseLocation)
-            if self.hovered { self.hover(true) } else { self.resumeTimer() }
+            self.claimKeys()
+            if self.hovered { self.pauseTimer() } else { self.resumeTimer() }
         }
     }
-    func dragStarted() { dragging = true; pauseTimer() }
+    func dragStarted() { dragging = true; pauseTimer(); releaseKeys() }
     func dragEnded() {
         dragging = false
-        hover(panel.frame.contains(NSEvent.mouseLocation))
+        hovered = panel.frame.contains(NSEvent.mouseLocation)
+        if !hovered { resumeTimer() }
     }
+}
+
+@MainActor
+private final class ThumbnailPanel: NSPanel {
+    var receivesKeyboard = false
+    override var canBecomeKey: Bool { receivesKeyboard }
+    override var canBecomeMain: Bool { false }
 }
 
 import UniformTypeIdentifiers
@@ -187,6 +286,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
             if point.x >= 224 { card.onClose?() }
             else if point.x >= 190 { card.reveal() }
             else if point.x >= 156 { card.saveAs() }
+            else if point.x >= 120 { card.edit() }
         }
     }
     override func mouseDragged(with event: NSEvent) {
@@ -221,6 +321,7 @@ private final class ThumbnailView: NSView, NSDraggingSource {
         text(info, at: CGPoint(x: 14, y: 160), size: 12)
         text(card.finalizing ? "保存中" : copied ? "Copied" : "Saved", at: CGPoint(x: 14, y: 189), size: 12)
         if !card.finalizing {
+            if card.canEdit { text("E", at: CGPoint(x: 126, y: 187), size: 14) }
             text("S", at: CGPoint(x: 162, y: 187), size: 14)
             text("O", at: CGPoint(x: 198, y: 187), size: 14)
         }

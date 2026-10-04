@@ -1,5 +1,6 @@
 import AppKit
 import UtsushieCore
+import Darwin
 
 enum ArtifactKind: Sendable {
     case webP, mp4
@@ -19,6 +20,16 @@ struct SharedArtifact: Sendable {
 }
 
 enum ArtifactStore {
+    /// 同じフォルダの隠し一時ファイルへ書き、renameで同名のファイルを原子的に差し替える。
+    static func replace(data: Data, at url: URL) throws {
+        let temporary = url.deletingLastPathComponent().appendingPathComponent(".utsushie-annotation-\(UUID().uuidString).webp")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try data.write(to: temporary, options: .withoutOverwriting)
+        let result = temporary.withUnsafeFileSystemRepresentation { source in
+            url.withUnsafeFileSystemRepresentation { target in rename(source!, target!) }
+        }
+        guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    }
     /// 完成したMP4だけを公開する。移動は同一フォルダ内なので原子的。既存名は上書きしない。
     static func publishVideo(from temporary: URL, date: Date) throws -> URL {
         var sequence = 0
@@ -51,7 +62,20 @@ enum ClipboardWriter {
         return item
     }
     static func copy(_ artifact: SharedArtifact, data: Data? = nil, mode: ClipboardMode) -> Bool {
-        NSPasteboard.general.clearContents()
-        return NSPasteboard.general.writeObjects([item(for: artifact, data: data, mode: mode)])
+        copy(artifact, data: data, mode: mode, to: .general)
+    }
+    static func copy(_ artifact: SharedArtifact, data: Data? = nil, mode: ClipboardMode, to pasteboard: NSPasteboard, preservingOnFailure: Bool = false) -> Bool {
+        // clearContents後の書き込み失敗に備え、元の全形式を値として退避する。
+        // 退避は注釈の確定だけで行い、通常撮影で他アプリの遅延データを読み出さない。
+        let previous = (preservingOnFailure ? pasteboard.pasteboardItems ?? [] : []).map { original in
+            let saved = NSPasteboardItem()
+            for type in original.types { if let bytes = original.data(forType: type) { saved.setData(bytes, forType: type) } }
+            return saved
+        }
+        pasteboard.clearContents()
+        if pasteboard.writeObjects([item(for: artifact, data: data, mode: mode)]) { return true }
+        pasteboard.clearContents()
+        if !previous.isEmpty { _ = pasteboard.writeObjects(previous) }
+        return false
     }
 }
