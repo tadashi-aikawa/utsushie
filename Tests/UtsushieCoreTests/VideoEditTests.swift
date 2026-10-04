@@ -1,4 +1,5 @@
 import Testing
+import CoreGraphics
 import UtsushieCore
 
 @Test func videoRangesMergeOverlapTouchAndClampInvalidValues() {
@@ -91,4 +92,42 @@ import UtsushieCore
     history.redo(); #expect(history.document.cuts == [.init(3, 6)])
     var next = history.document; next.setStart(2); history.commit(next)
     #expect(!history.canRedo)
+}
+
+@Test func stillMarksUseOriginalTimesAndShareCutHistory() {
+    var document = VideoEditDocument(duration: 24.1)
+    #expect(document.addStill(at: .nan) == nil)
+    #expect(document.addStill(at: -1) == nil && document.addStill(at: 24.1) == nil)
+    let first = document.addStill(at: 3)
+    #expect(first != nil && document.addStill(at: 3) == nil)
+    _ = document.addStill(at: 10)
+    #expect(document.completionText == "完了で 静止画2枚をコピー")
+    _ = document.cut(.init(2, 11.5))
+    #expect(document.completionText == "完了で 14.6秒に切る ・ 静止画2枚をコピー")
+    #expect(document.stills.map(\.time) == [3, 10])
+    var history = VideoEditHistory(document)
+    document.removeStill(first!)
+    history.commit(document)
+    #expect(history.document.stills.map(\.time) == [10])
+    history.undo(); #expect(history.document.stills.map(\.time) == [3, 10])
+    history.redo(); #expect(history.document.stills.map(\.time) == [10])
+}
+
+@Test func currentStillFrameIsTheDisplayedVFRFrameIncludingRecordingEnd() {
+    let times = [0.0, 0.3, 1.4, 2.7, 3.5666666667]
+    #expect(VideoFrameNavigation.frame(times: [], at: 1) == nil)
+    #expect(VideoFrameNavigation.frame(times: times, at: 0) == 0)
+    #expect(VideoFrameNavigation.frame(times: times, at: 1.39) == 0.3)
+    #expect(VideoFrameNavigation.frame(times: times, at: 1.4) == 1.4)
+    #expect(VideoFrameNavigation.frame(times: times, at: 3.6) == times.last)
+}
+
+@Test func sharingCardsFoldIntoLeftColumnsBeforeExceedingScreenHeight() {
+    let visible = CGRect(x: 100, y: 50, width: 1440, height: 900)
+    let origins = (0..<8).map { CardPresentation.stackOrigin(index: $0, visible: visible) }
+    #expect(origins[0] == CGPoint(x: visible.maxX - 282, y: visible.minY + 18))
+    #expect(origins[2].y + 216 <= visible.maxY - 18)
+    #expect(origins[3] == CGPoint(x: origins[0].x - 276, y: origins[0].y))
+    #expect(origins[6] == CGPoint(x: origins[0].x - 552, y: origins[0].y))
+    #expect(CardPresentation.stackOrigin(index: 1, visible: CGRect(x: 0, y: 0, width: 800, height: 300)).y == 18)
 }

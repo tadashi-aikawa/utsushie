@@ -6,7 +6,7 @@ final class VideoEditSession {
     private(set) var originalURL: URL?
     var document: VideoEditDocument
     private var savedDocument: VideoEditDocument
-    var needsExport: Bool { document != savedDocument }
+    var needsExport: Bool { document.kept != savedDocument.kept }
     private let url: URL
     private let fps: Int
     private let rememberDirectory: @MainActor (URL) -> Void
@@ -41,4 +41,28 @@ final class VideoEditSession {
         return (updated, result.image)
     }
     func close() { VideoEditStore.removeOriginal(originalURL); originalURL = nil }
+    struct Result {
+        var video: SharedArtifact
+        var image: CGImage?
+        var stills: [VideoStillArtifact]
+    }
+    /// 静止画を先に用意し、動画とコピーまで成功した後だけカードへ公開する。
+    func finish(artifact: SharedArtifact, config: UtsushieConfig, copy: ([ClipboardEntry]) -> Bool) async throws -> Result {
+        let stills = try await VideoStillExporter.save(source: sourceURL, marks: document.stills,
+            directory: url.deletingLastPathComponent(), quality: config.quality, lossless: config.lossless)
+        do {
+            if needsExport {
+                let (video, image) = try await save(artifact: artifact) { updated in
+                    copy(stills.isEmpty ? [ClipboardEntry(artifact: updated)] : stills.map(\.clipboardEntry))
+                }
+                return Result(video: video, image: image, stills: stills)
+            }
+            guard copy(stills.isEmpty ? [ClipboardEntry(artifact: artifact)] : stills.map(\.clipboardEntry)) else {
+                throw CaptureError.unavailable("クリップボードへコピーできませんでした")
+            }
+            return Result(video: artifact, image: nil, stills: stills)
+        } catch {
+            VideoStillExporter.remove(stills); throw error
+        }
+    }
 }

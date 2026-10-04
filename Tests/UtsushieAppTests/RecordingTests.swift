@@ -1,6 +1,7 @@
 @preconcurrency import AVFoundation
 @preconcurrency import CoreMedia
 import ScreenCaptureKit
+import ImageIO
 import Testing
 import UtsushieCore
 @testable import Utsushie
@@ -209,4 +210,123 @@ private func editableVideo(in directory: URL) async throws -> RecordedVideo {
     #expect(try Data(contentsOf: target) == Data([3]))
     #expect(try Data(contentsOf: dir.appendingPathComponent("recovered.mp4")) == Data([4]))
     #expect(try Data(contentsOf: unrelated) == Data([5]))
+}
+
+@MainActor @Test func videoStillsSaveNativeSizeWebPAndCopyAllItemsWithoutReencodingVideo() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    let bytes = try Data(contentsOf: source.temporaryURL)
+    let artifact = SharedArtifact(url: source.temporaryURL, kind: .mp4, width: 64, height: 48,
+        byteCount: bytes.count, duration: source.duration, videoFPS: 30)
+    let session = VideoEditSession(artifact: artifact, fps: 30, rememberDirectory: { _ in })
+    _ = session.document.addStill(at: 0.3); _ = session.document.addStill(at: 2.7)
+    var config = UtsushieConfig(); config.downscale = true; config.lossless = true
+    let pasteboard = NSPasteboard.withUniqueName()
+    defer { pasteboard.releaseGlobally() }
+    let result = try await session.finish(artifact: artifact, config: config) {
+        ClipboardWriter.copy($0, mode: config.clipboard, to: pasteboard)
+    }
+    #expect(result.image == nil && session.originalURL == nil && !session.needsExport)
+    #expect(try Data(contentsOf: artifact.url) == bytes)
+    #expect(result.stills.count == 2 && result.stills[0].artifact.url != result.stills[1].artifact.url)
+    for (still, gray) in zip(result.stills, [80, 200]) {
+        #expect(still.image.width == 64 && still.image.height == 48)
+        #expect(still.artifact.width == 64 && still.artifact.height == 48)
+        #expect(try Data(contentsOf: still.artifact.url) == still.data)
+        #expect(String(data: still.data.prefix(4), encoding: .ascii) == "RIFF")
+        #expect(String(data: still.data[8..<12], encoding: .ascii) == "WEBP")
+        let encoded = try #require(CGImageSourceCreateWithData(still.data as CFData, nil))
+        let decoded = try #require(CGImageSourceCreateImageAtIndex(encoded, 0, nil))
+        #expect(decoded.width == 64 && decoded.height == 48)
+        let pixel = try #require(still.image.dataProvider?.data) as Data
+        #expect(abs(Int(pixel[1]) - gray) <= 5)
+    }
+    for mode in ClipboardMode.allCases {
+        #expect(ClipboardWriter.copy(result.stills.map(\.clipboardEntry), mode: mode, to: pasteboard))
+        let items = try #require(pasteboard.pasteboardItems)
+        #expect(items.count == 2)
+        for (item, still) in zip(items, result.stills) {
+            let expected: Set<NSPasteboard.PasteboardType> = mode == .file ? [.fileURL] : mode == .data ? [ArtifactKind.webP.pasteboardType] : [.fileURL, ArtifactKind.webP.pasteboardType]
+            #expect(Set(item.types) == expected)
+            if mode != .data { #expect(item.string(forType: .fileURL) == still.artifact.url.absoluteString) }
+            if mode != .file { #expect(item.data(forType: ArtifactKind.webP.pasteboardType) == still.data) }
+        }
+    }
+    #expect(!ClipboardWriter.copy([], mode: .both, to: pasteboard))
+    #expect(pasteboard.pasteboardItems?.count == 2)
+}
+
+@MainActor @Test func cutAndStillsFinishUsesOriginalAndRollsBackFailedCopy() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    let bytes = try Data(contentsOf: source.temporaryURL)
+    let artifact = SharedArtifact(url: source.temporaryURL, kind: .mp4, width: 64, height: 48,
+        byteCount: bytes.count, duration: source.duration, videoFPS: 30)
+    let session = VideoEditSession(artifact: artifact, fps: 30, rememberDirectory: { _ in })
+    defer { session.close() }
+    session.document.setStart(1.4)
+    _ = session.document.addStill(at: 0.3)
+    do {
+        _ = try await session.finish(artifact: artifact, config: UtsushieConfig()) { _ in false }
+        Issue.record("コピー失敗が成功扱いになりました")
+    } catch {
+        #expect(try Data(contentsOf: artifact.url) == bytes)
+        #expect(session.needsExport && session.document.stills.count == 1)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".webp") }.isEmpty)
+    }
+    let original = try #require(session.originalURL)
+    let pasteboard = NSPasteboard.withUniqueName()
+    defer { pasteboard.releaseGlobally() }
+    let result = try await session.finish(artifact: artifact, config: UtsushieConfig()) {
+        #expect($0.count == 1 && $0[0].artifact.kind == .webP)
+        return ClipboardWriter.copy($0, mode: .both, to: pasteboard)
+    }
+    #expect(result.video.url == artifact.url && result.image != nil)
+    #expect(abs((result.video.duration ?? 0) - 2.2) < 0.001)
+    #expect(try Data(contentsOf: original) == bytes)
+    let pixel = try #require(result.stills[0].image.dataProvider?.data) as Data
+    #expect(abs(Int(pixel[1]) - 80) <= 5)
+    #expect(pasteboard.pasteboardItems?.first?.string(forType: .fileURL) == result.stills[0].artifact.url.absoluteString)
+    // Eで開き直した場合も、公開動画から除いた元のコマを取り出せる。
+    _ = session.document.addStill(at: 0)
+    let second = try await session.finish(artifact: result.video, config: UtsushieConfig()) { _ in true }
+    #expect(second.image == nil && second.stills.count == 2 && session.originalURL == original)
+    let firstPixel = try #require(second.stills[1].image.dataProvider?.data) as Data
+    #expect(abs(Int(firstPixel[1]) - 30) <= 5)
+}
+
+@MainActor @Test func videoEditorCapturesDisplayedVFRFrameAndUndoRestoresTray() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    let editor = VideoEditorController(source: source.temporaryURL, document: VideoEditDocument(duration: source.duration),
+        screen: nil, focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    for _ in 0..<200 where !editor.canCapture { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(editor.canCapture)
+    editor.seek(to: 1.2)
+    let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: editor.window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 36))
+    #expect(editor.handleKey(enter))
+    #expect(editor.timeline.document.stills.map(\.time) == [0.3])
+    #expect(editor.hintText == "完了で 静止画1枚をコピー")
+    #expect(editor.handleKey(enter))
+    #expect(editor.timeline.document.stills.count == 1)
+    let root = try #require(editor.window.contentView)
+    root.layoutSubtreeIfNeeded()
+    let tray = try #require(root.subviews.compactMap { $0 as? VideoStillTray }.first)
+    #expect(!tray.isHidden && tray.frame.width == 176)
+    let mark = try #require(editor.timeline.document.stills.first)
+    tray.onRemove?(mark.id)
+    #expect(editor.timeline.document.stills.isEmpty)
+    editor.undo(); #expect(editor.timeline.document.stills == [mark])
+    editor.redo(); #expect(editor.timeline.document.stills.isEmpty)
+    editor.undo()
+    editor.goToEnd(); editor.captureFrame()
+    #expect(editor.timeline.document.stills.map(\.time) == [0.3, 214000.0 / 60000])
 }

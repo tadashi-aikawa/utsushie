@@ -19,7 +19,6 @@ public enum AnnotationToolbarPresentation {
                             discardArmed: Bool = false, findingPrivacy: Bool = false,
                             message: ToolbarHint? = nil, saving: Bool = false) -> ToolbarHint {
         if saving { return ToolbarHint("書き出し中…") }
-        if discardArmed { return ToolbarHint("もう一度 Q で、注釈を捨てて閉じます", keys: ["Q"]) }
         if let message { return message }
         if editingText { return ToolbarHint("⏎で確定 ・ ⇧⏎で改行", keys: ["⇧⏎", "⏎"]) }
         // 探索の状態はAIボタンに出す。手引きの行には重ねない。
@@ -29,6 +28,17 @@ public enum AnnotationToolbarPresentation {
         case .number: return ToolbarHint("クリックで\(nextNumber) ・ 指す点からドラッグで引き出し線")
         default: return ToolbarHint()
         }
+    }
+}
+
+public enum VideoToolbarPresentation {
+    public static let height: CGFloat = 75
+    public static func hint(document: VideoEditDocument, discardArmed: Bool = false, message: ToolbarHint? = nil) -> ToolbarHint {
+        if let message { return message }
+        return ToolbarHint(document.completionText, keys: document.isTrimmed || !document.stills.isEmpty ? [] : ["⏎"])
+    }
+    public static func length(document: VideoEditDocument) -> String {
+        String(format: "残す %.1f秒 / %.1f秒", document.outputDuration, document.duration)
     }
 }
 

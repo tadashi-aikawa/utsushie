@@ -83,7 +83,17 @@ final class ToolbarButton: NSButton {
     var key: String? { didSet { needsDisplay = true } }
     var face: ToolbarDrawing.Face = .tool
     var dimmed = false
-    var armed = false
+    var armed = false {
+        didSet {
+            if let confirmationTitle {
+                title = armed ? confirmationTitle : restingTitle
+                setAccessibilityLabel(title)
+            }
+            needsDisplay = true
+        }
+    }
+    private let restingTitle: String
+    private let confirmationTitle: String?
     var fixedWidth: CGFloat?
     var naturalWidth: CGFloat { fixedWidth ?? ToolbarDrawing.itemWidth(title: title, key: key, symbol: image != nil, face: face) }
     override var isFlipped: Bool { true }
@@ -108,12 +118,17 @@ final class ToolbarButton: NSButton {
             NSGraphicsContext.restoreGraphicsState()
         }
     }
-    init(title: String = "", key: String? = nil, face: ToolbarDrawing.Face = .tool) {
+    init(title: String = "", key: String? = nil, face: ToolbarDrawing.Face = .tool, confirmationTitle: String? = nil) {
+        restingTitle = title; self.confirmationTitle = confirmationTitle
         super.init(frame: .zero)
         self.title = title; self.key = key; self.face = face
         isBordered = false; setButtonType(.momentaryPushIn)
         setAccessibilityLabel(title)
         setAccessibilityHelp(key.map { "キー \($0)" })
+        if let confirmationTitle {
+            fixedWidth = max(ToolbarDrawing.itemWidth(title: title, key: key, face: face),
+                             ToolbarDrawing.itemWidth(title: confirmationTitle, key: key, face: face))
+        }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
@@ -177,7 +192,7 @@ final class AnnotationToolbarView: NSView {
     let aiButton: ToolbarButton
     let undoButton = ToolbarButton(title: "↶", face: .plain)
     let redoButton = ToolbarButton(title: "↷", face: .plain)
-    let discardButton = ToolbarButton(title: "破棄", key: "Q", face: .secondary)
+    let discardButton = ToolbarButton(title: "破棄", key: "Q", face: .secondary, confirmationTitle: "もう一度")
     let finishButton = ToolbarButton(title: "完了", key: "⌘↩", face: .primary)
     let zoomButton = ToolbarButton(title: "100%", face: .zoom)
     let hintView = ToolbarHintView()

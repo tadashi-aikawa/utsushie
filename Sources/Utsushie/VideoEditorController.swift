@@ -11,8 +11,14 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
     private var history: VideoEditHistory
     private let focus: AnnotationApplicationFocus
     private var previousApplication: NSRunningApplication?
-    private let hint = NSTextField(labelWithString: "")
-    private var buttons: [String: NSButton] = [:]
+    let toolbar = VideoToolbarView()
+    private let source: URL
+    private var root: VideoEditorLayout!
+    private var message: ToolbarHint?
+    private var stillImages: [UUID: NSImage] = [:]
+    private var stillTasks: [UUID: Task<Void, Never>] = [:]
+    private var stillTaskIDs: [UUID: UUID] = [:]
+    private var activeStill: UUID?
     private var observer: Any?
     private var boundaryObserver: Any?
     private var mediaTask: Task<Void, Never>?
@@ -26,14 +32,15 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
     private var closing = false
     var onComplete: ((VideoEditDocument) -> Void)?
     var onClose: (() -> Void)?
-    var hintText: String { hint.stringValue }
+    var hintText: String { toolbar.hintView.hint.text }
+    var canCapture: Bool { !frameTimes.isEmpty }
 
     init(source: URL, document: VideoEditDocument, screen: NSScreen?, focus: AnnotationApplicationFocus = .init()) {
-        initial = document; history = VideoEditHistory(document); self.focus = focus
+        initial = document; history = VideoEditHistory(document); self.focus = focus; self.source = source
         player = AVPlayer(url: source)
         timeline = VideoEditorTimeline(document: document)
         let visible = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-        let size = CGSize(width: min(1040, visible.width - 40), height: min(712, visible.height - 80))
+        let size = CGSize(width: min(1040, visible.width - 40), height: min(735, visible.height - 80))
         window = VideoEditorPanel(contentRect: CGRect(origin: .zero, size: size),
             styleMask: [.titled, .closable, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
@@ -42,36 +49,28 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false; window.becomesKeyOnlyIfNeeded = false
         window.hidesOnDeactivate = false; window.level = .floating
         window.acceptsMouseMovedEvents = true; window.minSize = CGSize(width: min(1000, size.width), height: 440)
-        let root = VideoEditorLayout(frame: CGRect(origin: .zero, size: size))
-        let bar = NSStackView(); bar.orientation = .horizontal; bar.alignment = .centerY; bar.spacing = 5
-        // ツールバーの順序をここだけで差し替えられるようにする。
-        for (id, title, action) in [("start", "始め I", #selector(setStart)), ("end", "終わり O", #selector(setEnd)),
-                                   ("cut", "切る ⌫", #selector(cut)), ("undo", "↶", #selector(undo)), ("redo", "↷", #selector(redo))] {
-            let button = VideoEditorButton(title: title, target: self, action: action)
-            button.bezelStyle = .rounded; button.font = .systemFont(ofSize: 12)
-            buttons[id] = button; bar.addArrangedSubview(button)
-        }
-        buttons["undo"]?.toolTip = "取り消し ⌘Z"; buttons["redo"]?.toolTip = "やり直し ⇧⌘Z"
-        hint.font = .systemFont(ofSize: 12); hint.textColor = UITheme.text; hint.alignment = .center
-        hint.lineBreakMode = .byTruncatingTail
-        hint.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        hint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        bar.addArrangedSubview(hint)
-        for (id, title, action) in [("discard", "破棄 Q", #selector(discard)), ("finish", "完了 ⌘↩", #selector(finish))] {
-            let button = VideoEditorButton(title: title, target: self, action: action); button.bezelStyle = .rounded
-            if id == "finish" { button.bezelColor = UITheme.indigo; button.contentTintColor = .white }
-            buttons[id] = button; bar.addArrangedSubview(button)
+        root = VideoEditorLayout(frame: CGRect(origin: .zero, size: size))
+        for (button, action) in [(toolbar.startButton, #selector(setStart)), (toolbar.endButton, #selector(setEnd)),
+            (toolbar.cutButton, #selector(cut)), (toolbar.captureButton, #selector(captureFrame)),
+            (toolbar.undoButton, #selector(undo)), (toolbar.redoButton, #selector(redo)),
+            (toolbar.discardButton, #selector(discard)), (toolbar.finishButton, #selector(finish))] {
+            button.target = self; button.action = action
         }
         let preview = VideoEditorPreview(player: player)
-        root.bar = bar; root.preview = preview; root.timeline = timeline
-        root.addSubview(preview); root.addSubview(timeline); root.addSubview(bar)
+        root.bar = toolbar; root.preview = preview; root.timeline = timeline
+        root.addSubview(preview); root.addSubview(timeline); root.addSubview(root.tray); root.addSubview(toolbar)
+        root.tray.onSelect = { [weak self] id in self?.selectStill(id) }
+        root.tray.onRemove = { [weak self] id in self?.apply { $0.removeStill(id) } }
         window.contentView = root
         window.setFrameOrigin(CGPoint(x: visible.midX - window.frame.width / 2, y: visible.midY - window.frame.height / 2))
         timeline.onSeek = { [weak self] time in self?.seek(to: time) }
         timeline.onPlay = { [weak self] in self?.togglePlay() }
+        timeline.onStart = { [weak self] in self?.goToStart() }
+        timeline.onEnd = { [weak self] in self?.goToEnd() }
+        timeline.onSelectStill = { [weak self] id in self?.selectStill(id) }
         timeline.onEdit = { [weak self] document, commit in
             guard let self else { return }
-            pause(); discardArmed = false
+            pause(); discardArmed = false; message = nil
             if commit { history.commit(document); updateBoundaries() }
             timeline.document = document; update()
         }
@@ -84,6 +83,7 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
             do {
                 frameTimes = try await VideoEditMedia.frameTimes(url: source)
                 try Task.checkCancellation()
+                update()
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: source))
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: 180, height: 100)
@@ -96,7 +96,7 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
                     timeline.needsDisplay = true
                 }
             } catch is CancellationError { }
-            catch { if !closing { hint.stringValue = "プレビューの読み取りに失敗しました ・ 編集は続けられます" } }
+            catch { if !closing { message = ToolbarHint("プレビューの読み取りに失敗しました", isError: true); update() } }
         }
         updateBoundaries(); update()
     }
@@ -114,16 +114,64 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         AnnotationNavigationDiagnostics.observeFocus("video editor activation after", isActive: focus.isActive(), frontmostApplication: focus.frontmostApplication())
     }
     private func update() {
-        buttons["undo"]?.isEnabled = history.canUndo; buttons["redo"]?.isEnabled = history.canRedo
-        buttons["cut"]?.isEnabled = timeline.selection != nil
-        buttons["finish"]?.isEnabled = timeline.document.outputDuration > 0
-        hint.stringValue = discardArmed ? "もう一度押すと破棄" : timeline.document.completionText
+        toolbar.undoButton.isEnabled = history.canUndo; toolbar.redoButton.isEnabled = history.canRedo
+        toolbar.cutButton.isEnabled = timeline.selection != nil; toolbar.cutButton.state = timeline.selection == nil ? .off : .on
+        toolbar.captureButton.isEnabled = canCapture
+        let frame = VideoFrameNavigation.frame(times: frameTimes, at: position)
+        toolbar.captureButton.state = timeline.document.stills.contains(where: { $0.time == frame }) ? .on : .off
+        toolbar.finishButton.isEnabled = timeline.document.outputDuration > 0
+        toolbar.discardButton.armed = discardArmed; toolbar.discardButton.needsDisplay = true
+        toolbar.hintView.hint = VideoToolbarPresentation.hint(document: timeline.document, discardArmed: discardArmed, message: message)
+        toolbar.length.stringValue = VideoToolbarPresentation.length(document: timeline.document); toolbar.needsLayout = true
+        root.hasStills = !timeline.document.stills.isEmpty
+        root.tray.update(marks: timeline.document.stills, images: stillImages, active: activeStill)
+        timeline.activeStill = activeStill
+        loadStillImages()
         timeline.needsDisplay = true
+    }
+    private func loadStillImages() {
+        let marks = timeline.document.stills
+        let ids = Set(marks.map(\.id))
+        for (id, task) in stillTasks where !ids.contains(id) {
+            task.cancel(); stillTasks[id] = nil; stillTaskIDs[id] = nil
+        }
+        for mark in marks where stillImages[mark.id] == nil && stillTasks[mark.id] == nil {
+            let taskID = UUID(); stillTaskIDs[mark.id] = taskID
+            stillTasks[mark.id] = Task { [weak self] in
+                guard let self else { return }
+                defer {
+                    if stillTaskIDs[mark.id] == taskID { stillTasks[mark.id] = nil; stillTaskIDs[mark.id] = nil }
+                }
+                do {
+                    let image = try await VideoStillExporter.frame(source: source, time: mark.time, maximumSize: CGSize(width: 160, height: 90))
+                    guard !closing, !Task.isCancelled else { return }
+                    stillImages[mark.id] = NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height))
+                    root.tray.update(marks: timeline.document.stills, images: stillImages, active: activeStill)
+                } catch {
+                    guard !closing, !Task.isCancelled else { return }
+                    message = ToolbarHint("静止画のプレビューを読めませんでした", isError: true); update()
+                }
+            }
+        }
+    }
+    @objc func captureFrame() {
+        guard !closing else { return }
+        pause()
+        guard let frame = VideoFrameNavigation.frame(times: frameTimes, at: position) else {
+            message = ToolbarHint("コマを読み込んでいます…"); update(); return
+        }
+        apply { document in
+            activeStill = document.addStill(at: frame) ?? document.stills.first { abs($0.time - frame) < 1 / 120000.0 }?.id
+        }
+    }
+    private func selectStill(_ id: UUID) {
+        guard let mark = timeline.document.stills.first(where: { $0.id == id }) else { return }
+        activeStill = id; seek(to: mark.time)
     }
     private func apply(_ change: (inout VideoEditDocument) -> Void) {
         pause(); _ = timeline.cancelInteraction(); var document = history.document; change(&document)
         history.commit(document); timeline.document = history.document; timeline.selection = nil
-        discardArmed = false; updateBoundaries(); update()
+        discardArmed = false; message = nil; updateBoundaries(); update()
     }
     @objc func setStart() { apply { $0.setStart(position) } }
     @objc func setEnd() { apply { $0.setEnd(position) } }
@@ -131,8 +179,8 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         guard let selection = timeline.selection else { return }
         apply { _ = $0.cut(selection) }
     }
-    @objc func undo() { pause(); if !timeline.cancelInteraction() { history.undo() }; timeline.document = history.document; timeline.selection = nil; discardArmed = false; updateBoundaries(); update() }
-    @objc func redo() { pause(); _ = timeline.cancelInteraction(); history.redo(); timeline.document = history.document; timeline.selection = nil; discardArmed = false; updateBoundaries(); update() }
+    @objc func undo() { pause(); if !timeline.cancelInteraction() { history.undo() }; timeline.document = history.document; timeline.selection = nil; discardArmed = false; message = nil; updateBoundaries(); update() }
+    @objc func redo() { pause(); _ = timeline.cancelInteraction(); history.redo(); timeline.document = history.document; timeline.selection = nil; discardArmed = false; message = nil; updateBoundaries(); update() }
     @objc func discard() {
         guard !closing else { return }
         if timeline.document != initial, !discardArmed { discardArmed = true; update() }
@@ -152,6 +200,8 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
             case 36, 76: if !event.isARepeat { finish() }; return true
             case 6: undo(); return true
             case 13: if !event.isARepeat { discard() }; return true
+            case 123: goToStart(); return true
+            case 124: goToEnd(); return true
             default: return false
             }
         }
@@ -161,6 +211,9 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         }
         guard flags.isEmpty else { return false }
         switch event.keyCode {
+        case 115: goToStart(); return true // Home
+        case 119: goToEnd(); return true // End
+        case 36, 76: if !event.isARepeat { captureFrame() }; return true
         case 49: if !event.isARepeat { togglePlay() }; return true
         case 123, 124:
             let next = VideoFrameNavigation.step(times: frameTimes, from: position, forward: event.keyCode == 124)
@@ -177,7 +230,7 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         playing = false; player.pause(); timeline.playing = false
     }
     func seek(to time: Double, resume: Bool = false) {
-        pause(); discardArmed = false
+        pause(); discardArmed = false; message = nil
         position = min(max(0, time), initial.duration)
         timeline.position = position; update()
         let id = UUID(); seekID = id; seeking = true; playing = resume; timeline.playing = resume
@@ -190,8 +243,10 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
             else { playing = false; timeline.playing = false }
         }
     }
+    @objc func goToStart() { seek(to: 0) }
+    @objc func goToEnd() { seek(to: initial.duration) }
     private func togglePlay() {
-        if playing { pause(); return }
+        if playing { pause(); discardArmed = false; message = nil; update(); return }
         let document = timeline.document
         guard let next = document.playbackTime(at: position) ?? document.kept.first?.start else { return }
         seek(to: next, resume: true)
@@ -220,6 +275,7 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool { if closing { return true }; discard(); return false }
     func windowWillClose(_ notification: Notification) {
         closing = true; pause(); mediaTask?.cancel(); seekTask?.cancel()
+        stillTasks.values.forEach { $0.cancel() }; stillTasks = [:]
         if let observer { player.removeTimeObserver(observer); self.observer = nil }
         if let boundaryObserver { player.removeTimeObserver(boundaryObserver); self.boundaryObserver = nil }
         AnnotationNavigationDiagnostics.observeFocus("video editor close", isActive: focus.isActive(), frontmostApplication: focus.frontmostApplication())
@@ -268,14 +324,20 @@ private final class VideoEditorPreview: NSView {
 
 @MainActor
 private final class VideoEditorLayout: NSView {
-    var bar: NSStackView!
+    var bar: VideoToolbarView!
     var preview: NSView!
     var timeline: VideoEditorTimeline!
+    let tray = VideoStillTray(frame: .zero)
+    var hasStills = false { didSet { if oldValue != hasStills { needsLayout = true } } }
     override var isFlipped: Bool { true }
     override func layout() {
         super.layout()
-        bar.frame = CGRect(x: 16, y: 12, width: max(0, bounds.width - 32), height: 28)
-        preview.frame = CGRect(x: 0, y: 52, width: bounds.width, height: max(0, bounds.height - 236))
+        let height = VideoToolbarPresentation.height
+        bar.frame = CGRect(x: 0, y: 0, width: bounds.width, height: height)
+        let trayWidth: CGFloat = hasStills ? 176 : 0
+        preview.frame = CGRect(x: 0, y: height, width: bounds.width - trayWidth, height: max(0, bounds.height - height - 184))
+        tray.isHidden = !hasStills
+        tray.frame = CGRect(x: bounds.width - trayWidth, y: height, width: trayWidth, height: preview.frame.height)
         timeline.frame = CGRect(x: 0, y: bounds.height - 184, width: bounds.width, height: 184)
     }
     override func draw(_ dirtyRect: NSRect) { UITheme.ink.setFill(); bounds.fill() }
@@ -290,9 +352,15 @@ final class VideoEditorTimeline: NSView {
     var images: [NSImage] = []
     var onSeek: ((Double) -> Void)?
     var onPlay: (() -> Void)?
+    var onStart: (() -> Void)?
+    var onEnd: (() -> Void)?
+    var onSelectStill: ((UUID) -> Void)?
+    var activeStill: UUID? { didSet { needsDisplay = true } }
     var onEdit: ((VideoEditDocument, Bool) -> Void)?
     var onSelection: (() -> Void)?
     private let play = VideoEditorButton()
+    let startButton = VideoEditorButton()
+    let endButton = VideoEditorButton()
     private var restoreButtons: [VideoEditorButton] = []
     private var dragStart: CGPoint?
     private var dragDocument: VideoEditDocument?
@@ -303,6 +371,12 @@ final class VideoEditorTimeline: NSView {
         self.document = document; super.init(frame: .zero)
         play.title = "▶"; play.bezelStyle = .rounded; play.target = self; play.action = #selector(togglePlay)
         play.toolTip = "再生・停止 Space"; addSubview(play)
+        for (button, symbol, label, action) in [(startButton, "backward.end", "先頭へ", #selector(goToStart)),
+                                               (endButton, "forward.end", "末尾へ", #selector(goToEnd))] {
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+            button.bezelStyle = .rounded; button.target = self; button.action = action
+            button.toolTip = label; button.setAccessibilityLabel(label); addSubview(button)
+        }
         refreshRestoreButtons()
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -313,6 +387,8 @@ final class VideoEditorTimeline: NSView {
     private func x(_ time: Double) -> CGFloat { strip.minX + time / max(document.duration, 0.00001) * strip.width }
     private func time(_ x: CGFloat) -> Double { min(1, max(0, (x - strip.minX) / strip.width)) * document.duration }
     @objc private func togglePlay() { onPlay?() }
+    @objc private func goToStart() { onStart?() }
+    @objc private func goToEnd() { onEnd?() }
     private func refreshRestoreButtons() {
         restoreButtons.forEach { $0.removeFromSuperview() }
         restoreButtons = document.cuts.enumerated().map { index, _ in
@@ -326,7 +402,10 @@ final class VideoEditorTimeline: NSView {
         var next = document; next.restore(document.cuts[sender.tag]); selection = nil; onEdit?(next, true)
     }
     override func layout() {
-        super.layout(); play.frame = CGRect(x: 24, y: 12, width: 30, height: 28)
+        super.layout()
+        startButton.frame = CGRect(x: 24, y: 12, width: 30, height: 28)
+        play.frame = CGRect(x: 58, y: 12, width: 30, height: 28)
+        endButton.frame = CGRect(x: 92, y: 12, width: 30, height: 28)
         for (index, range) in document.cuts.enumerated() where restoreButtons.indices.contains(index) {
             let middle = (x(range.start) + x(range.end)) / 2
             let origin = x(range.end) - x(range.start) > 100 ? middle + 24 : middle - 12
@@ -348,6 +427,8 @@ final class VideoEditorTimeline: NSView {
     override func mouseExited(with event: NSEvent) { hoveredCut = nil; restoreButtons.forEach { $0.isHidden = true } }
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if (46...67).contains(point.y), let mark = document.stills.min(by: { abs(x($0.time) - point.x) < abs(x($1.time) - point.x) }),
+           abs(x(mark.time) - point.x) <= 10 { onSelectStill?(mark.id); return }
         hit = VideoTimelineGesture.hit(x: point.x - strip.minX, y: point.y - strip.minY, width: strip.width, document: document)
         guard hit != .outside else { return }
         dragStart = point; dragDocument = document; selection = nil; onSelection?()
@@ -377,10 +458,8 @@ final class VideoEditorTimeline: NSView {
     }
     override func draw(_ dirtyRect: NSRect) {
         UITheme.ink.setFill(); bounds.fill()
-        UIDrawing.text("\(VideoEditFormatting.time(position)) / \(VideoEditFormatting.time(document.duration))", in: CGRect(x: 62, y: 18, width: 170, height: 20), size: 14)
-        UIDrawing.text("Space 再生 ・ ←→ 1コマ ・ ⇧←→ 1秒", in: CGRect(x: 236, y: 19, width: 300, height: 18), size: 11.5, color: UITheme.key)
-        UIDrawing.text(String(format: "残す %.1f秒 / %.1f秒", document.outputDuration, document.duration),
-            in: CGRect(x: bounds.width - 230, y: 18, width: 206, height: 20), size: 12, centered: true)
+        UIDrawing.text("\(VideoEditFormatting.time(position)) / \(VideoEditFormatting.time(document.duration))", in: CGRect(x: 134, y: 18, width: 176, height: 20), size: 14)
+        UIDrawing.text("Space 再生 ・ ←→ 1コマ ・ ⇧←→ 1秒 ・ ⌘←→ 先頭・末尾", in: CGRect(x: 324, y: 19, width: bounds.width - 348, height: 18), size: 11.5, color: UITheme.key)
         NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: strip).addClip()
         NSColor.black.setFill(); strip.fill()
         for (index, image) in images.enumerated() {
@@ -407,6 +486,19 @@ final class VideoEditorTimeline: NSView {
             let outline = NSBezierPath(rect: rect.insetBy(dx: 1, dy: 1)); outline.lineWidth = 2; UITheme.indigo.setStroke(); outline.stroke()
         }
         NSGraphicsContext.restoreGraphicsState()
+        for (index, mark) in document.stills.enumerated() {
+            let px = x(mark.time)
+            UITheme.paper.withAlphaComponent(0.75).setFill()
+            CGRect(x: px - 0.75, y: 61, width: 1.5, height: 65).fill()
+            let flag = NSBezierPath()
+            flag.move(to: CGPoint(x: px - 9, y: 48)); flag.line(to: CGPoint(x: px + 9, y: 48))
+            flag.line(to: CGPoint(x: px + 9, y: 61)); flag.line(to: CGPoint(x: px + 3, y: 61))
+            flag.line(to: CGPoint(x: px, y: 65)); flag.line(to: CGPoint(x: px - 3, y: 61))
+            flag.line(to: CGPoint(x: px - 9, y: 61)); flag.close()
+            UITheme.paper.setFill(); flag.fill()
+            if activeStill == mark.id { NSColor.white.setStroke(); flag.lineWidth = 1; flag.stroke() }
+            UIDrawing.text("\(index + 1)", in: CGRect(x: px - 9, y: 49, width: 18, height: 14), size: 10, color: UITheme.ink, weight: .semibold, centered: true)
+        }
         for range in document.kept {
             let rect = CGRect(x: x(range.start), y: strip.minY, width: x(range.end) - x(range.start), height: strip.height)
             let outline = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)

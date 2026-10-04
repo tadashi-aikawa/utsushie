@@ -20,13 +20,28 @@ public struct VideoRange: Equatable, Sendable {
     }
 }
 
+public struct VideoStillMark: Equatable, Sendable, Identifiable {
+    public let id: UUID
+    public let time: Double
+    public init(time: Double, id: UUID = UUID()) { self.time = time; self.id = id }
+}
+
 public struct VideoEditDocument: Equatable, Sendable {
     public let duration: Double
     public private(set) var kept: [VideoRange]
-    public init(duration: Double, kept: [VideoRange]? = nil) {
+    public private(set) var stills: [VideoStillMark]
+    public init(duration: Double, kept: [VideoRange]? = nil, stills: [VideoStillMark] = []) {
         self.duration = duration.isFinite ? max(0, duration) : 0
         self.kept = VideoRange.merged(kept ?? [VideoRange(0, self.duration)], duration: self.duration)
+        let limit = self.duration
+        self.stills = stills.filter { $0.time.isFinite && $0.time >= 0 && $0.time < limit }
     }
+    @discardableResult public mutating func addStill(at time: Double) -> UUID? {
+        guard time.isFinite, time >= 0, time < duration,
+              !stills.contains(where: { abs($0.time - time) < 1 / 120000.0 }) else { return nil }
+        let mark = VideoStillMark(time: time); stills.append(mark); return mark.id
+    }
+    public mutating func removeStill(_ id: UUID) { stills.removeAll { $0.id == id } }
     public var outputDuration: Double { kept.reduce(0) { $0 + $1.duration } }
     public var isTrimmed: Bool { kept != [VideoRange(0, duration)] }
     public var cuts: [VideoRange] {
@@ -93,7 +108,10 @@ public struct VideoEditDocument: Equatable, Sendable {
         return nil
     }
     public var completionText: String {
-        isTrimmed ? String(format: "完了で %.1f秒に切る", outputDuration) : "ドラッグで切る範囲を選ぶ"
+        let trim = isTrimmed ? String(format: "%.1f秒に切る", outputDuration) : nil
+        let images = stills.isEmpty ? nil : "静止画\(stills.count)枚をコピー"
+        let actions = [trim, images].compactMap { $0 }
+        return actions.isEmpty ? "ドラッグで切る範囲を選ぶ ・ ⏎でこのコマを撮る" : "完了で " + actions.joined(separator: " ・ ")
     }
 }
 
@@ -168,6 +186,14 @@ public struct VideoEditHistory: Sendable {
 }
 
 public enum VideoFrameNavigation {
+    public static func frame(times: [Double], at position: Double) -> Double? {
+        var low = 0, high = times.count
+        while low < high {
+            let middle = (low + high) / 2
+            if times[middle] <= position + 1 / 120000.0 { low = middle + 1 } else { high = middle }
+        }
+        return low > 0 ? times[low - 1] : times.first
+    }
     public static func step(times: [Double], from position: Double, forward: Bool) -> Double {
         // CMTimeの丸めによる同じコマへの足踏みを避ける。
         if forward { return times.first { $0 > position + 1 / 120000.0 } ?? times.last ?? position }

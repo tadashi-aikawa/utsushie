@@ -20,6 +20,11 @@ struct SharedArtifact: Sendable {
     var videoFPS: Int? = nil
 }
 
+struct ClipboardEntry: Sendable {
+    var artifact: SharedArtifact
+    var data: Data? = nil
+}
+
 enum ArtifactStore {
     /// 同じフォルダの隠し一時ファイルへ書き、renameで同名のファイルを原子的に差し替える。
     static func replace(data: Data, at url: URL) throws {
@@ -66,6 +71,10 @@ enum ClipboardWriter {
         copy(artifact, data: data, mode: mode, to: .general)
     }
     static func copy(_ artifact: SharedArtifact, data: Data? = nil, mode: ClipboardMode, to pasteboard: NSPasteboard, preservingOnFailure: Bool = false) -> Bool {
+        copy([ClipboardEntry(artifact: artifact, data: data)], mode: mode, to: pasteboard, preservingOnFailure: preservingOnFailure)
+    }
+    static func copy(_ entries: [ClipboardEntry], mode: ClipboardMode, to pasteboard: NSPasteboard = .general, preservingOnFailure: Bool = false) -> Bool {
+        guard !entries.isEmpty else { return false }
         // clearContents後の書き込み失敗に備え、元の全形式を値として退避する。
         // 退避は注釈の確定だけで行い、通常撮影で他アプリの遅延データを読み出さない。
         let previous = (preservingOnFailure ? pasteboard.pasteboardItems ?? [] : []).map { original in
@@ -74,7 +83,7 @@ enum ClipboardWriter {
             return saved
         }
         pasteboard.clearContents()
-        if pasteboard.writeObjects([item(for: artifact, data: data, mode: mode)]) { return true }
+        if pasteboard.writeObjects(entries.map { item(for: $0.artifact, data: $0.data, mode: mode) }) { return true }
         pasteboard.clearContents()
         if !previous.isEmpty { _ = pasteboard.writeObjects(previous) }
         return false

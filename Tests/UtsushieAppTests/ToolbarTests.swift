@@ -107,7 +107,7 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     #expect(editor.canvas.displayScale == 1)
 }
 
-@MainActor @Test func annotationToolbarButtonsClearAIMessageAndArmDiscardWithoutChangingName() throws {
+@MainActor @Test func annotationToolbarButtonsClearAIMessageAndConfirmDiscardInFixedWidthButton() throws {
     let editor = AnnotationEditorController(image: try toolbarImage(), document: AnnotationDocument(), screen: nil)
     defer { editor.window.close() }
     editor.toolbar.aiButton.performClick(nil)
@@ -115,11 +115,15 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     editor.toolbar.toolButtons[.number]?.performClick(nil)
     #expect(editor.canvas.tool == .number && editor.hintText == "クリックで1 ・ 指す点からドラッグで引き出し線")
     editor.canvas.appendPrivacyAnnotations([Annotation(tool: .number, start: CGPoint(x: 100, y: 100))])
+    editor.toolbar.layoutSubtreeIfNeeded()
+    let frame = editor.toolbar.discardButton.frame
     editor.toolbar.discardButton.performClick(nil)
-    #expect(editor.toolbar.discardButton.title == "破棄" && editor.toolbar.discardButton.armed)
-    #expect(editor.hintText == "もう一度 Q で、注釈を捨てて閉じます")
+    editor.toolbar.layoutSubtreeIfNeeded()
+    #expect(editor.toolbar.discardButton.title == "もう一度" && editor.toolbar.discardButton.armed)
+    #expect(editor.toolbar.discardButton.frame == frame)
+    #expect(editor.hintText == "クリックで2 ・ 指す点からドラッグで引き出し線")
     editor.toolbar.toolButtons[.rectangle]?.performClick(nil)
-    #expect(!editor.toolbar.discardButton.armed && editor.hintText.isEmpty)
+    #expect(!editor.toolbar.discardButton.armed && editor.toolbar.discardButton.title == "破棄" && editor.hintText.isEmpty)
 }
 
 @MainActor @Test func annotationToolbarDimensionsFollowOutsideArrowDuringDrag() throws {

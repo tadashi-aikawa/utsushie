@@ -13,6 +13,12 @@ final class ThumbnailController {
         let card = ThumbnailCard(artifact: artifact, image: image, copied: copied, seconds: seconds, finalizing: finalizing)
         card.screen = screen ?? NSScreen.main ?? NSScreen.screens.first
         card.annotationConfig = { [weak self] in self?.annotationConfig() ?? UtsushieConfig() }
+        card.onStills = { [weak self, weak card] stills in
+            guard let self, let card else { return }
+            for still in stills {
+                self.add(still.artifact, image: still.image, copied: true, seconds: seconds, screen: card.screen)
+            }
+        }
         card.canShow = { [weak self] in self?.suspended == false }
         card.onRequestKeys = { [weak self, weak card] in
             guard let self, let card, self.cards.contains(where: { $0 === card }) else { return }
@@ -49,14 +55,13 @@ final class ThumbnailController {
     }
     private func layout() {
         // 配列は古い順。逆順に下から置くので最新が最下段。
-        var heights: [ObjectIdentifier: CGFloat] = [:]
+        var indices: [ObjectIdentifier: Int] = [:]
         for card in cards.reversed() {
             guard let screen = card.screen else { continue }
             let key = ObjectIdentifier(screen)
-            let offset = heights[key] ?? 0
-            let visible = screen.visibleFrame
-            card.panel.setFrameOrigin(CGPoint(x: visible.maxX - 282, y: visible.minY + 18 + offset))
-            heights[key] = offset + card.panel.frame.height + 12
+            let index = indices[key] ?? 0
+            card.panel.setFrameOrigin(CardPresentation.stackOrigin(index: index, visible: screen.visibleFrame, cardSize: card.panel.frame.size))
+            indices[key] = index + 1
         }
     }
 }
@@ -69,6 +74,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     var screen: NSScreen?
     var onClose: (() -> Void)?
     var onRequestKeys: (() -> Void)?
+    var onStills: (([VideoStillArtifact]) -> Void)?
     private var view: ThumbnailView!
     private var timer: Timer?
     private var remaining: Double
@@ -217,23 +223,28 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             guard let self else { return }
             // 失敗しても、次のEで元の録画に今回の範囲を重ねる。
             session.document = document
-            guard session.needsExport else {
-                view.copied = ClipboardWriter.copy(artifact, mode: .file, to: .general, preservingOnFailure: true)
-                view.needsDisplay = true; return
-            }
+            let config = annotationConfig()
             finalizing = true; pauseTimer(); view.copied = false; view.refreshControls(); view.needsDisplay = true
             Task { [self] in
                 defer { if closed { session.close() } }
                 do {
-                    let (updated, image) = try await session.save(artifact: artifact) { ClipboardWriter.copy($0, mode: .file, to: .general, preservingOnFailure: true) }
-                    complete(artifact: updated, image: image, copied: true)
+                    let result = try await session.finish(artifact: artifact, config: config) {
+                        ClipboardWriter.copy($0, mode: config.clipboard, to: .general, preservingOnFailure: true)
+                    }
+                    if let image = result.image {
+                        complete(artifact: result.video, image: image, copied: result.stills.isEmpty)
+                    } else {
+                        finalizing = false; view.copied = result.stills.isEmpty
+                        view.refreshControls(); view.needsDisplay = true; resumeTimer()
+                    }
+                    onStills?(result.stills)
                 } catch {
                     finalizing = false; view.refreshControls(); view.needsDisplay = true
                     if !closed {
                         // Eで開き直すまで失敗の説明を読めるように寿命を止める。
                         hovered = true
-                        let alert = NSAlert(); alert.messageText = "動画を切れませんでした"
-                        alert.informativeText = error.localizedDescription + "\nEで開き直して再試行できます。切った範囲は保持しています。"
+                        let alert = NSAlert(); alert.messageText = "動画の編集を完了できませんでした"
+                        alert.informativeText = error.localizedDescription + "\nEで開き直して再試行できます。切った範囲と静止画の印は保持しています。"
                         NSApp.activate(); await alert.beginSheetModal(for: panel)
                     }
                 }

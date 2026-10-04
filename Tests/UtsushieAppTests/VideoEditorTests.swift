@@ -49,8 +49,12 @@ private final class VideoRunningApplication: NSRunningApplication, @unchecked Se
     var closed = false
     editor.onClose = { closed = true }
     editor.seek(to: 2); editor.setStart()
+    editor.toolbar.layoutSubtreeIfNeeded()
+    let frame = editor.toolbar.discardButton.frame
     #expect(editor.handleKey(try videoKey(editor, 12)))
-    #expect(!closed && editor.hintText == "もう一度押すと破棄")
+    #expect(!closed && editor.toolbar.discardButton.title == "もう一度" && editor.toolbar.discardButton.armed)
+    editor.toolbar.layoutSubtreeIfNeeded()
+    #expect(editor.toolbar.discardButton.frame == frame && editor.hintText == "完了で 10.0秒に切る")
     #expect(editor.handleKey(try videoKey(editor, 12, repeatKey: true)))
     #expect(!closed)
     #expect(editor.handleKey(try videoKey(editor, 12)))
@@ -103,4 +107,32 @@ private final class VideoRunningApplication: NSRunningApplication, @unchecked Se
     front = current; editor.requestActivation(); #expect(requests == 2)
     front = nil; editor.requestActivation(); #expect(requests == 3)
     front = current; editor.window.close(); #expect(restored)
+}
+
+@MainActor @Test func videoToolbarUsesSharedTraysAndNavigationTargetsWholeRecording() throws {
+    let editor = VideoEditorController(source: URL(fileURLWithPath: "/tmp/utsushie-test-missing.mp4"),
+        document: VideoEditDocument(duration: 12, kept: [.init(2, 10)]), screen: nil,
+        focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    let root = try #require(editor.window.contentView)
+    root.layoutSubtreeIfNeeded()
+    let bar = editor.toolbar
+    #expect(bar.frame.height == 75)
+    #expect(bar.trays.map { $0.buttons.map(\.title) } == [["始め", "終わり", "切る"], ["撮る"]])
+    #expect(bar.trays.last!.frame.maxX < bar.undoButton.frame.minX)
+    #expect(bar.hintView.frame.maxX < bar.length.frame.minX)
+    #expect(bar.captureButton.face != .primary && bar.finishButton.face == .primary)
+    #expect(bar.length.stringValue == "残す 8.0秒 / 12.0秒")
+    for (code, flags, expected) in [(UInt16(123), NSEvent.ModifierFlags.command, 0.0), (124, .command, 12),
+                                  (115, [], 0), (119, .function, 12)] {
+        editor.seek(to: 6)
+        #expect(editor.handleKey(try videoKey(editor, code, flags: flags)))
+        #expect(editor.position == expected)
+    }
+    editor.timeline.startButton.performClick(nil); #expect(editor.position == 0)
+    editor.timeline.endButton.performClick(nil); #expect(editor.position == 12)
+    editor.seek(to: 3); editor.setStart(); editor.discard()
+    #expect(bar.discardButton.armed)
+    editor.goToStart()
+    #expect(!bar.discardButton.armed && bar.discardButton.title == "破棄")
 }

@@ -18,7 +18,7 @@ import Testing
     for message in [result, error, ToolbarHint(AnnotationToolbarPresentation.aiDisabled)] {
         #expect(AnnotationToolbarPresentation.hint(tool: .number, nextNumber: 4, editingText: true, message: message) == message)
         let discard = AnnotationToolbarPresentation.hint(tool: .number, nextNumber: 4, editingText: true, discardArmed: true, message: message)
-        #expect(discard.text == "もう一度 Q で、注釈を捨てて閉じます" && discard.keys == ["Q"])
+        #expect(discard == message)
     }
     #expect(AnnotationToolbarPresentation.hint(tool: .number, nextNumber: 4, findingPrivacy: true).text.isEmpty)
     #expect(AnnotationToolbarPresentation.hint(tool: .text, nextNumber: 4, editingText: true, findingPrivacy: true).text == "⏎で確定 ・ ⇧⏎で改行")
@@ -52,4 +52,12 @@ import Testing
         #expect(expanded.width - baseline.width == 37)
         #expect(expanded.width - expanded.items[6].maxX == 6)
     }
+}
+
+@Test func videoToolbarShowsCompletionAndDurationWithoutDiscardHint() {
+    var document = VideoEditDocument(duration: 24.1, kept: [.init(0, 14.6)])
+    _ = document.addStill(at: 15); _ = document.addStill(at: 20)
+    #expect(VideoToolbarPresentation.height == AnnotationToolbarPresentation.height)
+    #expect(VideoToolbarPresentation.hint(document: document, discardArmed: true).text == "完了で 14.6秒に切る ・ 静止画2枚をコピー")
+    #expect(VideoToolbarPresentation.length(document: document) == "残す 14.6秒 / 24.1秒")
 }
