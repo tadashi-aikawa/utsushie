@@ -12,7 +12,7 @@ public struct HUDItem: Equatable, Sendable {
 public enum OverlayPresentation {
     public static func items(output: CaptureOutput, target: CaptureTarget, hasLast: Bool) -> [HUDItem] {
         [HUDItem(title: "画像", key: nil, selected: output == .image, recording: false, enabled: true),
-         HUDItem(title: "● 動画", key: nil, selected: output == .video, recording: true, enabled: true),
+         HUDItem(title: "動画", key: nil, selected: output == .video, recording: output == .video, enabled: true),
          HUDItem(title: "範囲", key: "ドラッグ", selected: target == .area, recording: false, enabled: true),
          HUDItem(title: "前回", key: "⏎", selected: target == .last, recording: false, enabled: hasLast),
          HUDItem(title: "ウィンドウ", key: "W", selected: target == .window, recording: false, enabled: true),

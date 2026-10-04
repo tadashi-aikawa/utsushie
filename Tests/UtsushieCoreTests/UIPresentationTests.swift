@@ -28,9 +28,11 @@ import Testing
     let initial = OverlayPresentation.items(output: .image, target: .area, hasLast: false)
     #expect(initial.filter(\.selected).map(\.title) == ["画像", "範囲"])
     #expect(initial.first { $0.title == "前回" }?.enabled == false)
+    #expect(initial.first { $0.title == "動画" }?.recording == false)
+    #expect(initial.filter(\.recording).isEmpty)
     let video = OverlayPresentation.items(output: .video, target: .window, hasLast: true)
-    #expect(video.filter(\.selected).map(\.title) == ["● 動画", "ウィンドウ"])
-    #expect(video.filter(\.recording).map(\.title) == ["● 動画"])
+    #expect(video.filter(\.selected).map(\.title) == ["動画", "ウィンドウ"])
+    #expect(video.filter(\.recording).map(\.title) == ["動画"])
     #expect(video.first { $0.title == "ウィンドウ" }?.key == "W")
     #expect(video.first { $0.title == "前回" }?.enabled == true)
 }

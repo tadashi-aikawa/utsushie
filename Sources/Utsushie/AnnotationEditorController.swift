@@ -21,13 +21,12 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     private static var lastTool: AnnotationTool = .rectangle
     let window: AnnotationPanel
     let canvas: AnnotationCanvas
-    private let hint = NSTextField(labelWithString: "")
-    let zoomLabel = NSTextField(labelWithString: "100%")
-    private let undoButton = AnnotationButton()
-    private let redoButton = AnnotationButton()
-    private var toolButtons: [AnnotationTool: NSButton] = [:]
-    private var finishButton: NSButton!
-    private var discardButton: NSButton!
+    let toolbar = AnnotationToolbarView()
+    private var toolButtons: [AnnotationTool: ToolbarButton] { toolbar.toolButtons }
+    private var undoButton: ToolbarButton { toolbar.undoButton }
+    private var redoButton: ToolbarButton { toolbar.redoButton }
+    private var finishButton: ToolbarButton { toolbar.finishButton }
+    private var discardButton: ToolbarButton { toolbar.discardButton }
     private var discardArmed = false
     private var saving = false
     private var closing = false
@@ -37,9 +36,9 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     private let privacyService: PrivacyDetectionService
     private var privacyTask: Task<Void, Never>?
     private var privacyOperation: UUID?
-    private var privacyMessage: String?
+    private var privacyMessage: ToolbarHint?
     var isFindingPrivacy: Bool { privacyOperation != nil }
-    var hintText: String { hint.stringValue }
+    var hintText: String { toolbar.hintView.hint.text }
     private var previousApplication: NSRunningApplication?
     var onComplete: ((CGImage, AnnotationDocument) async throws -> Void)?
     var onClose: (() -> Void)?
@@ -52,7 +51,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         canvas = AnnotationCanvas(image: image, document: document, tool: Self.lastTool)
         let visible = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let size = CGSize(width: min(max(CGFloat(image.width) + 240, 1180), visible.width - 40),
-                          height: min(max(CGFloat(image.height) + 292, 420), visible.height - 80))
+                          height: min(max(CGFloat(image.height) + 292, 420), visible.height - 80) + AnnotationToolbarPresentation.height - 52)
         window = AnnotationPanel(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled, .closable, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         window.title = "UTSUSHIE — 注釈"
@@ -62,43 +61,26 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         window.hidesOnDeactivate = false
         window.level = .floating
         window.acceptsMouseMovedEvents = true
-        window.minSize = CGSize(width: min(1000, size.width), height: 360)
+        let toolbarWidth = max(AnnotationToolbarPresentation.minimumWidth, toolbar.trays.reduce(28) { $0 + $1.naturalWidth + 10 }
+                               + toolbar.finishButton.naturalWidth + toolbar.discardButton.naturalWidth + 80)
+        window.minSize = CGSize(width: toolbarWidth, height: 383)
+        if size.width < toolbarWidth { window.setContentSize(CGSize(width: toolbarWidth, height: size.height)) }
         window.delegate = self
         window.editor = self
         let root = AnnotationEditorLayout(frame: CGRect(origin: .zero, size: size))
         root.wantsLayer = true; root.layer?.backgroundColor = UITheme.ink.cgColor
-        let bar = NSStackView()
-        bar.orientation = .horizontal; bar.alignment = .centerY; bar.spacing = 4
-        for tool in AnnotationTool.allCases {
-            let button = AnnotationButton(title: "\(tool.label)  \(tool == .selection ? tool.key : tool.key.uppercased())", target: self, action: #selector(selectTool(_:)))
-            button.image = NSImage(systemSymbolName: Self.symbol(tool), accessibilityDescription: tool.label)
-            button.imagePosition = .imageLeading
-            button.bezelStyle = .rounded; button.font = .systemFont(ofSize: 12)
-            button.setButtonType(.pushOnPushOff)
-            toolButtons[tool] = button; bar.addArrangedSubview(button)
-        }
+        for button in toolButtons.values { button.target = self; button.action = #selector(selectTool(_:)) }
         configure(undoButton, title: "↶", action: #selector(undoAnnotation))
         configure(redoButton, title: "↷", action: #selector(redoAnnotation))
         undoButton.toolTip = "取り消し ⌘Z"; redoButton.toolTip = "やり直し ⇧⌘Z"
-        bar.addArrangedSubview(undoButton); bar.addArrangedSubview(redoButton)
-        zoomLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        zoomLabel.textColor = UITheme.text
-        zoomLabel.toolTip = "⌘+ / ⌘- で拡大縮小 ・ ⌘0で全体 ・ ⌘1で100%"
-        bar.addArrangedSubview(zoomLabel)
-        hint.font = .systemFont(ofSize: 12); hint.textColor = .secondaryLabelColor
-        hint.alignment = .center; hint.lineBreakMode = .byTruncatingTail
-        hint.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        hint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        bar.addArrangedSubview(hint)
-        discardButton = AnnotationButton(title: "破棄 Q", target: self, action: #selector(discard))
-        finishButton = AnnotationButton(title: "完了 ⌘↩", target: self, action: #selector(finish))
-        discardButton.bezelStyle = .rounded; finishButton.bezelStyle = .rounded
-        finishButton.bezelColor = UITheme.indigo
-        finishButton.contentTintColor = .white
-        bar.addArrangedSubview(discardButton); bar.addArrangedSubview(finishButton)
-        root.bar = bar; root.canvas = canvas
+        configure(discardButton, title: "破棄", action: #selector(discard))
+        configure(finishButton, title: "完了", action: #selector(finish))
+        configure(toolbar.aiButton, title: "AIで隠す", action: #selector(privacyButtonPressed))
+        configure(toolbar.zoomButton, title: "100%", action: #selector(showZoomMenu))
+        toolbar.zoomButton.toolTip = "倍率メニュー ・ ピンチでも拡大縮小"
+        root.bar = toolbar; root.canvas = canvas
         root.addSubview(canvas)
-        root.addSubview(bar, positioned: .above, relativeTo: canvas)
+        root.addSubview(toolbar, positioned: .above, relativeTo: canvas)
         window.contentView = root
         window.setFrameOrigin(CGPoint(x: visible.midX - window.frame.width / 2, y: visible.midY - window.frame.height / 2))
         canvas.onChange = { [weak self] in
@@ -111,21 +93,11 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         canvas.onDiscard = { [weak self] in self?.discard() }
         canvas.onPrivacy = { [weak self] in self?.findPrivacy() }
         canvas.onCancelPrivacy = { [weak self] in self?.cancelPrivacy() ?? false }
+        canvas.onUserOperation = { [weak self] in self?.clearPrivacyMessage() }
         update()
     }
-    private static func symbol(_ tool: AnnotationTool) -> String {
-        switch tool {
-        case .selection: "cursorarrow"
-        case .rectangle: "rectangle"
-        case .spotlight: "light.max"
-        case .text: "textformat"
-        case .number: "1.circle"
-        case .arrow: "arrow.up.right"
-        case .mosaic: "square.grid.3x3.fill"
-        }
-    }
     private func configure(_ button: NSButton, title: String, action: Selector) {
-        button.title = title; button.target = self; button.action = action; button.bezelStyle = .rounded
+        button.title = title; button.target = self; button.action = action
     }
     func show() {
         if let application = applicationFocus.frontmostApplication(),
@@ -150,27 +122,56 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
                                                      frontmostApplication: applicationFocus.frontmostApplication())
     }
     private func update() {
-        zoomLabel.stringValue = canvas.zoomPercentage
+        toolbar.zoomButton.title = canvas.zoomPercentage
+        let size = canvas.exportLayout.bounds.size
+        toolbar.dimensions.stringValue = "書き出し \(Int(size.width)) × \(Int(size.height))"
         for (tool, button) in toolButtons {
             button.state = tool == canvas.tool ? .on : .off
-            button.bezelColor = tool == canvas.tool ? UITheme.indigo : nil
-            button.contentTintColor = tool == canvas.tool ? .white : UITheme.text
+            button.needsDisplay = true
         }
         undoButton.isEnabled = canvas.history.canUndo && !saving
         redoButton.isEnabled = canvas.history.canRedo && !saving
-        if discardArmed { hint.stringValue = "もう一度押すと破棄"; return }
-        if isFindingPrivacy { hint.stringValue = "隠す箇所を探しています… ・ Escで中止"; return }
-        if let privacyMessage { hint.stringValue = privacyMessage; return }
-        if canvas.isEditingText { hint.stringValue = "Enterで確定 ・ ⇧Enterで改行"; return }
-        let instruction: String
-        switch canvas.tool {
-        case .selection: instruction = "注釈をクリックで選択"
-        case .number: instruction = "クリックで番号 \(canvas.document.nextNumber) ・ ドラッグで指す点から引き出す"
-        case .text: instruction = "クリックで文字 ・ ドラッグで指す点から引き出す"
-        case .arrow: instruction = "始点から終点へドラッグ"
-        default: instruction = "ドラッグで\(canvas.tool.label)を置く"
+        toolbar.aiButton.title = isFindingPrivacy ? "探しています" : "AIで隠す"
+        toolbar.aiButton.key = isFindingPrivacy ? "Esc" : "H"
+        toolbar.aiButton.dimmed = !privacyConfig.ai
+        toolbar.aiButton.isEnabled = !saving && (isFindingPrivacy || !canvas.isEditingText)
+        toolbar.aiButton.setAccessibilityLabel(toolbar.aiButton.title)
+        toolbar.aiButton.setAccessibilityHelp(isFindingPrivacy ? "Escで中止" : privacyConfig.ai ? "Hで隠す箇所を探す" : AnnotationToolbarPresentation.aiDisabled)
+        toolbar.zoomButton.isEnabled = !saving
+        discardButton.armed = discardArmed
+        toolbar.hintView.hint = AnnotationToolbarPresentation.hint(tool: canvas.tool, nextNumber: canvas.document.nextNumber,
+            editingText: canvas.isEditingText, discardArmed: discardArmed, findingPrivacy: isFindingPrivacy, message: privacyMessage, saving: saving)
+        [undoButton, redoButton, discardButton, finishButton, toolbar.aiButton, toolbar.zoomButton].forEach { $0.needsDisplay = true }
+        toolbar.needsLayout = true
+    }
+    func clearPrivacyMessage() {
+        guard privacyMessage != nil else { return }
+        privacyMessage = nil; update()
+    }
+    @objc private func privacyButtonPressed() {
+        if !cancelPrivacy() { findPrivacy() }
+        window.makeFirstResponder(canvas.isEditingText ? window.firstResponder : canvas)
+    }
+    @objc private func showZoomMenu() {
+        clearPrivacyMessage()
+        let menu = NSMenu()
+        for (title, key, tag) in [("拡大", "+", 0), ("縮小", "-", 1), ("全体を表示", "0", 2), ("実寸で表示", "1", 3)] {
+            if tag == 2 { menu.addItem(.separator()) }
+            let item = NSMenuItem(title: title, action: #selector(changeZoom(_:)), keyEquivalent: key)
+            item.target = self; item.tag = tag; item.keyEquivalentModifierMask = .command
+            menu.addItem(item)
         }
-        hint.stringValue = instruction + " ・ AIで隠す H"
+        menu.popUp(positioning: nil, at: CGPoint(x: 0, y: toolbar.zoomButton.bounds.maxY), in: toolbar.zoomButton)
+    }
+    @objc func changeZoom(_ sender: NSMenuItem) {
+        let anchor = CGPoint(x: canvas.bounds.midX, y: canvas.bounds.midY)
+        switch sender.tag {
+        case 0: canvas.zoom(to: canvas.displayScale * 1.25, around: anchor)
+        case 1: canvas.zoom(to: canvas.displayScale / 1.25, around: anchor)
+        case 2: canvas.fitAll()
+        case 3: canvas.zoom(to: 1, around: anchor)
+        default: return
+        }
     }
     func handlePrivacyKey(_ event: NSEvent) -> Bool {
         guard !saving, !closing, window.attachedSheet == nil else { return false }
@@ -188,7 +189,8 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     func findPrivacy() {
         guard !saving, !closing, !isFindingPrivacy, !canvas.isEditingText else { return }
         guard privacyConfig.ai else {
-            privacyMessage = "設定で有効にすると使えます"; update(); return
+            discardArmed = false
+            privacyMessage = ToolbarHint(AnnotationToolbarPresentation.aiDisabled); update(); return
         }
         let operation = UUID()
         privacyOperation = operation; privacyMessage = nil; discardArmed = false; update()
@@ -201,14 +203,14 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
                 try Task.checkCancellation()
                 guard privacyOperation == operation, !closing, !saving else { return }
                 canvas.appendPrivacyAnnotations(result.annotations)
-                privacyMessage = result.message
+                privacyMessage = ToolbarHint(result.message, isError: result.warning != nil)
             } catch is CancellationError {
                 guard privacyOperation == operation else { return }
-                privacyMessage = "隠す箇所の検索を中止しました"
+                privacyMessage = ToolbarHint("隠す箇所の検索を中止しました")
             }
             catch {
                 guard privacyOperation == operation else { return }
-                privacyMessage = "隠す箇所を探せませんでした"
+                privacyMessage = ToolbarHint("隠す箇所を探せませんでした", isError: true)
             }
             guard privacyOperation == operation else { return }
             privacyOperation = nil; privacyTask = nil; update()
@@ -217,11 +219,12 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     @discardableResult func cancelPrivacy() -> Bool {
         guard isFindingPrivacy else { return false }
         privacyTask?.cancel(); privacyTask = nil; privacyOperation = nil
-        privacyMessage = "隠す箇所の検索を中止しました"; update()
+        privacyMessage = ToolbarHint("隠す箇所の検索を中止しました"); update()
         return true
     }
     @objc private func selectTool(_ sender: NSButton) {
         guard !saving, let tool = toolButtons.first(where: { $0.value === sender })?.key else { return }
+        clearPrivacyMessage()
         canvas.commitText(); canvas.tool = tool; Self.lastTool = tool
         discardArmed = false; update(); window.makeFirstResponder(canvas)
     }
@@ -253,7 +256,6 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         saving = true; canvas.isEnabled = false
         finishButton.isEnabled = false; discardButton.isEnabled = false
         toolButtons.values.forEach { $0.isEnabled = false }; update()
-        hint.stringValue = "書き出し中…"
         Task { [self] in
             do {
                 let image = try AnnotationRenderer.compose(canvas.original, document: document)
@@ -295,6 +297,11 @@ final class AnnotationPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .magnify:
+            editor?.clearPrivacyMessage()
+        default: break
+        }
         if event.type == .keyDown, editor?.handlePrivacyKey(event) == true { return }
         switch event.type {
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
@@ -328,20 +335,15 @@ final class AnnotationPanel: NSPanel {
 }
 
 @MainActor
-private final class AnnotationButton: NSButton {
-    override var needsPanelToBecomeKey: Bool { true }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-}
-
-@MainActor
 private final class AnnotationEditorLayout: NSView {
-    var bar: NSStackView!
+    var bar: AnnotationToolbarView!
     var canvas: AnnotationCanvas!
     override var isFlipped: Bool { true }
     override func layout() {
         super.layout()
-        bar.frame = CGRect(x: 14, y: 0, width: max(0, bounds.width - 28), height: 52)
-        canvas.frame = CGRect(x: 0, y: 52, width: bounds.width, height: max(0, bounds.height - 52))
+        let height = AnnotationToolbarPresentation.height
+        bar.frame = CGRect(x: 0, y: 0, width: bounds.width, height: height)
+        canvas.frame = CGRect(x: 0, y: height, width: bounds.width, height: max(0, bounds.height - height))
     }
 }
 
@@ -351,6 +353,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private(set) var history: AnnotationHistory
     var tool: AnnotationTool { didSet { updateCursor(); needsDisplay = true } }
     var onChange: (() -> Void)?
+    var onUserOperation: (() -> Void)?
     var onDiscard: (() -> Void)?
     var onPrivacy: (() -> Void)?
     var onCancelPrivacy: (() -> Bool)?
@@ -527,6 +530,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     }
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
+        onUserOperation?()
         commitText(); window?.makeFirstResponder(self)
         if spacePressed {
             gesture = .pan(viewport, convert(event.locationInWindow, from: nil)); updateCursor(); return
@@ -628,6 +632,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     }
     override func keyDown(with event: NSEvent) {
         guard isEnabled, !isEditingText, window?.attachedSheet == nil else { return }
+        onUserOperation?()
         if handleZoomKey(event) { return }
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if flags.isEmpty, event.keyCode == 49 { spacePressed = true; updateCursor(); return }
@@ -745,14 +750,6 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
                 NSColor.white.setFill(); NSBezierPath(ovalIn: r).fill()
                 AnnotationRenderer.red.setStroke(); NSBezierPath(ovalIn: r).stroke()
             }
-        }
-        if gesture != nil, !isPanning {
-            let summary = exportLayout.summary
-            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium), .foregroundColor: UITheme.text]
-            let size = (summary as NSString).size(withAttributes: attributes)
-            let badge = CGRect(x: max(12, bounds.maxX - size.width - 32), y: bounds.maxY - 40, width: size.width + 20, height: 28)
-            UIDrawing.fill(badge, color: UITheme.ink, radius: 6)
-            (summary as NSString).draw(at: CGPoint(x: badge.minX + 10, y: badge.minY + 6), withAttributes: attributes)
         }
         if tool == .number, let cursorPoint, !isEditingText, gesture == nil {
             let string = String(document.nextNumber) as NSString
