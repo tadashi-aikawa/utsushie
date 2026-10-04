@@ -33,13 +33,22 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     private var closing = false
     private let initial: AnnotationDocument
     private let applicationFocus: AnnotationApplicationFocus
+    private let privacyConfig: PrivacyConfig
+    private let privacyService: PrivacyDetectionService
+    private var privacyTask: Task<Void, Never>?
+    private var privacyOperation: UUID?
+    private var privacyMessage: String?
+    var isFindingPrivacy: Bool { privacyOperation != nil }
+    var hintText: String { hint.stringValue }
     private var previousApplication: NSRunningApplication?
     var onComplete: ((CGImage, AnnotationDocument) async throws -> Void)?
     var onClose: (() -> Void)?
 
-    init(image: CGImage, document: AnnotationDocument, screen: NSScreen?, applicationFocus: AnnotationApplicationFocus = AnnotationApplicationFocus()) {
+    init(image: CGImage, document: AnnotationDocument, screen: NSScreen?, applicationFocus: AnnotationApplicationFocus = AnnotationApplicationFocus(),
+         privacyConfig: PrivacyConfig = PrivacyConfig(), privacyService: PrivacyDetectionService = PrivacyDetectionService()) {
         initial = document
         self.applicationFocus = applicationFocus
+        self.privacyConfig = privacyConfig; self.privacyService = privacyService
         canvas = AnnotationCanvas(image: image, document: document, tool: Self.lastTool)
         let visible = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let size = CGSize(width: min(max(CGFloat(image.width) + 240, 1180), visible.width - 40),
@@ -92,9 +101,16 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         root.addSubview(bar, positioned: .above, relativeTo: canvas)
         window.contentView = root
         window.setFrameOrigin(CGPoint(x: visible.midX - window.frame.width / 2, y: visible.midY - window.frame.height / 2))
-        canvas.onChange = { [weak self] in self?.discardArmed = false; self?.update() }
+        canvas.onChange = { [weak self] in
+            guard let self else { return }
+            discardArmed = false
+            if !isFindingPrivacy { privacyMessage = nil }
+            update()
+        }
         canvas.onToolChange = { tool in Self.lastTool = tool }
         canvas.onDiscard = { [weak self] in self?.discard() }
+        canvas.onPrivacy = { [weak self] in self?.findPrivacy() }
+        canvas.onCancelPrivacy = { [weak self] in self?.cancelPrivacy() ?? false }
         update()
     }
     private static func symbol(_ tool: AnnotationTool) -> String {
@@ -143,6 +159,8 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         undoButton.isEnabled = canvas.history.canUndo && !saving
         redoButton.isEnabled = canvas.history.canRedo && !saving
         if discardArmed { hint.stringValue = "もう一度押すと破棄"; return }
+        if isFindingPrivacy { hint.stringValue = "隠す箇所を探しています… ・ Escで中止"; return }
+        if let privacyMessage { hint.stringValue = privacyMessage; return }
         if canvas.isEditingText { hint.stringValue = "Enterで確定 ・ ⇧Enterで改行"; return }
         let instruction: String
         switch canvas.tool {
@@ -152,7 +170,55 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         case .arrow: instruction = "始点から終点へドラッグ"
         default: instruction = "ドラッグで\(canvas.tool.label)を置く"
         }
-        hint.stringValue = instruction
+        hint.stringValue = instruction + " ・ AIで隠す H"
+    }
+    func handlePrivacyKey(_ event: NSEvent) -> Bool {
+        guard !saving, !closing, window.attachedSheet == nil else { return false }
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard flags.isEmpty else { return false }
+        if event.keyCode == 53, isFindingPrivacy {
+            // IME変換中のEscは従来どおりinput contextへ渡す。
+            if let input = window.firstResponder as? NSTextView, input.hasMarkedText() { return false }
+            return cancelPrivacy()
+        }
+        guard event.keyCode == 4, !canvas.isEditingText else { return false }
+        if !event.isARepeat { findPrivacy() }
+        return true
+    }
+    func findPrivacy() {
+        guard !saving, !closing, !isFindingPrivacy, !canvas.isEditingText else { return }
+        guard privacyConfig.ai else {
+            privacyMessage = "設定で有効にすると使えます"; update(); return
+        }
+        let operation = UUID()
+        privacyOperation = operation; privacyMessage = nil; discardArmed = false; update()
+        privacyTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let result = try await privacyService.detect(image: canvas.original, config: privacyConfig)
+                // 進行中のドラッグや文字入力の履歴へ割り込まない。通常操作の完了後に一括で置く。
+                while canvas.isInteracting { try await Task.sleep(for: .milliseconds(50)) }
+                try Task.checkCancellation()
+                guard privacyOperation == operation, !closing, !saving else { return }
+                canvas.appendPrivacyAnnotations(result.annotations)
+                privacyMessage = result.message
+            } catch is CancellationError {
+                guard privacyOperation == operation else { return }
+                privacyMessage = "隠す箇所の検索を中止しました"
+            }
+            catch {
+                guard privacyOperation == operation else { return }
+                privacyMessage = "隠す箇所を探せませんでした"
+            }
+            guard privacyOperation == operation else { return }
+            privacyOperation = nil; privacyTask = nil; update()
+        }
+    }
+    @discardableResult func cancelPrivacy() -> Bool {
+        guard isFindingPrivacy else { return false }
+        privacyTask?.cancel(); privacyTask = nil; privacyOperation = nil
+        privacyMessage = "隠す箇所の検索を中止しました"; update()
+        return true
     }
     @objc private func selectTool(_ sender: NSButton) {
         guard !saving, let tool = toolButtons.first(where: { $0.value === sender })?.key else { return }
@@ -181,6 +247,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     }
     @objc private func finish() {
         guard !saving, window.attachedSheet == nil else { return }
+        cancelPrivacy()
         canvas.commitText()
         let document = canvas.document
         saving = true; canvas.isEnabled = false
@@ -201,12 +268,13 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
             }
         }
     }
-    private func close() { closing = true; window.close() }
+    private func close() { cancelPrivacy(); closing = true; window.close() }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if closing { return true }
         discard(); return false
     }
     func windowWillClose(_ notification: Notification) {
+        cancelPrivacy()
         let application = previousApplication
         previousApplication = nil
         let front = applicationFocus.frontmostApplication()
@@ -227,6 +295,7 @@ final class AnnotationPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, editor?.handlePrivacyKey(event) == true { return }
         switch event.type {
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             editor?.requestActivation(reason: "panel mouseDown")
@@ -283,6 +352,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     var tool: AnnotationTool { didSet { updateCursor(); needsDisplay = true } }
     var onChange: (() -> Void)?
     var onDiscard: (() -> Void)?
+    var onPrivacy: (() -> Void)?
+    var onCancelPrivacy: (() -> Bool)?
     var isEnabled = true
     private(set) var selection: UUID?
     private var gesture: Gesture?
@@ -310,6 +381,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         return result
     }
     var isEditingText: Bool { textInput != nil }
+    var isInteracting: Bool { gesture != nil || isEditingText }
+    func appendPrivacyAnnotations(_ annotations: [Annotation]) {
+        guard !annotations.isEmpty else { return }
+        var next = history.document
+        next.annotations += annotations
+        history.commit(next); changed()
+    }
     private var imageSize: CGSize { CGSize(width: original.width, height: original.height) }
     private var style: AnnotationStyle { AnnotationStyle(imageSize: imageSize) }
     var exportLayout: AnnotationExportLayout { document.exportLayout(imageSize: imageSize) }
@@ -553,6 +631,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         if handleZoomKey(event) { return }
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if flags.isEmpty, event.keyCode == 49 { spacePressed = true; updateCursor(); return }
+        if flags.isEmpty, event.keyCode == 4 {
+            if !event.isARepeat { onPrivacy?() }
+            return
+        }
         if flags.isEmpty, event.keyCode == 12 {
             if !event.isARepeat { onDiscard?() }
             return
@@ -575,6 +657,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     override func cancelOperation(_ sender: Any?) { escape() }
     func escape() {
         guard isEnabled else { return }
+        if onCancelPrivacy?() == true { return }
         if isEditingText { commitText(); return }
         cancelGesture()
         if tool != .selection { tool = .selection; rememberTool(); changed() }

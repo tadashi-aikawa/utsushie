@@ -173,7 +173,8 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     @objc func edit() {
         guard canEdit, editor == nil, let originalImage else { return }
         hide()
-        let controller = AnnotationEditorController(image: originalImage, document: annotations, screen: screen)
+        let controller = AnnotationEditorController(image: originalImage, document: annotations, screen: screen,
+                                                    privacyConfig: annotationConfig().privacy)
         editor = controller
         controller.onComplete = { [weak self] image, document in
             guard let self else { return }

@@ -15,6 +15,7 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
   - `Video.swift`: 動画の偶数寸法・単一画面判定・録画状態・VFRの時間計算・表示文言。
   - `Annotation.swift`: 画像ピクセル座標の注釈モデル、余白の計算、引き出し線、連番、スタイル、ヒットテスト、変形と履歴。
   - `AnnotationViewport.swift`: 表示倍率・原点、カーソルを固定するズーム、表示の移動と全体表示。
+  - `Privacy.swift`: AI応答の行番号の解釈、文字だけのプロンプト、モザイク範囲の余白と画像内への制限、Claude実行ファイルの探索順。
 - `Sources/Utsushie/`: AppKit・ScreenCaptureKit・ApplicationServicesの実行ターゲット。Swift 6。
   - `AppDelegate.swift`: メニュー、権限、設定の再読込、撮影から共有までの流れ。
   - `GlobalHotkey.swift`: Carbonのグローバルホットキー。
@@ -32,6 +33,8 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
   - `AnnotationNavigationDiagnostics.swift`: アプリ全体へ届くmagnifyの到達先とアクティブ状態の診断。
   - `AnnotationRenderer.swift`: 元画像からのモザイク・暗幕・朱の注釈の合成。
   - `AnnotationSave.swift`: 注釈付きWebPの同名置換とコピー失敗時の復元。
+  - `PrivacyDetectionService.swift`: 元画像のVision文字認識・顔検出、文字だけを渡すClaudeの呼び出し、モザイク候補への変換。
+  - `PrivacyProcess.swift`: メインスレッド外でのProcess実行、出力の読み取り、時間切れとキャンセル時のPID指定停止。
 - `Tests/UtsushieCoreTests/`: 設定・座標・状態・ファイル名のswift-testing。
 - `Tests/UtsushieAppTests/`: WebP実エンコード、MP4実書き込みと再生時間、保存の衝突、クリップボードの形式。
 - `Resources/Info.plist`: bundle ID、LSUIElement、macOS 26。
@@ -54,6 +57,24 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
 - 注釈はカードが保持する撮影時のCGImageから合成します。
   - 理由: 保存済みWebPをデコードして再圧縮すると、再編集のたびに画像が劣化します。
   - 座標: 注釈だけは画像左上原点のピクセル座標です。Coreの画面座標とは混ぜません。
+- AIのモザイクは元画像をVisionで認識し、文字の行番号と文字列だけをClaudeへ渡します。
+  - 理由: 公開しない画像を外へ送らず、AIには秘密情報の判断だけを任せます。位置はVisionの座標を使います。
+  - 顔: 手元のVisionだけで検出し、Claudeへ渡しません。
+  - 設定: `[privacy] ai = false`を既定にし、編集開始時に設定を読みます。
+    - モデル: `model = "sonnet"`、`effort = "low"`が既定です。effortは`low`・`medium`・`high`を受け付けます。
+  - 起動: `claude -p --setting-sources local`、JSON Schema、セッション保存なし、ツールなしで呼びます。
+    - 理由: ユーザー設定のhookやプラグインをUTSUSHIEからの呼び出しで動かさないためです。
+    - 引数: 画像・座標・保存先を含めません。
+    - effort: 設定値を`--effort`で渡します。
+    - 認証: サブスクリプションのログインを使うため、`--bare`は指定しません。
+  - 秘密情報: CLIの生出力をUIやログへ転記しません。
+  - 診断: `Privacy`カテゴリのdebugログに、文字認識・Claude探索・Claude実行の所要秒数を個別に記録します。
+    - 項目: `textRecognition`、`claudeSearch`、`claudeExecution`の処理名と`elapsedSeconds`だけを出します。
+    - 失敗: 失敗・時間切れ・キャンセルで抜けた処理の所要時間も記録します。
+  - 探索: 明示パスか既定候補を使います。未指定で候補になければログインシェルで探します。探索とAI実行の合計60秒で打ち切ります。
+  - 履歴: 追加するモザイク全体を1回のcommitにまとめます。ドラッグ・文字入力中なら操作が終わるまで追加を待ちます。
+  - 中止: Esc・保存開始・編集終了でキャンセルします。中止後の結果は注釈へ追加しません。IME変換中のEscはinput contextに渡します。
+  - 失敗: Claudeの失敗時も検出済みの顔は置けます。文字がない場合はClaudeを起動しません。
 - 余白は注釈の位置から毎回計算し、状態として保存しません。
   - 配置: 文字・番号・枠は中心が元画像の外に出たら余白へ置けます。
     - 内側: 中心が画像の内側なら画像の中に留めます。

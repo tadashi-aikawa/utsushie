@@ -2,6 +2,13 @@ import Foundation
 import TOMLKit
 
 public enum ClipboardMode: String, Sendable, CaseIterable { case both, file, data }
+public struct PrivacyConfig: Equatable, Sendable {
+    public var ai = false
+    public var claude = ""
+    public var model = "sonnet"
+    public var effort = "low"
+    public init() {}
+}
 public struct VideoConfig: Equatable, Sendable {
     public var fps = 30
     public var downscale = true
@@ -25,6 +32,7 @@ public struct UtsushieConfig: Equatable, Sendable {
     public var clipboard: ClipboardMode = .both
     public var thumbnailSeconds: Double = 5
     public var video = VideoConfig()
+    public var privacy = PrivacyConfig()
     public init() {}
     public func outputURL(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
         outputDir.hasPrefix("~/") ? home.appendingPathComponent(String(outputDir.dropFirst(2))) : URL(fileURLWithPath: outputDir)
@@ -58,7 +66,7 @@ public enum ConfigLoader {
             return root[key]?.tomlValue
         }
         func warn(_ name: String) { warnings.append("\(name) が不正なため既定値を使います") }
-        for section in ["hotkey", "webp", "clipboard", "thumbnail", "video"] {
+        for section in ["hotkey", "webp", "clipboard", "thumbnail", "video", "privacy"] {
             if let item = root[section], item.tomlValue.table == nil { warn(section) }
         }
         if let item = value(nil, "outputDir") {
@@ -91,6 +99,26 @@ public enum ConfigLoader {
             if let item = value("video", key) {
                 if let bool = item.bool { assign(bool) } else { warn("video.\(key)") }
             }
+        }
+        if let item = value("privacy", "ai") {
+            if let enabled = item.bool { config.privacy.ai = enabled } else { warn("privacy.ai") }
+        }
+        if let item = value("privacy", "claude") {
+            if let path = item.string, path.isEmpty ||
+                ((path.hasPrefix("/") || path.hasPrefix("~/")) && path.rangeOfCharacter(from: .controlCharacters) == nil) {
+                config.privacy.claude = path
+            } else { warn("privacy.claude") }
+        }
+        if let item = value("privacy", "model") {
+            if let model = item.string, !model.isEmpty, !model.hasPrefix("-"),
+               model.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.controlCharacters)) == nil {
+                config.privacy.model = model
+            } else { warn("privacy.model") }
+        }
+        if let item = value("privacy", "effort") {
+            if let effort = item.string, ["low", "medium", "high"].contains(effort) {
+                config.privacy.effort = effort
+            } else { warn("privacy.effort") }
         }
         var hotkeyValid = true
         if let item = value("hotkey", "keyCode") {
@@ -136,5 +164,11 @@ public enum ConfigLoader {
 
     [thumbnail]
     seconds = 5 # 0.1〜300。ホバー中は停止
+
+    [privacy]
+    ai = false # trueで編集画面のHが使える。認識した文字だけをClaudeへ送る
+    claude = "" # 空なら自動探索。指定する場合は絶対パスか~/からのパス
+    model = "sonnet"
+    effort = "low" # low / medium / high
     """ + "\n"
 }
