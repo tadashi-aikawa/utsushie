@@ -30,10 +30,11 @@ import Testing
     #expect(initial.first { $0.title == "前回" }?.enabled == false)
     #expect(initial.first { $0.title == "動画" }?.recording == false)
     #expect(initial.filter(\.recording).isEmpty)
-    let video = OverlayPresentation.items(output: .video, target: .window, hasLast: true)
-    #expect(video.filter(\.selected).map(\.title) == ["動画", "ウィンドウ"])
+    let video = OverlayPresentation.items(output: .video, target: .area, hasLast: true)
+    #expect(video.filter(\.selected).map(\.title) == ["動画", "範囲"])
     #expect(video.filter(\.recording).map(\.title) == ["動画"])
-    #expect(video.first { $0.title == "ウィンドウ" }?.key == "W")
+    #expect(video.map(\.title) == ["画像", "動画", "範囲", "前回", "Chrome", "やめる"])
+    #expect(!video.contains { $0.key == "W" })
     #expect(video.first { $0.title == "前回" }?.enabled == true)
 }
 

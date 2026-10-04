@@ -6,6 +6,7 @@ import Testing
     let state = CaptureState()
     #expect(state.target == .area)
     #expect(state.output == .image)
+    #expect(state.highlightsWindow)
 }
 @Test func enterAndHotkeyRequirePreviousArea() {
     var state = CaptureState()
@@ -18,9 +19,9 @@ import Testing
 @Test func targetAndOutputAreIndependent() {
     var state = CaptureState()
     #expect(state.key(13, hasLast: false) == .none)
-    #expect(state.target == .window)
+    #expect(state.target == .area)
     #expect(state.key(48, hasLast: false) == .none)
-    #expect(state.target == .window)
+    #expect(state.target == .area)
     #expect(state.output == .video)
     #expect(state.key(36, hasLast: true) == .captureLast)
     #expect(state.target == .last)
@@ -45,10 +46,10 @@ import Testing
     #expect(state.output == .video)
     #expect(state.cursor == .crosshair)
     #expect(state.key(13, hasLast: false) == .none)
-    #expect(state.cursor == .arrow)
+    #expect(state.cursor == .crosshair)
     #expect(state.key(48, hasLast: false) == .none)
     #expect(state.output == .image)
-    #expect(state.cursor == .arrow)
+    #expect(state.cursor == .crosshair)
     state.fallbackToArea()
     #expect(state.cursor == .crosshair)
     #expect(state.key(13, hasLast: false) == .none)

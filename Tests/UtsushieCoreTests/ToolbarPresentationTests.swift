@@ -26,31 +26,31 @@ import Testing
 }
 
 @Test func overlayToolbarFitsContentWithEqualOuterPadding() {
-    let samples: [[CGFloat]] = [[40, 56, 87, 63, 109, 90, 91], [100, 100, 100, 100, 100, 100, 100], [20, 20, 20, 20, 20, 20, 20]]
+    let samples: [[CGFloat]] = [[40, 56, 87, 63, 90, 91], [100, 100, 100, 100, 100, 100], [20, 20, 20, 20, 20, 20]]
     for widths in samples {
         let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28)
         #expect(layout.outputTray.minX == 6)
-        #expect(layout.width - layout.items[6].maxX == 6)
+        #expect(layout.width - layout.items[5].maxX == 6)
         #expect(layout.items.map(\.width) == widths)
         #expect(layout.items[0].minX - layout.outputTray.minX == 2)
         #expect(layout.outputTray.maxX - layout.items[1].maxX == 2)
         #expect(layout.targetTray.minX - layout.tab.maxX == 10)
         #expect(layout.items[2].minX - layout.targetTray.minX == 2)
-        #expect(layout.targetTray.maxX - layout.items[5].maxX == 2)
-        #expect(layout.items[6].minX - layout.targetTray.maxX == 10)
-        for index in [0, 2, 3, 4] { #expect(layout.items[index + 1].minX - layout.items[index].maxX == 2) }
+        #expect(layout.targetTray.maxX - layout.items[4].maxX == 2)
+        #expect(layout.items[5].minX - layout.targetTray.maxX == 10)
+        for index in [0, 2, 3] { #expect(layout.items[index + 1].minX - layout.items[index].maxX == 2) }
     }
-    let compact = OverlayToolbarLayout(itemWidths: Array(repeating: 20, count: 7), tabWidth: 28)
+    let compact = OverlayToolbarLayout(itemWidths: Array(repeating: 20, count: 6), tabWidth: 28)
     #expect(compact.width < 620)
 }
 
 @Test func overlayToolbarWidthTracksEveryItemWithoutExtraTrailingSpace() {
-    let baseline = OverlayToolbarLayout(itemWidths: Array(repeating: 50, count: 7), tabWidth: 28)
-    for index in 0..<7 {
-        var widths: [CGFloat] = Array(repeating: 50, count: 7); widths[index] += 37
+    let baseline = OverlayToolbarLayout(itemWidths: Array(repeating: 50, count: 6), tabWidth: 28)
+    for index in 0..<6 {
+        var widths: [CGFloat] = Array(repeating: 50, count: 6); widths[index] += 37
         let expanded = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28)
         #expect(expanded.width - baseline.width == 37)
-        #expect(expanded.width - expanded.items[6].maxX == 6)
+        #expect(expanded.width - expanded.items[5].maxX == 6)
     }
 }
 

@@ -15,7 +15,6 @@ public enum OverlayPresentation {
          HUDItem(title: "動画", key: nil, selected: output == .video, recording: output == .video, enabled: true),
          HUDItem(title: "範囲", key: "ドラッグ", selected: target == .area, recording: false, enabled: true),
          HUDItem(title: "前回", key: "⏎", selected: target == .last, recording: false, enabled: hasLast),
-         HUDItem(title: "ウィンドウ", key: "W", selected: target == .window, recording: false, enabled: true),
          HUDItem(title: "Chrome", key: "C", selected: target == .chrome, recording: false, enabled: true),
          HUDItem(title: "やめる", key: "Esc", selected: false, recording: false, enabled: true)]
     }
