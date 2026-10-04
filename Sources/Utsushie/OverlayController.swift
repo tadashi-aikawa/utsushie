@@ -59,11 +59,11 @@ final class OverlayController {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.isVisible else { return event }
             let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-            guard modifiers.isEmpty, [UInt16(53), 48, 13, 8, 36, 76].contains(event.keyCode) else { return event }
+            guard modifiers.isEmpty, [UInt16(53), 48, 8, 36, 76].contains(event.keyCode) else { return event }
             if !event.isARepeat { self.key(event.keyCode) }
             return nil
         }
-        redraw()
+        updateWindow(); redraw()
     }
     func close() {
         contentTask?.cancel(); contentTask = nil; windowContent = nil
@@ -113,7 +113,7 @@ final class OverlayController {
         cursor.set()
     }
     private func updateWindow() {
-        guard state.target == .window else { highlighted = nil; highlightedApp = ""; return }
+        guard isVisible, state.highlightsWindow else { highlighted = nil; highlightedApp = ""; return }
         let point = NSEvent.mouseLocation
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
@@ -150,18 +150,17 @@ final class OverlayController {
     func mouseDragged() {
         guard isVisible else { return }
         state.pointerDragged(to: NSEvent.mouseLocation)
-        redraw()
+        updateWindow(); redraw()
     }
     func mouseUp() {
         guard isVisible else { return }
-        performPointer(state.pointerUp(at: NSEvent.mouseLocation))
+        updateWindow()
+        performPointer(state.pointerUp(at: NSEvent.mouseLocation, hasWindow: highlighted != nil))
     }
     private func performPointer(_ action: PointerAction) {
         switch action {
         case .none: break
-        case .cancel: perform(.cancel)
         case .captureWindow:
-            updateWindow()
             if let highlighted { onCapture?(highlighted, false, state.output) }
         case let .captureArea(rect): onCapture?(.region(rect), true, state.output)
         case let .moveLast(rect):
@@ -170,7 +169,7 @@ final class OverlayController {
             } else { message = "前回範囲を画面内へ移動してください" }
             // 移動中はプレビューだけを変え、離したときに確定する。Escでは保存しない。
         }
-        redraw()
+        updateWindow(); redraw()
     }
     func showError(_ error: Error) {
         message = error.localizedDescription; state.fallbackToArea(); redraw()
@@ -283,7 +282,7 @@ final class OverlayView: NSView {
         ToolbarDrawing.key("Tab", in: layout.tab)
         for (index, item) in items.enumerated() {
             ToolbarDrawing.item(title: item.title, key: item.key, in: layout.items[index],
-                style: index == 6 ? .secondary : .tool, selected: item.selected, recording: item.recording, dimmed: !item.enabled)
+                style: item.title == "やめる" ? .secondary : .tool, selected: item.selected, recording: item.recording, dimmed: !item.enabled)
         }
         NSGraphicsContext.restoreGraphicsState()
         if hasError {
