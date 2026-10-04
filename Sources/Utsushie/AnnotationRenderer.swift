@@ -21,11 +21,21 @@ enum AnnotationRenderer {
         let width = original.width, height = original.height
         let full = CGRect(x: 0, y: 0, width: width, height: height)
         let style = AnnotationStyle(imageSize: full.size)
-        let context = try bitmap(width: width, height: height)
-        context.draw(original, in: full)
+        let layout = document.exportLayout(imageSize: full.size)
+        // モザイクの生バイト処理は元画像の寸法と行幅のまま行う。
+        let source = try bitmap(width: width, height: height)
+        source.draw(original, in: full)
         if document.annotations.contains(where: { $0.tool == .mosaic }) {
-            try drawMosaics(original, document: document, context: context, style: style, full: full)
+            try drawMosaics(original, document: document, context: source, style: style, full: full)
         }
+        guard let base = source.makeImage() else { throw WebPError.bitmap }
+        let context = try bitmap(width: Int(layout.bounds.width), height: Int(layout.bounds.height))
+        if layout.bounds != full {
+            context.setFillColor(UITheme.paper.cgColor)
+            context.fill(CGRect(origin: .zero, size: layout.bounds.size))
+        }
+        let destination = CGRect(x: -layout.bounds.minX, y: layout.bounds.maxY - full.height, width: full.width, height: full.height)
+        context.draw(base, in: destination)
         let spots = document.annotations.filter { $0.tool == .spotlight }
         if !spots.isEmpty {
             let curtain = try bitmap(width: width, height: height)
@@ -38,17 +48,66 @@ enum AnnotationRenderer {
                 curtain.fillPath()
             }
             guard let overlay = curtain.makeImage() else { throw WebPError.bitmap }
-            context.draw(overlay, in: full)
+            context.draw(overlay, in: destination)
         }
-        context.translateBy(x: 0, y: CGFloat(height)); context.scaleBy(x: 1, y: -1)
+        context.translateBy(x: -layout.bounds.minX, y: layout.bounds.maxY); context.scaleBy(x: 1, y: -1)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
         defer { NSGraphicsContext.restoreGraphicsState() }
-        for annotation in document.ordered {
+        drawMarginBoundary(layout, context: context)
+        drawSpotFrames(spots, style: style, context: context)
+        for annotation in document.ordered where annotation.tool.layer <= AnnotationTool.arrow.layer {
+            draw(annotation, document: document, style: style, context: context)
+        }
+        // すべての線をすべての札より下へ置く。
+        for annotation in document.ordered where [.text, .number].contains(annotation.tool) {
+            drawLeader(annotation, document: document, style: style, context: context)
+        }
+        for annotation in document.ordered where annotation.tool.layer > AnnotationTool.arrow.layer {
             draw(annotation, document: document, style: style, context: context)
         }
         guard let image = context.makeImage() else { throw WebPError.bitmap }
         return image
+    }
+    private static func drawMarginBoundary(_ layout: AnnotationExportLayout, context: CGContext) {
+        context.setFillColor(CGColor(gray: 0, alpha: 0.14))
+        let size = layout.imageSize
+        if layout.left > 0 { context.fill(CGRect(x: -1, y: 0, width: 1, height: size.height)) }
+        if layout.right > 0 { context.fill(CGRect(x: size.width, y: 0, width: 1, height: size.height)) }
+        if layout.top > 0 { context.fill(CGRect(x: 0, y: -1, width: size.width, height: 1)) }
+        if layout.bottom > 0 { context.fill(CGRect(x: 0, y: size.height, width: size.width, height: 1)) }
+    }
+    private static func drawSpotFrames(_ spots: [Annotation], style: AnnotationStyle, context: CGContext) {
+        guard !spots.isEmpty else { return }
+        func union(expansion: Double) -> CGPath {
+            spots.reduce(CGMutablePath() as CGPath) { result, spot in
+                let radius = min(style.radius, min(spot.rect.width, spot.rect.height) / 2) + expansion
+                let path = CGPath(roundedRect: spot.rect.insetBy(dx: -expansion, dy: -expansion), cornerWidth: radius, cornerHeight: radius, transform: nil)
+                return result.union(path, using: .winding)
+            }
+        }
+        // 白2px・朱3px・白2pxの帯を穴の外へ作る。和集合の差を塗り、隣の穴に線を残さない。
+        let holes = union(expansion: 0)
+        context.saveGState()
+        context.setFillColor(NSColor.white.cgColor)
+        context.addPath(union(expansion: style.lineWidth + style.edge * 2).subtracting(holes, using: .winding)); context.fillPath()
+        context.setFillColor(red.cgColor)
+        context.addPath(union(expansion: style.edge + style.lineWidth).subtracting(union(expansion: style.edge), using: .winding)); context.fillPath()
+        context.restoreGState()
+    }
+    private static func drawLeader(_ annotation: Annotation, document: AnnotationDocument, style: AnnotationStyle, context: CGContext) {
+        guard let segment = document.leaderSegment(for: annotation, style: style) else { return }
+        context.saveGState()
+        defer { context.restoreGState() }
+        context.setLineCap(.round)
+        for outer in [true, false] {
+            let color = outer ? NSColor.white.cgColor : red.cgColor
+            context.setStrokeColor(color); context.setFillColor(color)
+            context.setLineWidth(style.lineWidth + (outer ? style.edge * 2 : 0))
+            context.move(to: segment.target); context.addLine(to: segment.labelEdge); context.strokePath()
+            let radius = style.leaderDotDiameter / 2 + (outer ? style.edge : 0)
+            context.fillEllipse(in: CGRect(x: segment.target.x - radius, y: segment.target.y - radius, width: radius * 2, height: radius * 2))
+        }
     }
     private static func drawMosaics(_ original: CGImage, document: AnnotationDocument, context: CGContext, style: AnnotationStyle, full: CGRect) throws {
         let width = original.width, height = original.height
@@ -114,7 +173,10 @@ enum AnnotationRenderer {
         case .text:
             let rect = annotation.rect
             context.setFillColor(UITheme.redFace.cgColor)
-            context.addPath(CGPath(roundedRect: rect, cornerWidth: style.radius, cornerHeight: style.radius, transform: nil)); context.fillPath()
+            let path = CGPath(roundedRect: rect, cornerWidth: style.radius, cornerHeight: style.radius, transform: nil)
+            context.setStrokeColor(NSColor.white.cgColor); context.setLineWidth(style.edge * 2)
+            context.addPath(path); context.drawPath(using: .fillStroke)
+            context.addPath(path); context.fillPath()
             (annotation.text as NSString).draw(at: CGPoint(x: rect.minX + style.horizontalPadding, y: rect.minY + style.verticalPadding),
                 withAttributes: [.font: NSFont.systemFont(ofSize: style.fontSize, weight: .bold), .foregroundColor: NSColor.white])
         case .number:

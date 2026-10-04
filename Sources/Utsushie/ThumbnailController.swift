@@ -181,7 +181,8 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             let data = try await Task.detached(priority: .userInitiated) {
                 try WebPEncoder.encode(image, quality: config.quality, lossless: config.lossless)
             }.value
-            let updated = try AnnotationSave.commit(data: data, artifact: self.artifact, mode: config.clipboard)
+            let updated = try AnnotationSave.commit(data: data, artifact: self.artifact, mode: config.clipboard,
+                                                    imageSize: CGSize(width: image.width, height: image.height))
             self.annotations = document
             self.complete(artifact: updated, image: image, copied: true)
         }

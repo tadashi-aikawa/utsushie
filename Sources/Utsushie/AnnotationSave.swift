@@ -9,10 +9,11 @@ enum AnnotationSaveError: LocalizedError {
 @MainActor
 enum AnnotationSave {
     /// 合成・エンコードが済むまで公開状態に触れない。コピー失敗時は元のバイトへ戻す。
-    static func commit(data: Data, artifact: SharedArtifact, mode: ClipboardMode,
+    static func commit(data: Data, artifact: SharedArtifact, mode: ClipboardMode, imageSize: CGSize? = nil,
                        copy: (SharedArtifact, Data, ClipboardMode) -> Bool = { ClipboardWriter.copy($0, data: $1, mode: $2, to: .general, preservingOnFailure: true) }) throws -> SharedArtifact {
         let original = try Data(contentsOf: artifact.url)
         var updated = artifact; updated.byteCount = data.count
+        if let imageSize { updated.width = Int(imageSize.width); updated.height = Int(imageSize.height) }
         try ArtifactStore.replace(data: data, at: artifact.url)
         guard copy(updated, data, mode) else {
             try ArtifactStore.replace(data: original, at: artifact.url)

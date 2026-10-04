@@ -1,5 +1,19 @@
 import AppKit
+import OSLog
 import UtsushieCore
+
+/// OSのアクティベーションは要求であり、成功を同期的には保証しない。
+/// テストでは実際の前面アプリを変更せず、要求と復帰の条件を確かめる。
+@MainActor
+struct AnnotationApplicationFocus {
+    var isActive: () -> Bool = { NSApp.isActive }
+    var frontmostApplication: () -> NSRunningApplication? = { NSWorkspace.shared.frontmostApplication }
+    var activate: () -> Void = { NSApp.activate() }
+    var restore: (NSRunningApplication) -> Void = { application in
+        NSApp.yieldActivation(to: application)
+        _ = application.activate(options: [])
+    }
+}
 
 @MainActor
 final class AnnotationEditorController: NSObject, NSWindowDelegate {
@@ -8,6 +22,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     let window: AnnotationPanel
     let canvas: AnnotationCanvas
     private let hint = NSTextField(labelWithString: "")
+    let zoomLabel = NSTextField(labelWithString: "100%")
     private let undoButton = AnnotationButton()
     private let redoButton = AnnotationButton()
     private var toolButtons: [AnnotationTool: NSButton] = [:]
@@ -17,15 +32,18 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     private var saving = false
     private var closing = false
     private let initial: AnnotationDocument
+    private let applicationFocus: AnnotationApplicationFocus
+    private var previousApplication: NSRunningApplication?
     var onComplete: ((CGImage, AnnotationDocument) async throws -> Void)?
     var onClose: (() -> Void)?
 
-    init(image: CGImage, document: AnnotationDocument, screen: NSScreen?) {
+    init(image: CGImage, document: AnnotationDocument, screen: NSScreen?, applicationFocus: AnnotationApplicationFocus = AnnotationApplicationFocus()) {
         initial = document
+        self.applicationFocus = applicationFocus
         canvas = AnnotationCanvas(image: image, document: document, tool: Self.lastTool)
         let visible = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-        let size = CGSize(width: min(max(CGFloat(image.width) + 80, 1180), visible.width - 40),
-                          height: min(max(CGFloat(image.height) + 132, 420), visible.height - 80))
+        let size = CGSize(width: min(max(CGFloat(image.width) + 240, 1180), visible.width - 40),
+                          height: min(max(CGFloat(image.height) + 292, 420), visible.height - 80))
         window = AnnotationPanel(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled, .closable, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         window.title = "UTSUSHIE — 注釈"
@@ -35,7 +53,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         window.hidesOnDeactivate = false
         window.level = .floating
         window.acceptsMouseMovedEvents = true
-        window.minSize = CGSize(width: min(1000, size.width), height: 300)
+        window.minSize = CGSize(width: min(1000, size.width), height: 360)
         window.delegate = self
         window.editor = self
         let root = AnnotationEditorLayout(frame: CGRect(origin: .zero, size: size))
@@ -54,6 +72,10 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         configure(redoButton, title: "↷", action: #selector(redoAnnotation))
         undoButton.toolTip = "取り消し ⌘Z"; redoButton.toolTip = "やり直し ⇧⌘Z"
         bar.addArrangedSubview(undoButton); bar.addArrangedSubview(redoButton)
+        zoomLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        zoomLabel.textColor = UITheme.text
+        zoomLabel.toolTip = "⌘+ / ⌘- で拡大縮小 ・ ⌘0で全体 ・ ⌘1で100%"
+        bar.addArrangedSubview(zoomLabel)
         hint.font = .systemFont(ofSize: 12); hint.textColor = .secondaryLabelColor
         hint.alignment = .center; hint.lineBreakMode = .byTruncatingTail
         hint.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -66,7 +88,8 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         finishButton.contentTintColor = .white
         bar.addArrangedSubview(discardButton); bar.addArrangedSubview(finishButton)
         root.bar = bar; root.canvas = canvas
-        root.addSubview(bar); root.addSubview(canvas)
+        root.addSubview(canvas)
+        root.addSubview(bar, positioned: .above, relativeTo: canvas)
         window.contentView = root
         window.setFrameOrigin(CGPoint(x: visible.midX - window.frame.width / 2, y: visible.midY - window.frame.height / 2))
         canvas.onChange = { [weak self] in self?.discardArmed = false; self?.update() }
@@ -89,10 +112,29 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         button.title = title; button.target = self; button.action = action; button.bezelStyle = .rounded
     }
     func show() {
-        // 非アクティブカードからでも、アプリのアクティベーションを頼まず入力を受ける。
+        if let application = applicationFocus.frontmostApplication(),
+           application.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            previousApplication = application
+        }
+        requestActivation(reason: "editor open")
+        // アクティベーション要求が断られても、キーとクリックの従来の経路は保つ。
         window.orderFrontRegardless(); window.makeKey(); window.makeFirstResponder(canvas)
+        AnnotationNavigationDiagnostics.observeFocus("editor shown", isActive: applicationFocus.isActive(),
+                                                     frontmostApplication: applicationFocus.frontmostApplication())
+    }
+    func requestActivation(reason: String) {
+        let front = applicationFocus.frontmostApplication()
+        let active = applicationFocus.isActive()
+        AnnotationNavigationDiagnostics.observeFocus(reason, isActive: active, frontmostApplication: front)
+        // isActiveだけで再要求を止めず、前面のPIDが自分になるまではユーザー操作のたびに要求する。
+        guard !closing, front?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+        AnnotationNavigationDiagnostics.observeFocus("activation before: \(reason)", isActive: active, frontmostApplication: front)
+        applicationFocus.activate()
+        AnnotationNavigationDiagnostics.observeFocus("activation after: \(reason)", isActive: applicationFocus.isActive(),
+                                                     frontmostApplication: applicationFocus.frontmostApplication())
     }
     private func update() {
+        zoomLabel.stringValue = canvas.zoomPercentage
         for (tool, button) in toolButtons {
             button.state = tool == canvas.tool ? .on : .off
             button.bezelColor = tool == canvas.tool ? UITheme.indigo : nil
@@ -105,12 +147,12 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         let instruction: String
         switch canvas.tool {
         case .selection: instruction = "注釈をクリックで選択"
-        case .number: instruction = "クリックで \(canvas.document.nextNumber) を置く"
-        case .text: instruction = "クリックして文字を入力"
+        case .number: instruction = "クリックで番号 \(canvas.document.nextNumber) ・ ドラッグで指す点から引き出す"
+        case .text: instruction = "クリックで文字 ・ ドラッグで指す点から引き出す"
         case .arrow: instruction = "始点から終点へドラッグ"
         default: instruction = "ドラッグで\(canvas.tool.label)を置く"
         }
-        hint.stringValue = instruction + " ・ 注釈はドラッグで移動"
+        hint.stringValue = instruction
     }
     @objc private func selectTool(_ sender: NSButton) {
         guard !saving, let tool = toolButtons.first(where: { $0.value === sender })?.key else { return }
@@ -124,6 +166,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if flags == .command, event.keyCode == 13 { discard(); return true } // W
         if flags == .command, event.keyCode == 36 || event.keyCode == 76 { finish(); return true }
+        if canvas.handleZoomKey(event) { return true }
         if canvas.isEditingText { return false }
         if flags == .command, event.keyCode == 8 { finish(); return true }
         if flags == .command, event.keyCode == 6 { undoAnnotation(); return true }
@@ -164,15 +207,51 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         discard(); return false
     }
     func windowWillClose(_ notification: Notification) {
+        let application = previousApplication
+        previousApplication = nil
+        let front = applicationFocus.frontmostApplication()
+        AnnotationNavigationDiagnostics.observeFocus("editor close", isActive: applicationFocus.isActive(), frontmostApplication: front)
+        if front?.processIdentifier == ProcessInfo.processInfo.processIdentifier, let application, !application.isTerminated,
+           application.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            applicationFocus.restore(application)
+        }
         onClose?(); onClose = nil; onComplete = nil
     }
+    func windowDidResignKey(_ notification: Notification) { canvas.releaseSpace() }
 }
 
 @MainActor
 final class AnnotationPanel: NSPanel {
     weak var editor: AnnotationEditorController?
+    private let navigationLog = Logger(subsystem: "com.tadashi-aikawa.utsushie", category: "AnnotationNavigation")
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            editor?.requestActivation(reason: "panel mouseDown")
+        case .scrollWheel:
+            editor?.requestActivation(reason: "panel scrollWheel")
+        default: break
+        }
+        if event.type == .magnify, let canvas = editor?.canvas {
+            let location = canvas.convert(event.locationInWindow, from: nil)
+            // 非アクティブパネルでも、first responderによらずキャンバス内のピンチを1回だけ処理する。
+            // 文字入力ビューの上でも同じ経路にし、ツールバー・シートのイベントは横取りしない。
+            let inCanvas = canvas.bounds.contains(location) && attachedSheet == nil
+            let hitPoint = canvas.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
+            let target = inCanvas ? canvas.hitTest(hitPoint) : nil
+            let targetName = target.map { String(describing: type(of: $0)) } ?? "outsideCanvas"
+            let before = canvas.displayScale
+            if inCanvas { canvas.magnify(with: event) }
+            let front = NSWorkspace.shared.frontmostApplication
+            let frontBundle = front?.bundleIdentifier ?? "nil"
+            let frontPID = front?.processIdentifier ?? -1
+            navigationLog.debug("magnify received: active=\(NSApp.isActive) frontmost=\(frontBundle, privacy: .public) frontmostPID=\(frontPID) key=\(self.isKeyWindow) target=\(targetName, privacy: .public) delta=\(event.magnification) scale=\(before)->\(canvas.displayScale)")
+            if inCanvas { return }
+        }
+        super.sendEvent(event)
+    }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if editor?.handleEquivalent(event) == true { return true }
         return super.performKeyEquivalent(with: event)
@@ -213,20 +292,36 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private var cursorPoint: CGPoint?
     private var textInput: AnnotationTextView?
     private var textAnnotation: Annotation?
+    private var textAnchor: CGPoint?
+    private var frozenImageRect: CGRect?
+    private var manualViewport: AnnotationViewport?
+    private var spacePressed = false
+    private var scrollZooming = false
     private enum Gesture {
         case create(Annotation)
+        case label(Annotation)
         case move(Annotation, CGPoint)
         case resize(Annotation, AnnotationResizeHandle)
+        case pan(AnnotationViewport, CGPoint)
     }
-    var document: AnnotationDocument { preview ?? history.document }
+    var document: AnnotationDocument {
+        var result = preview ?? history.document
+        if let textAnnotation { result.replace(textAnnotation) }
+        return result
+    }
     var isEditingText: Bool { textInput != nil }
-    private var style: AnnotationStyle { AnnotationStyle(imageSize: CGSize(width: original.width, height: original.height)) }
-    var imageRect: CGRect {
-        let factor = min(1, max(1, bounds.width - 80) / CGFloat(original.width), max(1, bounds.height - 80) / CGFloat(original.height))
-        let size = CGSize(width: CGFloat(original.width) * factor, height: CGFloat(original.height) * factor)
-        return CGRect(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2, width: size.width, height: size.height)
+    private var imageSize: CGSize { CGSize(width: original.width, height: original.height) }
+    private var style: AnnotationStyle { AnnotationStyle(imageSize: imageSize) }
+    var exportLayout: AnnotationExportLayout { document.exportLayout(imageSize: imageSize) }
+    private var viewport: AnnotationViewport {
+        if let frozenImageRect { return AnnotationViewport(scale: frozenImageRect.width / imageSize.width, origin: frozenImageRect.origin) }
+        return manualViewport ?? AnnotationViewport.fit(content: exportLayout.bounds, in: bounds)
     }
-    var displayScale: Double { imageRect.width / CGFloat(original.width) }
+    var imageRect: CGRect {
+        CGRect(origin: viewport.origin, size: CGSize(width: imageSize.width * viewport.scale, height: imageSize.height * viewport.scale))
+    }
+    var displayScale: Double { viewport.scale }
+    var zoomPercentage: String { viewport.percentage }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override var needsPanelToBecomeKey: Bool { true }
@@ -234,17 +329,17 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     init(image: CGImage, document: AnnotationDocument, tool: AnnotationTool) {
         original = image; history = AnnotationHistory(document); self.tool = tool
         super.init(frame: .zero)
+        // macOS 14以降のNSViewは既定でクリップしない。文字入力の子ビューも領域内に留める。
+        clipsToBounds = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func layout() { super.layout(); layoutText(); needsDisplay = true }
+    override func layout() { super.layout(); layoutText(); needsDisplay = true; onChange?() }
     override func updateTrackingAreas() {
         super.updateTrackingAreas(); trackingAreas.forEach(removeTrackingArea)
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeInKeyWindow, .inVisibleRect], owner: self))
     }
-    private func point(_ event: NSEvent, clamped: Bool = true) -> CGPoint {
-        let p = convert(event.locationInWindow, from: nil), r = imageRect
-        let x = (p.x - r.minX) / displayScale, y = (p.y - r.minY) / displayScale
-        return clamped ? CGPoint(x: max(0, min(CGFloat(original.width), x)), y: max(0, min(CGFloat(original.height), y))) : CGPoint(x: x, y: y)
+    private func point(_ event: NSEvent) -> CGPoint {
+        viewport.imagePoint(at: convert(event.locationInWindow, from: nil))
     }
     private func viewPoint(_ p: CGPoint) -> CGPoint {
         CGPoint(x: imageRect.minX + p.x * displayScale, y: imageRect.minY + p.y * displayScale)
@@ -253,8 +348,66 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         CGRect(origin: viewPoint(r.origin), size: CGSize(width: r.width * displayScale, height: r.height * displayScale))
     }
     private func changed() { updateCursor(); needsDisplay = true; onChange?() }
-    func undoAnnotation() { history.undo(); preview = nil; selection = nil; changed() }
-    func redoAnnotation() { history.redo(); preview = nil; selection = nil; changed() }
+    private func viewChanged(anchor: CGPoint? = nil) {
+        if let anchor { cursorPoint = viewport.imagePoint(at: anchor) }
+        else if let window { cursorPoint = viewport.imagePoint(at: convert(window.mouseLocationOutsideOfEventStream, from: nil)) }
+        layoutText(); changed()
+    }
+    func zoom(to scale: Double, around anchor: CGPoint) {
+        guard isEnabled, window?.attachedSheet == nil, gesture == nil else { return }
+        manualViewport = viewport.zoomed(to: scale, around: anchor)
+        viewChanged(anchor: anchor)
+    }
+    func pan(by delta: CGPoint) {
+        guard isEnabled, window?.attachedSheet == nil, gesture == nil else { return }
+        guard delta != .zero else { return }
+        manualViewport = viewport.translated(by: delta)
+        viewChanged()
+    }
+    func fitAll() {
+        guard isEnabled, window?.attachedSheet == nil, gesture == nil else { return }
+        manualViewport = nil; viewChanged()
+    }
+    func handleZoomKey(_ event: NSEvent) -> Bool {
+        guard isEnabled, window?.attachedSheet == nil else { return false }
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard flags == .command || flags == [.command, .shift] else { return false }
+        let anchor = CGPoint(x: bounds.midX, y: bounds.midY)
+        switch event.charactersIgnoringModifiers {
+        case "+", "=": zoom(to: displayScale * 1.25, around: anchor)
+        case "-": zoom(to: displayScale / 1.25, around: anchor)
+        case "0": fitAll()
+        case "1": zoom(to: 1, around: anchor)
+        default: return false
+        }
+        return true
+    }
+    override func magnify(with event: NSEvent) {
+        guard event.magnification != 0 else { return }
+        zoom(to: max(0.01, displayScale + event.magnification), around: convert(event.locationInWindow, from: nil))
+    }
+    override func scrollWheel(with event: NSEvent) {
+        let command = event.modifierFlags.contains(.command)
+        if event.phase.contains(.began) { scrollZooming = command }
+        if !event.momentumPhase.isEmpty, scrollZooming { return }
+        if command {
+            scrollZooming = true
+            let amount = event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 1 : 10)
+            guard amount != 0 else { return }
+            zoom(to: displayScale * pow(1.01, amount), around: convert(event.locationInWindow, from: nil))
+        } else {
+            let factor = event.hasPreciseScrollingDeltas ? 1.0 : 20.0
+            pan(by: CGPoint(x: event.scrollingDeltaX * factor, y: event.scrollingDeltaY * factor))
+        }
+    }
+    func releaseSpace() {
+        spacePressed = false
+        if case .pan = gesture { cancelGesture() }
+        updateCursor()
+    }
+    private func cancelGesture() { gesture = nil; preview = nil; frozenImageRect = nil }
+    func undoAnnotation() { cancelGesture(); history.undo(); selection = nil; changed() }
+    func redoAnnotation() { cancelGesture(); history.redo(); selection = nil; changed() }
     func hasChanges(comparedTo initial: AnnotationDocument) -> Bool {
         if history.document != initial { return true }
         guard let textInput, let textAnnotation else { return false }
@@ -262,7 +415,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     }
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        cursorPoint = imageRect.contains(p) ? point(event) : nil
+        cursorPoint = bounds.contains(p) ? point(event) : nil
         updateCursor(); needsDisplay = true
     }
     override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
@@ -270,12 +423,15 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     override func mouseExited(with event: NSEvent) { cursorPoint = nil; if window?.isKeyWindow == true { NSCursor.arrow.set() }; needsDisplay = true }
     private func updateCursor() {
         guard window?.isKeyWindow == true, window?.attachedSheet == nil, !isEditingText else { return }
+        if case .pan = gesture { NSCursor.closedHand.set(); return }
+        if spacePressed { NSCursor.openHand.set(); return }
         guard let cursorPoint else { return }
         let interaction: AnnotationInteraction
         switch gesture {
-        case .create: interaction = .create
+        case .create, .label: interaction = .create
         case .move(let annotation, _): interaction = .move(annotation.id)
         case .resize(let annotation, let handle): interaction = .resize(annotation.id, handle)
+        case .pan: return
         case nil: interaction = document.interaction(at: cursorPoint, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
         }
         let cursor: NSCursor
@@ -294,56 +450,99 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
         commitText(); window?.makeFirstResponder(self)
-        guard imageRect.contains(convert(event.locationInWindow, from: nil)) else { selection = nil; changed(); return }
+        if spacePressed {
+            gesture = .pan(viewport, convert(event.locationInWindow, from: nil)); updateCursor(); return
+        }
         let p = point(event)
         cursorPoint = p
         let interaction = document.interaction(at: p, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
         switch interaction {
         case .resize(let id, let handle):
             guard let annotation = document.annotations.first(where: { $0.id == id }) else { return }
-            gesture = .resize(annotation, handle); changed(); return
+            selection = id; frozenImageRect = imageRect; gesture = .resize(annotation, handle); changed(); return
         case .move(let id):
             guard let annotation = document.annotations.first(where: { $0.id == id }) else { return }
             selection = id
             if event.clickCount == 2, annotation.tool == .text { beginText(annotation); return }
-            gesture = .move(annotation, p); changed(); return
+            frozenImageRect = imageRect; gesture = .move(annotation, p); changed(); return
         case .none: selection = nil; changed(); return
         case .create: break
         }
         selection = nil
+        guard tool.allowsMargin || CGRect(origin: .zero, size: imageSize).contains(p) else { changed(); return }
         let annotation = Annotation(tool: tool, start: p)
-        if tool == .number {
-            var next = document; next.replace(annotation); history.commit(next); selection = annotation.id; changed()
-        } else if tool == .text { beginText(annotation) }
-        else { gesture = .create(annotation) }
+        frozenImageRect = imageRect
+        gesture = [.text, .number].contains(tool) ? .label(annotation) : .create(annotation)
+        changed()
+    }
+    private func placed(_ annotation: Annotation) -> Annotation {
+        AnnotationGeometry.placed(annotation, bounds: history.document.bounds(of: annotation, style: style), imageSize: imageSize)
     }
     override func mouseDragged(with event: NSEvent) {
         guard isEnabled, let gesture else { return }
+        if case .pan(let initial, let anchor) = gesture {
+            let p = convert(event.locationInWindow, from: nil)
+            manualViewport = initial.translated(by: CGPoint(x: p.x - anchor.x, y: p.y - anchor.y))
+            viewChanged(anchor: p); return
+        }
         let p = point(event)
         cursorPoint = p
         var annotation: Annotation
         switch gesture {
-        case .create(let initial): annotation = initial; annotation.end = p
+        case .label(let initial):
+            let anchor = initial.start
+            guard AnnotationGeometry.isValidDrag(tool: initial.tool, from: anchor, to: p, displayScale: displayScale) else { preview = nil; changed(); return }
+            if initial.tool == .number {
+                annotation = Annotation(id: initial.id, tool: .number, start: p, leaderTarget: anchor)
+                break
+            }
+            let size = AnnotationRenderer.textSize("入力", style: style)
+            let rect = CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2, width: size.width, height: size.height)
+            annotation = Annotation(id: initial.id, tool: .text, start: rect.origin,
+                                    end: CGPoint(x: rect.maxX, y: rect.maxY), text: "入力", leaderTarget: anchor)
+        case .create(let initial):
+            annotation = initial
+            annotation.end = initial.tool.allowsMargin ? p : AnnotationGeometry.clamped(p, to: imageSize)
         case .move(let initial, let anchor):
-            let r = history.document.bounds(of: initial, style: style)
-            let delta = CGPoint(x: max(-r.minX, min(CGFloat(original.width) - r.maxX, p.x - anchor.x)),
-                                y: max(-r.minY, min(CGFloat(original.height) - r.maxY, p.y - anchor.y)))
+            let delta = CGPoint(x: p.x - anchor.x, y: p.y - anchor.y)
             annotation = initial.translated(by: delta)
-        case .resize(let initial, let handle): annotation = AnnotationGeometry.resized(initial, handle: handle, to: p)
+        case .resize(let initial, let handle):
+            let endpoint = handle == .leaderTarget || !initial.tool.allowsMargin ? AnnotationGeometry.clamped(p, to: imageSize) : p
+            annotation = AnnotationGeometry.resized(initial, handle: handle, to: endpoint)
+        case .pan: return
         }
+        annotation = placed(annotation)
         var next = history.document; next.replace(annotation); preview = next
         selection = annotation.id; changed()
     }
     override func mouseUp(with event: NSEvent) {
         guard let gesture else { return }
-        defer { self.gesture = nil; preview = nil; changed() }
+        if case .pan = gesture { cancelGesture(); viewChanged(); return }
+        if case .label(let initial) = gesture {
+            let anchor = initial.start
+            let p = point(event)
+            let leader = AnnotationGeometry.isValidDrag(tool: initial.tool, from: anchor, to: p, displayScale: displayScale)
+            if initial.tool == .number {
+                let annotation = placed(Annotation(id: initial.id, tool: .number, start: leader ? p : anchor, leaderTarget: leader ? anchor : nil))
+                var next = history.document; next.replace(annotation); history.commit(next); selection = annotation.id
+                cancelGesture(); changed(); return
+            }
+            let size = AnnotationRenderer.textSize("入力", style: style)
+            let origin = leader ? CGPoint(x: p.x - size.width / 2, y: p.y - size.height / 2) : anchor
+            let annotation = placed(Annotation(id: initial.id, tool: .text, start: origin, end: CGPoint(x: origin.x + size.width, y: origin.y + size.height), leaderTarget: leader ? anchor : nil))
+            cancelGesture()
+            beginText(annotation)
+            return
+        }
+        defer { cancelGesture(); changed(); layoutText() }
         guard let next = preview else { return }
         let annotation: Annotation?
         switch gesture {
         case .create(let initial), .resize(let initial, _): annotation = next.annotations.first { $0.id == initial.id }
-        case .move: annotation = nil
+        case .move, .label, .pan: annotation = nil
         }
-        if let annotation, !AnnotationGeometry.isValidDrag(tool: annotation.tool, from: annotation.start, to: annotation.end, displayScale: displayScale) {
+        if let annotation, ![.text, .number].contains(annotation.tool),
+           !AnnotationGeometry.isValidDrag(tool: annotation.tool, from: annotation.start, to: annotation.end, displayScale: displayScale) {
             if case .create = gesture { selection = nil }
             return
         }
@@ -351,7 +550,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     }
     override func keyDown(with event: NSEvent) {
         guard isEnabled, !isEditingText, window?.attachedSheet == nil else { return }
+        if handleZoomKey(event) { return }
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if flags.isEmpty, event.keyCode == 49 { spacePressed = true; updateCursor(); return }
         if flags.isEmpty, event.keyCode == 12 {
             if !event.isARepeat { onDiscard?() }
             return
@@ -362,6 +563,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         }
         interpretKeyEvents([event])
     }
+    override func keyUp(with event: NSEvent) {
+        if event.keyCode == 49 { releaseSpace(); return }
+        super.keyUp(with: event)
+    }
     private func rememberTool() {
         // ボタンとキーの持ち替えを同じ経路へ通す。
         onToolChange?(tool)
@@ -371,7 +576,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     func escape() {
         guard isEnabled else { return }
         if isEditingText { commitText(); return }
-        gesture = nil; preview = nil
+        cancelGesture()
         if tool != .selection { tool = .selection; rememberTool(); changed() }
         else if selection != nil { selection = nil; changed() }
     }
@@ -379,13 +584,18 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     override func deleteForward(_ sender: Any?) { deleteSelected() }
     private func deleteSelected() {
         guard let selection else { return }
+        cancelGesture()
         var next = history.document; next.remove(selection); history.commit(next); self.selection = nil; changed()
     }
     private func beginText(_ annotation: Annotation) {
+        spacePressed = false
         textAnnotation = annotation; selection = annotation.id
+        textAnchor = annotation.leaderTarget == nil ? annotation.start : CGPoint(x: annotation.rect.midX, y: annotation.rect.midY)
         let input = AnnotationTextView(frame: .zero)
         input.isRichText = false; input.allowsUndo = true; input.drawsBackground = true
         input.backgroundColor = UITheme.redFace; input.textColor = .white
+        input.wantsLayer = true; input.layer?.masksToBounds = true
+        input.navigationCanvas = self
         input.textContainerInset = CGSize(width: style.horizontalPadding * displayScale, height: style.verticalPadding * displayScale)
         input.textContainer?.lineFragmentPadding = 0
         input.isHorizontallyResizable = false; input.isVerticallyResizable = false
@@ -399,38 +609,49 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         changed()
     }
     private func layoutText() {
-        guard let input = textInput, let annotation = textAnnotation else { return }
+        guard let input = textInput, var annotation = textAnnotation, let anchor = textAnchor else { return }
+        let measured = AnnotationRenderer.textSize(input.string.isEmpty ? "入力" : input.string, style: style)
+        let size = CGSize(width: max(input.string.isEmpty ? 100 : 0, measured.width), height: measured.height)
+        annotation.start = annotation.leaderTarget == nil ? anchor : CGPoint(x: anchor.x - size.width / 2, y: anchor.y - size.height / 2)
+        annotation.end = CGPoint(x: annotation.start.x + size.width, y: annotation.start.y + size.height)
+        annotation = placed(annotation)
+        textAnnotation = annotation
         let font = NSFont.systemFont(ofSize: style.fontSize * displayScale, weight: .bold)
         if input.font != font { input.font = font }
-        let size = AnnotationRenderer.textSize(input.string.isEmpty ? "入力" : input.string, style: style)
-        let rect = CGRect(origin: annotation.start, size: CGSize(width: max(100 / displayScale, size.width + 4), height: size.height + 4))
-        input.frame = viewRect(rect)
+        input.textContainerInset = CGSize(width: style.horizontalPadding * displayScale, height: style.verticalPadding * displayScale)
+        input.layer?.cornerRadius = style.radius * displayScale
+        input.frame = viewRect(annotation.rect)
         input.textContainer?.containerSize = CGSize(width: input.bounds.width - input.textContainerInset.width * 2, height: CGFloat.greatestFiniteMagnitude)
     }
     func textDidChange(_ notification: Notification) { layoutText(); changed() }
     func commitText() {
-        guard let input = textInput, var annotation = textAnnotation else { return }
+        guard let input = textInput, textAnnotation != nil else { return }
         input.unmarkText()
+        layoutText()
+        guard var annotation = textAnnotation else { return }
         annotation.text = input.string
         var next = history.document
         if annotation.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { next.remove(annotation.id); selection = nil }
         else {
-            let size = AnnotationRenderer.textSize(annotation.text, style: style)
-            annotation.end = CGPoint(x: annotation.start.x + size.width, y: annotation.start.y + size.height)
             next.replace(annotation)
         }
-        input.removeFromSuperview(); textInput = nil; textAnnotation = nil
+        input.removeFromSuperview(); textInput = nil; textAnnotation = nil; textAnchor = nil
         history.commit(next); window?.makeFirstResponder(self); changed()
     }
     override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: bounds).addClip()
         var drawnDocument = document
-        if let textAnnotation { drawnDocument.remove(textAnnotation.id) }
+        if var textAnnotation { textAnnotation.text = ""; drawnDocument.replace(textAnnotation) }
         if renderedDocument != drawnDocument {
             composed = try? AnnotationRenderer.compose(original, document: drawnDocument)
             renderedDocument = drawnDocument
         }
-        let image = NSImage(cgImage: composed ?? original, size: CGSize(width: original.width, height: original.height))
-        image.draw(in: imageRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        let raster = composed ?? original
+        let image = NSImage(cgImage: raster, size: CGSize(width: raster.width, height: raster.height))
+        let outputRect = viewRect(composed == nil ? CGRect(origin: .zero, size: imageSize) : exportLayout.bounds)
+        image.draw(in: outputRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         if let selected = document.annotations.first(where: { $0.id == selection }), !isEditingText {
             let rect = viewRect(document.bounds(of: selected, style: style))
             NSColor.white.withAlphaComponent(0.8).setStroke()
@@ -442,6 +663,14 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
                 AnnotationRenderer.red.setStroke(); NSBezierPath(ovalIn: r).stroke()
             }
         }
+        if gesture != nil, !isPanning {
+            let summary = exportLayout.summary
+            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium), .foregroundColor: UITheme.text]
+            let size = (summary as NSString).size(withAttributes: attributes)
+            let badge = CGRect(x: max(12, bounds.maxX - size.width - 32), y: bounds.maxY - 40, width: size.width + 20, height: 28)
+            UIDrawing.fill(badge, color: UITheme.ink, radius: 6)
+            (summary as NSString).draw(at: CGPoint(x: badge.minX + 10, y: badge.minY + 6), withAttributes: attributes)
+        }
         if tool == .number, let cursorPoint, !isEditingText, gesture == nil {
             let string = String(document.nextNumber) as NSString
             let r = viewRect(style.numberRect(at: cursorPoint, number: document.nextNumber))
@@ -452,11 +681,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             string.draw(at: CGPoint(x: r.midX - size.width / 2, y: r.midY - size.height / 2), withAttributes: attributes)
         }
     }
+    private var isPanning: Bool { if case .pan = gesture { return true }; return false }
 }
 
 /// IMEのEnterはinput contextに任せ、未変換文字がないEnterだけ注釈として確定する。
 @MainActor
 final class AnnotationTextView: NSTextView {
+    weak var navigationCanvas: AnnotationCanvas?
     var onCommit: (() -> Void)?
     var onEscape: (() -> Void)?
     private var markedAtKeyDown = false
@@ -465,6 +696,12 @@ final class AnnotationTextView: NSTextView {
     override var undoManager: UndoManager? { textUndoManager }
     override var needsPanelToBecomeKey: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func magnify(with event: NSEvent) { navigationCanvas?.magnify(with: event) }
+    override func scrollWheel(with event: NSEvent) { navigationCanvas?.scrollWheel(with: event) }
+    override func keyUp(with event: NSEvent) {
+        if event.keyCode == 49 { navigationCanvas?.releaseSpace() }
+        super.keyUp(with: event)
+    }
     override func keyDown(with event: NSEvent) {
         markedAtKeyDown = hasMarkedText()
         super.keyDown(with: event)

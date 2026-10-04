@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let overlay = OverlayController()
     private let capture = CaptureService()
     private let thumbnails = ThumbnailController()
+    private let annotationNavigationDiagnostics = AnnotationNavigationDiagnostics()
     private let recordingBorder = RecordingBorder()
     private var recordingState = RecordingState()
     private var activeRecording: RecordingService?
@@ -43,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        annotationNavigationDiagnostics.start()
         lastArea = LastArea.load(from: lastURL)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.imagePosition = .imageOnly
@@ -79,7 +81,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         overlay.onAccessibilityNeeded = { [weak self] in self?.openPrivacy("Privacy_Accessibility") }
     }
-    func applicationWillTerminate(_ notification: Notification) { hotkey.stop(); overlay.close(); recordingBorder.close(); recordingTimer?.invalidate() }
+    func applicationWillTerminate(_ notification: Notification) {
+        annotationNavigationDiagnostics.stop()
+        hotkey.stop(); overlay.close(); recordingBorder.close(); recordingTimer?.invalidate()
+    }
     func menuWillOpen(_ menu: NSMenu) {
         if recordingState.phase == .idle { reloadConfig() }
         shootItem.isEnabled = recordingState.phase == .recording || !busy && recordingState.phase == .idle
