@@ -16,10 +16,10 @@ public struct SelectionGesture: Sendable {
     public private(set) var lastPreview: CGRect?
 
     public init() {}
-    public mutating func begin(at point: CGPoint, last: CGRect?) {
+    public mutating func begin(at point: CGPoint, last: CGRect?, movingLast: Bool = false) {
         cancel()
         start = point
-        originalLast = last.flatMap { $0.contains(point) ? $0 : nil }
+        originalLast = movingLast ? last.flatMap { $0.contains(point) ? $0 : nil } : nil
     }
     public mutating func update(to point: CGPoint) {
         guard let start else { return }

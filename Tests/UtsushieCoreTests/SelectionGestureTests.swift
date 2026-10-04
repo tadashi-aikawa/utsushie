@@ -42,7 +42,7 @@ func smallMovementCancelsAreaCapture(_ delta: CGPoint) {
 @Test func draggingPreviousAreaCommitsPositionOnlyOnRelease() {
     var state = CaptureState()
     let last = CGRect(x: 100, y: 100, width: 400, height: 300)
-    _ = state.pointerDown(at: CGPoint(x: 150, y: 150), last: last)
+    _ = state.pointerDown(at: CGPoint(x: 150, y: 150), last: last, movingLast: true)
     state.pointerDragged(to: CGPoint(x: 160, y: 170))
     let moved = last.offsetBy(dx: 10, dy: 20)
     #expect(state.gesture.lastPreview == moved)
@@ -54,7 +54,7 @@ func smallMovementCancelsAreaCapture(_ delta: CGPoint) {
 func escapeDuringDragPreventsLaterMouseUp(_ movingLast: Bool) {
     var state = CaptureState()
     let last = movingLast ? CGRect(x: 100, y: 100, width: 400, height: 300) : nil
-    _ = state.pointerDown(at: CGPoint(x: 150, y: 150), last: last)
+    _ = state.pointerDown(at: CGPoint(x: 150, y: 150), last: last, movingLast: movingLast)
     state.pointerDragged(to: CGPoint(x: 170, y: 190))
     #expect(state.key(53, hasLast: movingLast) == .cancel)
     #expect(state.gesture.areaPreview == nil)
@@ -77,4 +77,22 @@ func escapeDuringDragPreventsLaterMouseUp(_ movingLast: Bool) {
     #expect(state.pointerUp(at: .zero) == .cancel)
     _ = state.pointerDown(at: .zero, last: nil)
     #expect(state.pointerUp(at: CGPoint(x: 10, y: 10)) == .captureArea(CGRect(x: 0, y: 0, width: 10, height: 10)))
+}
+
+@Test(arguments: [false, true], [false, true])
+func previousAreaMovesOnlyWithOptionForBothOutputs(_ video: Bool, _ option: Bool) {
+    var state = CaptureState()
+    if video { _ = state.key(48, hasLast: true) }
+    let last = CGRect(x: 100, y: 100, width: 400, height: 300)
+    _ = state.pointerDown(at: CGPoint(x: 150, y: 150), last: last, movingLast: option)
+    state.pointerDragged(to: CGPoint(x: 170, y: 190))
+    if option {
+        #expect(state.gesture.areaPreview == nil)
+        #expect(state.pointerUp(at: CGPoint(x: 170, y: 190)) == .moveLast(last.offsetBy(dx: 20, dy: 40)))
+    } else {
+        #expect(state.gesture.lastPreview == nil)
+        #expect(state.pointerUp(at: CGPoint(x: 170, y: 190)) == .captureArea(CGRect(x: 150, y: 150, width: 20, height: 40)))
+    }
+    _ = state.pointerDown(at: .zero, last: last, movingLast: option)
+    #expect(state.pointerUp(at: CGPoint(x: 20, y: 40)) == .captureArea(CGRect(x: 0, y: 0, width: 20, height: 40)))
 }

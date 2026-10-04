@@ -143,9 +143,9 @@ final class OverlayController {
             self.contentTask = nil; self.windowContent = content; self.redraw()
         }
     }
-    func mouseDown() {
+    func mouseDown(movingLast: Bool = false) {
         guard isVisible else { return }
-        performPointer(state.pointerDown(at: NSEvent.mouseLocation, last: last))
+        performPointer(state.pointerDown(at: NSEvent.mouseLocation, last: last, movingLast: movingLast))
     }
     func mouseDragged() {
         guard isVisible else { return }
@@ -220,7 +220,7 @@ final class OverlayView: NSView {
     }
     override func cursorUpdate(with event: NSEvent) { controller?.updateCursor() }
     override func mouseEntered(with event: NSEvent) { controller?.mouseMoved() }
-    override func mouseDown(with event: NSEvent) { controller?.mouseDown() }
+    override func mouseDown(with event: NSEvent) { controller?.mouseDown(movingLast: event.modifierFlags.contains(.option)) }
     override func mouseDragged(with event: NSEvent) { controller?.mouseDragged() }
     override func mouseUp(with event: NSEvent) { controller?.mouseUp() }
     override func mouseMoved(with event: NSEvent) { controller?.mouseMoved() }

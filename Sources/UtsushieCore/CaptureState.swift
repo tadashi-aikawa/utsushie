@@ -34,12 +34,12 @@ public struct CaptureState: Sendable {
     }
     public mutating func fallbackToArea() { target = .area }
     public mutating func selectArea() { target = .area }
-    public mutating func pointerDown(at point: CGPoint, last: CGRect?) -> PointerAction {
+    public mutating func pointerDown(at point: CGPoint, last: CGRect?, movingLast: Bool = false) -> PointerAction {
         gesture.cancel()
         // Wのクリック撮影は範囲選択のクリック取り消しから除外する。
         if target == .window { return .captureWindow }
         selectArea()
-        gesture.begin(at: point, last: last)
+        gesture.begin(at: point, last: last, movingLast: movingLast)
         return .none
     }
     public mutating func pointerDragged(to point: CGPoint) { gesture.update(to: point) }
