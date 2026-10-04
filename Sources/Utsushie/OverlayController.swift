@@ -22,6 +22,8 @@ final class OverlayController {
     private(set) var message = ""
     private var panels: [CapturePanel] = []
     private var keyMonitor: Any?
+    private var registeredCursor: CaptureCursor?
+    var cursor: NSCursor { state.cursor == .crosshair ? .crosshair : .arrow }
     var onCapture: ((CaptureRequest, Bool, CaptureOutput) -> Void)?
     var onMoveLast: ((CGRect) -> Void)?
     var onCancel: (() -> Void)?
@@ -59,7 +61,7 @@ final class OverlayController {
             if !event.isARepeat { self.key(event.keyCode) }
             return nil
         }
-        NSCursor.crosshair.set()
+        redraw()
     }
     func close() {
         contentTask?.cancel(); contentTask = nil; windowContent = nil
@@ -67,6 +69,7 @@ final class OverlayController {
         keyMonitor = nil
         panels.forEach { $0.orderOut(nil) }
         panels.removeAll()
+        registeredCursor = nil
         state.cancelGesture(); highlighted = nil; highlightedApp = ""
         NSCursor.arrow.set()
     }
@@ -92,10 +95,23 @@ final class OverlayController {
         }
         redraw()
     }
-    func mouseMoved() { updateWindow(); redraw() }
+    func mouseMoved() {
+        guard isVisible else { return }
+        // cursorUpdateとカーソル矩形はキーウィンドウで有効になる。
+        // 別画面へ移ったら非アクティブのまま受け手を移す。ドラッグの配送先は変えない。
+        if NSEvent.pressedMouseButtons & 1 == 0,
+           let panel = panels.first(where: { $0.frame.contains(NSEvent.mouseLocation) }), !panel.isKeyWindow {
+            panel.makeKey()
+            if let view = panel.contentView { panel.makeFirstResponder(view) }
+        }
+        updateWindow(); redraw()
+    }
+    func updateCursor() {
+        guard isVisible else { return }
+        cursor.set()
+    }
     private func updateWindow() {
-        guard state.target == .window else { highlighted = nil; highlightedApp = ""; NSCursor.crosshair.set(); return }
-        NSCursor.arrow.set()
+        guard state.target == .window else { highlighted = nil; highlightedApp = ""; return }
         let point = NSEvent.mouseLocation
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
@@ -170,7 +186,16 @@ final class OverlayController {
         }
         return OverlayPresentation.dimensions(points: points, scale: scale, output: state.output, downscale: downscale)
     }
-    private func redraw() { panels.forEach { $0.contentView?.needsDisplay = true } }
+    private func redraw() {
+        if registeredCursor != state.cursor {
+            registeredCursor = state.cursor
+            for panel in panels {
+                if let view = panel.contentView { panel.invalidateCursorRects(for: view) }
+            }
+        }
+        updateCursor()
+        panels.forEach { $0.contentView?.needsDisplay = true }
+    }
 }
 
 @MainActor
@@ -182,8 +207,17 @@ final class OverlayView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         trackingAreas.forEach(removeTrackingArea)
-        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeAlways, .inVisibleRect], owner: self))
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect, .enabledDuringMouseDrag], owner: self))
+        // activeAlwaysとの組合せではcursorUpdateは届かない。移動の追跡とは分ける。
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.cursorUpdate, .activeInKeyWindow, .inVisibleRect], owner: self))
     }
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard let controller, controller.isVisible else { return }
+        addCursorRect(visibleRect, cursor: controller.cursor)
+    }
+    override func cursorUpdate(with event: NSEvent) { controller?.updateCursor() }
+    override func mouseEntered(with event: NSEvent) { controller?.mouseMoved() }
     override func mouseDown(with event: NSEvent) { controller?.mouseDown() }
     override func mouseDragged(with event: NSEvent) { controller?.mouseDragged() }
     override func mouseUp(with event: NSEvent) { controller?.mouseUp() }

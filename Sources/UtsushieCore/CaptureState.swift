@@ -3,11 +3,13 @@ import CoreGraphics
 
 public enum CaptureOutput: String, Sendable { case image, video }
 public enum CaptureTarget: String, Sendable { case area, last, window, chrome }
+public enum CaptureCursor: Equatable, Sendable { case crosshair, arrow }
 public enum CaptureAction: Equatable, Sendable { case none, cancel, captureLast, captureChrome }
 public struct CaptureState: Sendable {
     public private(set) var output: CaptureOutput = .image
     public private(set) var target: CaptureTarget = .area
     public private(set) var gesture = SelectionGesture()
+    public var cursor: CaptureCursor { target == .window ? .arrow : .crosshair }
     public init() {}
     /// 文字やIMEの変換結果に依存しない物理keyCodeで判断する。
     public mutating func key(_ code: UInt16, hasLast: Bool) -> CaptureAction {
