@@ -39,7 +39,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         window.delegate = self
         window.editor = self
         let root = AnnotationEditorLayout(frame: CGRect(origin: .zero, size: size))
-        root.wantsLayer = true; root.layer?.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 1).cgColor
+        root.wantsLayer = true; root.layer?.backgroundColor = UITheme.ink.cgColor
         let bar = NSStackView()
         bar.orientation = .horizontal; bar.alignment = .centerY; bar.spacing = 4
         for tool in AnnotationTool.allCases {
@@ -62,7 +62,8 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         discardButton = AnnotationButton(title: "破棄 Q", target: self, action: #selector(discard))
         finishButton = AnnotationButton(title: "完了 ⌘↩", target: self, action: #selector(finish))
         discardButton.bezelStyle = .rounded; finishButton.bezelStyle = .rounded
-        finishButton.bezelColor = AnnotationRenderer.red
+        finishButton.bezelColor = UITheme.indigo
+        finishButton.contentTintColor = .white
         bar.addArrangedSubview(discardButton); bar.addArrangedSubview(finishButton)
         root.bar = bar; root.canvas = canvas
         root.addSubview(bar); root.addSubview(canvas)
@@ -92,7 +93,11 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         window.orderFrontRegardless(); window.makeKey(); window.makeFirstResponder(canvas)
     }
     private func update() {
-        for (tool, button) in toolButtons { button.state = tool == canvas.tool ? .on : .off }
+        for (tool, button) in toolButtons {
+            button.state = tool == canvas.tool ? .on : .off
+            button.bezelColor = tool == canvas.tool ? UITheme.indigo : nil
+            button.contentTintColor = tool == canvas.tool ? .white : UITheme.text
+        }
         undoButton.isEnabled = canvas.history.canUndo && !saving
         redoButton.isEnabled = canvas.history.canRedo && !saving
         if discardArmed { hint.stringValue = "もう一度押すと破棄"; return }
@@ -138,7 +143,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         saving = true; canvas.isEnabled = false
         finishButton.isEnabled = false; discardButton.isEnabled = false
         toolButtons.values.forEach { $0.isEnabled = false }; update()
-        hint.stringValue = "保存中…"
+        hint.stringValue = "書き出し中…"
         Task { [self] in
             do {
                 let image = try AnnotationRenderer.compose(canvas.original, document: document)
@@ -380,7 +385,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         textAnnotation = annotation; selection = annotation.id
         let input = AnnotationTextView(frame: .zero)
         input.isRichText = false; input.allowsUndo = true; input.drawsBackground = true
-        input.backgroundColor = AnnotationRenderer.red; input.textColor = .white
+        input.backgroundColor = UITheme.redFace; input.textColor = .white
         input.textContainerInset = CGSize(width: style.horizontalPadding * displayScale, height: style.verticalPadding * displayScale)
         input.textContainer?.lineFragmentPadding = 0
         input.isHorizontallyResizable = false; input.isVerticallyResizable = false

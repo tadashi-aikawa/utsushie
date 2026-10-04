@@ -5,7 +5,7 @@ final class RecordingBorder {
     private var panels: [NSPanel] = []
     func show(rect: CGRect) {
         close()
-        for screen in NSScreen.screens where screen.frame.intersects(rect.insetBy(dx: -3, dy: -3)) {
+        for screen in NSScreen.screens where screen.frame.intersects(rect.insetBy(dx: -5, dy: -5)) {
             let panel = NSPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.setFrame(screen.frame, display: false)
             panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
@@ -26,9 +26,6 @@ final class RecordingBorder {
 private final class BorderView: NSView {
     var rect = CGRect.zero
     override func draw(_ dirtyRect: NSRect) {
-        // 2ptの線の内側が対象範囲へ入らないよう、外へ1pt以上離す。
-        let path = NSBezierPath(rect: rect.insetBy(dx: -2, dy: -2))
-        path.lineWidth = 2
-        NSColor.systemRed.setStroke(); path.stroke()
+        UIDrawing.recordingBorder(rect)
     }
 }

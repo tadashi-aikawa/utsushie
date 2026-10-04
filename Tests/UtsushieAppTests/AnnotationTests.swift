@@ -80,8 +80,8 @@ private func pixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     let number = Annotation(tool: .number, start: CGPoint(x: 130, y: 30))
     let spot = Annotation(tool: .spotlight, start: CGPoint(x: 110, y: 70), end: CGPoint(x: 150, y: 95))
     let image = try AnnotationRenderer.compose(annotationFixture(), document: AnnotationDocument(annotations: [number, label, spot]))
-    #expect(try pixel(image, x: 24, y: 25)[0...2] == [229, 53, 42])
-    #expect(try pixel(image, x: 123, y: 30)[0...2] == [229, 53, 42])
+    #expect(try pixel(image, x: 24, y: 25)[0...2] == [210, 49, 37])
+    #expect(try pixel(image, x: 123, y: 30)[0...2] == [210, 49, 37])
     var whitePixels = 0
     for y in 18..<Int(label.end.y - style.verticalPadding) { for x in 31..<Int(label.end.x - style.horizontalPadding) {
         if try pixel(image, x: x, y: y)[0...2] == [255, 255, 255] { whitePixels += 1 }
@@ -182,7 +182,7 @@ private func pixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
         let outer = try pixel(image, x: Int(floor(rect.maxX + style.edge - 1)), y: 100)
         #expect(outer[0...2] == [255, 255, 255])
         let inside = try pixel(image, x: Int(floor(rect.maxX - 2)), y: 100)
-        #expect(inside[0...2] == [229, 53, 42])
+        #expect(inside[0...2] == [210, 49, 37])
     }
 }
 @MainActor

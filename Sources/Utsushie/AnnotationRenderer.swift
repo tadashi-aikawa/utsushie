@@ -4,7 +4,7 @@ import UtsushieCore
 /// プレビューと書き出しで同じ描画を使う。入力は撮影時のCGImageに限定する。
 @MainActor
 enum AnnotationRenderer {
-    static let red = NSColor(srgbRed: 229 / 255, green: 53 / 255, blue: 42 / 255, alpha: 1)
+    static var red: NSColor { UITheme.red }
 
     static func bitmap(width: Int, height: Int) throws -> CGContext {
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
@@ -113,7 +113,7 @@ enum AnnotationRenderer {
             }
         case .text:
             let rect = annotation.rect
-            context.setFillColor(red.cgColor)
+            context.setFillColor(UITheme.redFace.cgColor)
             context.addPath(CGPath(roundedRect: rect, cornerWidth: style.radius, cornerHeight: style.radius, transform: nil)); context.fillPath()
             (annotation.text as NSString).draw(at: CGPoint(x: rect.minX + style.horizontalPadding, y: rect.minY + style.verticalPadding),
                 withAttributes: [.font: NSFont.systemFont(ofSize: style.fontSize, weight: .bold), .foregroundColor: NSColor.white])
@@ -123,7 +123,7 @@ enum AnnotationRenderer {
             context.setShadow(offset: CGSize(width: 0, height: 1), blur: 3, color: CGColor(gray: 0, alpha: 0.35))
             let path = CGPath(roundedRect: rect, cornerWidth: rect.height / 2, cornerHeight: rect.height / 2, transform: nil)
             // 線はパスの中心に出る。2倍幅の白線の上から元の朱面を塗り、外側へedgeだけ残す。
-            context.setFillColor(red.cgColor); context.setStrokeColor(NSColor.white.cgColor); context.setLineWidth(style.edge * 2)
+            context.setFillColor(UITheme.redFace.cgColor); context.setStrokeColor(NSColor.white.cgColor); context.setLineWidth(style.edge * 2)
             context.addPath(path)
             context.drawPath(using: .fillStroke)
             context.setShadow(offset: .zero, blur: 0, color: nil)

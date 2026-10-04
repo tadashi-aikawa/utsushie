@@ -5,6 +5,7 @@ import UtsushieCore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
+    private var statusMenu: NSMenu!
     private var config = UtsushieConfig()
     private var warnings: [String] = []
     private let hotkey = GlobalHotkey()
@@ -51,12 +52,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for (title, selector) in [("撮影", #selector(shoot)), ("保存フォルダを開く", #selector(openFolder)), ("設定ファイルを開く", #selector(openConfig))] {
             let item = NSMenuItem(title: title, action: selector, keyEquivalent: ""); item.target = self; menu.addItem(item)
             if selector == #selector(shoot) { shootItem = item }
+            if selector == #selector(shoot) { menu.addItem(.separator()) }
         }
         warningItem = NSMenuItem(title: "", action: #selector(showWarnings), keyEquivalent: "")
         warningItem.target = self; menu.addItem(warningItem)
+        warningItem.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "設定の警告")
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "終了", action: #selector(quitApp), keyEquivalent: "q"); quit.target = self; menu.addItem(quit)
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "開発版"
+        let versionItem = NSMenuItem(title: "UTSUSHIE \(version)", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false; menu.addItem(versionItem)
+        let quit = NSMenuItem(title: "UTSUSHIEを終了", action: #selector(quitApp), keyEquivalent: "q"); quit.target = self; menu.addItem(quit)
+        statusMenu = menu
         statusItem.menu = menu
+        statusItem.button?.target = self; statusItem.button?.action = #selector(statusClicked)
         reloadConfig()
         hotkey.onPress = { [weak self] in self?.shoot() }
         overlay.onCapture = { [weak self] request, remember, output in
@@ -80,11 +88,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let result = ConfigLoader.load()
         config = result.config; warnings = result.warnings
         if let warning = hotkey.register(config.hotkey) { warnings.append(warning) }
+        updateHotkeyLabel()
         updateWarnings()
+    }
+    private func updateHotkeyLabel() {
+        // 表示だけを設定から作る。グローバルホットキーの物理キー判定は登録側へ任せる。
+        let title = recordingState.phase == .recording ? "録画を停止" : "撮影"
+        shootItem.title = title
+        let label = HotkeyPresentation.label(config.hotkey)
+        let style = NSMutableParagraphStyle()
+        style.tabStops = [NSTextTab(textAlignment: .right, location: 244)]
+        let attributed = NSMutableAttributedString(string: title + "\t" + label,
+            attributes: [.font: NSFont.menuFont(ofSize: 0), .paragraphStyle: style])
+        attributed.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor,
+                                range: NSRange(location: (title as NSString).length + 1, length: (label as NSString).length))
+        shootItem.attributedTitle = attributed
     }
     private func updateWarnings() {
         warningItem?.isHidden = warnings.isEmpty
-        warningItem?.title = "⚠ 警告 \(warnings.count)件…"
+        warningItem?.title = "設定の警告 \(warnings.count)件…"
     }
     @objc private func showWarnings() { alert("UTSUSHIEの警告", warnings.joined(separator: "\n")) }
     @objc private func shoot() {
@@ -100,6 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let last = lastArea.flatMap { CaptureGeometry.isVisible($0.rect, displays: ScreenGeometry.displays) ? $0.rect : nil }
         thumbnails.setSuspended(true)
+        overlay.config = config
         overlay.show(last: last)
     }
     private func startRecording(_ request: CaptureRequest, remember: Bool) {
@@ -170,21 +193,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     private func updateRecordingStatus() {
         let recording = recordingState.phase == .recording
+        statusItem.menu = recording ? nil : statusMenu
         statusItem.length = recordingState.phase == .idle ? NSStatusItem.squareLength : NSStatusItem.variableLength
-        statusItem.button?.imagePosition = recordingState.phase == .idle ? .imageOnly : .imageLeading
-        if recordingState.phase == .idle, let logo = Self.logoIcon {
-            statusItem.button?.image = logo
+        let title = RecordingPresentation.title(phase: recordingState.phase, elapsed: ProcessInfo.processInfo.systemUptime - recordingHostStart)
+        guard let button = statusItem.button else { return }
+        button.imagePosition = .imageOnly
+        button.title = ""
+        if recording {
+            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.white]
+            let textSize = (title as NSString).size(withAttributes: attributes)
+            button.image = NSImage(size: CGSize(width: ceil(textSize.width) + 12, height: 18), flipped: false) { rect in
+                UIDrawing.fill(rect, color: UITheme.redFace, radius: 5)
+                (title as NSString).draw(at: CGPoint(x: 6, y: (18 - textSize.height) / 2), withAttributes: attributes)
+                return true
+            }
+            button.image?.isTemplate = false
+        } else if recordingState.phase == .idle {
+            button.image = Self.logoIcon ?? NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "UTSUSHIE")
         } else {
-            statusItem.button?.image = NSImage(systemSymbolName: recording ? "record.circle" : "viewfinder", accessibilityDescription: "UTSUSHIE")
+            button.image = nil; button.title = title
         }
-        switch recordingState.phase {
-        case .idle: statusItem.button?.title = ""
-        case .starting: statusItem.button?.title = "準備中"
-        case .recording: statusItem.button?.title = " ● \(MediaFormatting.elapsed(ProcessInfo.processInfo.systemUptime - recordingHostStart))"
-        case .finalizing: statusItem.button?.title = " 保存中"
-        }
-        shootItem.title = recording ? "録画を停止" : "撮影"
+        button.setAccessibilityLabel(recording ? "録画を停止 \(title)" : "UTSUSHIE \(title)")
+        updateHotkeyLabel()
         shootItem.isEnabled = recording || !busy && recordingState.phase == .idle
+    }
+    @objc private func statusClicked() {
+        if RecordingPresentation.stopsOnClick(phase: recordingState.phase) { stopRecording() }
     }
     private func stopRecording() {
         guard let session = activeRecording, recordingState.stop() else { return }

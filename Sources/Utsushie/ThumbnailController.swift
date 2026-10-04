@@ -62,7 +62,7 @@ final class ThumbnailController {
 }
 
 @MainActor
-private final class ThumbnailCard: NSObject, NSWindowDelegate {
+final class ThumbnailCard: NSObject, NSWindowDelegate {
     let id = UUID()
     let panel: ThumbnailPanel
     var artifact: SharedArtifact
@@ -102,14 +102,16 @@ private final class ThumbnailCard: NSObject, NSWindowDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         view = ThumbnailView(frame: CGRect(x: 0, y: 0, width: 264, height: 216))
         view.card = self
+        view.configureButtons()
         if let image { view.image = NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height)) }
         view.copied = copied
+        view.refreshControls()
         panel.contentView = view
     }
     func complete(artifact: SharedArtifact, image: CGImage, copied: Bool) {
         self.artifact = artifact; finalizing = false
         view.image = NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height))
-        view.copied = copied; view.needsDisplay = true
+        view.copied = copied; view.refreshControls(); view.needsDisplay = true
         resumeTimer()
     }
     func show(claimKeyboard: Bool = true) {
@@ -164,8 +166,11 @@ private final class ThumbnailCard: NSObject, NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) {
         // 別のアプリをクリックしたときは取り戻さない。次のshowまたは明示的なホバーで再取得する。
         stopKeys()
+        view.refreshControls(); view.needsDisplay = true
     }
-    func edit() {
+    func windowDidBecomeKey(_ notification: Notification) { view.refreshControls(); view.needsDisplay = true }
+    @objc func dismiss() { onClose?() }
+    @objc func edit() {
         guard canEdit, editor == nil, let originalImage else { return }
         hide()
         let controller = AnnotationEditorController(image: originalImage, document: annotations, screen: screen)
@@ -213,11 +218,11 @@ private final class ThumbnailCard: NSObject, NSWindowDelegate {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
     }
-    func reveal() {
+    @objc func reveal() {
         guard !finalizing else { return }
         NSWorkspace.shared.activateFileViewerSelecting([artifact.url])
     }
-    func saveAs() {
+    @objc func saveAs() {
         guard !saving, !finalizing else { return }
         saving = true; pauseTimer(); releaseKeys()
         let save = NSSavePanel()
@@ -252,7 +257,7 @@ private final class ThumbnailCard: NSObject, NSWindowDelegate {
 }
 
 @MainActor
-private final class ThumbnailPanel: NSPanel {
+final class ThumbnailPanel: NSPanel {
     var receivesKeyboard = false
     override var canBecomeKey: Bool { receivesKeyboard }
     override var canBecomeMain: Bool { false }
@@ -261,12 +266,40 @@ private final class ThumbnailPanel: NSPanel {
 import UniformTypeIdentifiers
 
 @MainActor
-private final class ThumbnailView: NSView, NSDraggingSource {
+final class ThumbnailView: NSView, NSDraggingSource {
     weak var card: ThumbnailCard?
     var image: NSImage?
     var copied = false
     private var downEvent: NSEvent?
     private var dragged = false
+    private var buttons: [CardAction: CardButton] = [:]
+    private let spinner = NSProgressIndicator()
+    func configureButtons() {
+        guard let card else { return }
+        let definitions: [(CardAction, String, String, String, Selector)] = [
+            (.annotate, "pencil", "E", "注釈 E", #selector(ThumbnailCard.edit)),
+            (.save, "square.and.arrow.down", "S", "別名保存 S", #selector(ThumbnailCard.saveAs)),
+            (.reveal, "folder", "O", "Finderで表示 O", #selector(ThumbnailCard.reveal)),
+            (.close, "xmark", "×", "閉じる X・Esc", #selector(ThumbnailCard.dismiss))]
+        for (action, symbol, key, label, selector) in definitions {
+            let button = CardButton(frame: CardPresentation.button(action))
+            button.symbol = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+            button.key = key; button.target = card; button.action = selector
+            button.isBordered = false; button.toolTip = label; button.setAccessibilityLabel(label)
+            buttons[action] = button; addSubview(button)
+        }
+        spinner.style = .spinning; spinner.controlSize = .small
+        spinner.frame = CGRect(x: 18, y: 164, width: 12, height: 12)
+        spinner.isDisplayedWhenStopped = false; addSubview(spinner)
+    }
+    func refreshControls() {
+        guard let card else { return }
+        for (action, button) in buttons {
+            button.isEnabled = action == .close || !card.finalizing && (action != .annotate || card.canEdit)
+            button.showsKey = card.panel.isKeyWindow; button.needsDisplay = true
+        }
+        if card.finalizing { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+    }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -280,17 +313,20 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     override func mouseDown(with event: NSEvent) { downEvent = event; dragged = false }
     override func mouseUp(with event: NSEvent) {
         defer { downEvent = nil }
-        guard !dragged, let card else { return }
+        guard !dragged, let card, let downEvent else { return }
         let point = convert(event.locationInWindow, from: nil)
-        if point.y >= 177 {
-            if point.x >= 224 { card.onClose?() }
-            else if point.x >= 190 { card.reveal() }
-            else if point.x >= 156 { card.saveAs() }
-            else if point.x >= 120 { card.edit() }
+        guard CardPresentation.action(at: convert(downEvent.locationInWindow, from: nil)) == CardPresentation.action(at: point) else { return }
+        switch CardPresentation.action(at: point) {
+        case .annotate: card.edit()
+        case .save: card.saveAs()
+        case .reveal: card.reveal()
+        case .close: card.onClose?()
+        case nil: break
         }
     }
     override func mouseDragged(with event: NSEvent) {
-        guard !dragged, let downEvent, let card, !card.finalizing else { return }
+        guard !dragged, let downEvent, let card, !card.finalizing,
+              CardPresentation.action(at: convert(downEvent.locationInWindow, from: nil)) == nil else { return }
         let a = convert(downEvent.locationInWindow, from: nil), b = convert(event.locationInWindow, from: nil)
         guard hypot(a.x - b.x, a.y - b.y) > 4 else { return }
         dragged = true; card.dragStarted()
@@ -303,31 +339,61 @@ private final class ThumbnailView: NSView, NSDraggingSource {
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { card?.dragEnded() }
     override func draw(_ dirtyRect: NSRect) {
         guard let card else { return }
-        NSColor(calibratedWhite: 0.10, alpha: 0.97).setFill()
+        UITheme.ink.withAlphaComponent(0.97).setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 14, yRadius: 14).fill()
+        if card.panel.isKeyWindow {
+            let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.75, dy: 0.75), xRadius: 13.25, yRadius: 13.25)
+            outline.lineWidth = 1.5; NSColor.white.withAlphaComponent(0.62).setStroke(); outline.stroke()
+        }
         let preview = CGRect(x: 12, y: 12, width: 240, height: 140)
-        NSColor.black.setFill(); NSBezierPath(roundedRect: preview, xRadius: 6, yRadius: 6).fill()
+        NSColor.black.setFill(); NSBezierPath(roundedRect: preview, xRadius: 8, yRadius: 8).fill()
         if let image {
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(roundedRect: preview, xRadius: 8, yRadius: 8).addClip()
             let factor = min(preview.width / image.size.width, preview.height / image.size.height)
             let size = CGSize(width: image.size.width * factor, height: image.size.height * factor)
             image.draw(in: CGRect(x: preview.midX - size.width / 2, y: preview.midY - size.height / 2, width: size.width, height: size.height), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            NSGraphicsContext.restoreGraphicsState()
         }
-        let info: String
         if let duration = card.artifact.duration {
-            info = MediaFormatting.videoInfo(width: card.artifact.width, height: card.artifact.height, duration: duration, bytes: card.artifact.byteCount)
-        } else {
-            info = "\(card.artifact.kind.label)  \(card.artifact.width)×\(card.artifact.height)  \(max(1, Int((Double(card.artifact.byteCount) / 1024).rounded())))KB"
+            let durationText = "▶ \(MediaFormatting.elapsed(duration))"
+            let width = ceil((durationText as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 10.5, weight: .medium)]).width) + 14
+            let badge = CGRect(x: preview.maxX - width - 6, y: preview.maxY - 24, width: width, height: 18)
+            UIDrawing.fill(badge, color: UITheme.ink.withAlphaComponent(0.85), radius: 4)
+            UIDrawing.text(durationText, in: badge.insetBy(dx: 6, dy: 2), size: 10.5, color: .white)
         }
-        text(info, at: CGPoint(x: 14, y: 160), size: 12)
-        text(card.finalizing ? "保存中" : copied ? "Copied" : "Saved", at: CGPoint(x: 14, y: 189), size: 12)
-        if !card.finalizing {
-            if card.canEdit { text("E", at: CGPoint(x: 126, y: 187), size: 14) }
-            text("S", at: CGPoint(x: 162, y: 187), size: 14)
-            text("O", at: CGPoint(x: 198, y: 187), size: 14)
-        }
-        text("×", at: CGPoint(x: 234, y: 187), size: 17)
+        let status = CardPresentation.status(copied: copied, finalizing: card.finalizing)
+        let statusWidth = ceil((status as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .semibold)]).width) + 14 + (card.finalizing ? 17 : 0)
+        let chip = CGRect(x: 12, y: 160, width: statusWidth, height: 20)
+        UIDrawing.fill(chip, color: copied && !card.finalizing ? UITheme.indigo : NSColor.white.withAlphaComponent(0.12), radius: 5)
+        UIDrawing.text(status, in: CGRect(x: chip.minX + 7 + (card.finalizing ? 17 : 0), y: chip.minY + 2,
+                                        width: chip.width - 14 - (card.finalizing ? 17 : 0), height: 16), size: 11.5, color: .white, weight: .semibold)
+        let info = CardPresentation.info(format: card.artifact.kind.label, width: card.artifact.width, height: card.artifact.height, bytes: card.artifact.byteCount)
+        let infoRect = CGRect(x: chip.maxX + 8, y: 164, width: 252 - chip.maxX - 8, height: 16)
+        var fontSize: CGFloat = 11.5
+        while fontSize > 9 && (info as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: fontSize, weight: .medium)]).width > infoRect.width { fontSize -= 0.5 }
+        UIDrawing.text(info, in: infoRect, size: fontSize, color: UITheme.muted)
     }
-    private func text(_ string: String, at point: CGPoint, size: Double) {
-        (string as NSString).draw(at: point, withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: size, weight: .medium), .foregroundColor: NSColor.white])
+}
+
+@MainActor
+private final class CardButton: NSButton {
+    var symbol: NSImage?
+    var key = ""
+    var showsKey = false
+    override var isFlipped: Bool { true }
+    override var needsPanelToBecomeKey: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func draw(_ dirtyRect: NSRect) {
+        let alpha: CGFloat = isEnabled ? 1 : 0.3
+        UIDrawing.fill(bounds, color: NSColor.white.withAlphaComponent((isHighlighted ? 0.18 : 0.08) * alpha), radius: 6)
+        let imageX = showsKey ? bounds.midX - 16 : bounds.midX - 7
+        if let symbol {
+            let tinted = NSImage(size: CGSize(width: 14, height: 14), flipped: true) { rect in
+                symbol.draw(in: rect); UITheme.text.setFill(); rect.fill(using: .sourceAtop); return true
+            }
+            tinted.draw(in: CGRect(x: imageX, y: 5, width: 14, height: 14), from: .zero, operation: .sourceOver, fraction: alpha, respectFlipped: true, hints: nil)
+        }
+        if showsKey { UIDrawing.text(key, in: CGRect(x: bounds.midX + 4, y: 5, width: 16, height: 15), size: 10.5, color: UITheme.key.withAlphaComponent(alpha), weight: .semibold) }
     }
 }
