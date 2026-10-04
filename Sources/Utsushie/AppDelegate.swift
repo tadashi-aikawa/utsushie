@@ -68,6 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
         statusItem.button?.target = self; statusItem.button?.action = #selector(statusClicked)
         reloadConfig()
+        warnings += VideoEditStore.cleanupAtLaunch(directory: config.outputURL())
+        updateWarnings()
         hotkey.onPress = { [weak self] in self?.shoot() }
         overlay.onCapture = { [weak self] request, remember, output in
             guard let self else { return }
@@ -247,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 temporary = nil
                 let bytes = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
                 let artifact = SharedArtifact(url: url, kind: .mp4, width: result.width, height: result.height,
-                    byteCount: bytes, duration: result.duration)
+                    byteCount: bytes, duration: result.duration, videoFPS: recordingConfig.video.fps)
                 let copied = ClipboardWriter.copy(artifact, mode: recordingConfig.clipboard)
                 thumbnails.complete(cardID, artifact: artifact, image: result.image, copied: copied)
             } catch {

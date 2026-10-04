@@ -33,17 +33,7 @@ final class MP4Writer: @unchecked Sendable {
         self.url = url; self.width = width; self.height = height; self.fps = fps; self.onFailure = onFailure
         writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         writer.shouldOptimizeForNetworkUse = true
-        input = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: width,
-            AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: min(40_000_000, max(500_000, Int(Double(width * height * fps) * 0.12))),
-                AVVideoExpectedSourceFrameRateKey: fps,
-                AVVideoMaxKeyFrameIntervalKey: fps * 2,
-                AVVideoProfileLevelKey: AVVideoProfileLevelH264MainAutoLevel,
-            ],
-        ])
+        input = AVAssetWriterInput(mediaType: .video, outputSettings: VideoEncoding.settings(width: width, height: height, fps: fps))
         input.expectsMediaDataInRealTime = true
         guard writer.canAdd(input) else { throw CaptureError.unavailable("H.264の録画設定を作れません") }
         writer.add(input)

@@ -84,9 +84,12 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     private let originalImage: CGImage?
     private var annotations = AnnotationDocument()
     private var editor: AnnotationEditorController?
+    private var videoEditor: VideoEditorController?
+    private var videoSession: VideoEditSession?
+    private var closed = false
     var annotationConfig: () -> UtsushieConfig = { UtsushieConfig() }
     var canShow: () -> Bool = { true }
-    var canEdit: Bool { artifact.kind == .webP && originalImage != nil && !finalizing }
+    var canEdit: Bool { !finalizing && (artifact.kind == .mp4 || originalImage != nil) }
     private(set) var finalizing: Bool
 
     init(artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, finalizing: Bool) {
@@ -115,7 +118,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         resumeTimer()
     }
     func show(claimKeyboard: Bool = true) {
-        guard editor == nil else { return }
+        guard editor == nil, videoEditor == nil, !closed else { return }
         visible = true; panel.orderFrontRegardless()
         if claimKeyboard { claimKeys() }
         resumeTimer()
@@ -124,6 +127,8 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         visible = false; pauseTimer(); releaseKeys(); hovered = false; panel.orderOut(nil)
     }
     func close() {
+        closed = true
+        if !finalizing { videoSession?.close() }
         let restore = panel.isKeyWindow
         hide(); panel.close(); onClose = nil
         if restore { restoreFocus() }
@@ -133,7 +138,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         if !value { releaseKeys() }
     }
     private func claimKeys() {
-        guard isKeyboardTarget, visible, editor == nil, !saving, !dragging else { return }
+        guard isKeyboardTarget, visible, editor == nil, videoEditor == nil, !saving, !dragging else { return }
         if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
             previousApplication = front
         }
@@ -145,7 +150,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             guard let self, self.isKeyboardTarget, self.visible, self.panel.isKeyWindow, event.window === self.panel,
                   event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
             switch event.keyCode {
-            case 14: if !event.isARepeat { self.edit() }; return nil // E。動画では何もしない。
+            case 14: if !event.isARepeat { self.edit() }; return nil // E
             case 1: if !event.isARepeat { self.saveAs() }; return nil // S
             case 31: if !event.isARepeat { self.reveal() }; return nil // O
             case 7, 53: self.onClose?(); return nil // X, Esc
@@ -171,6 +176,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) { view.refreshControls(); view.needsDisplay = true }
     @objc func dismiss() { onClose?() }
     @objc func edit() {
+        if artifact.kind == .mp4 { editVideo(); return }
         guard canEdit, editor == nil, let originalImage else { return }
         hide()
         let controller = AnnotationEditorController(image: originalImage, document: annotations, screen: screen,
@@ -195,19 +201,59 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         }
         controller.show()
     }
+    private func editVideo() {
+        guard canEdit, videoEditor == nil, let duration = artifact.duration, duration > 0 else { return }
+        hide()
+        if videoSession == nil { videoSession = VideoEditSession(artifact: artifact, fps: annotationConfig().video.fps) }
+        guard let session = videoSession else { return }
+        let controller = VideoEditorController(source: session.sourceURL, document: session.document, screen: screen)
+        videoEditor = controller
+        controller.onClose = { [weak self] in
+            guard let self else { return }
+            videoEditor = nil; remaining = lifetime
+            if canShow() { show(claimKeyboard: false) }
+        }
+        controller.onComplete = { [weak self] document in
+            guard let self else { return }
+            // 失敗しても、次のEで元の録画に今回の範囲を重ねる。
+            session.document = document
+            guard session.needsExport else {
+                view.copied = ClipboardWriter.copy(artifact, mode: .file, to: .general, preservingOnFailure: true)
+                view.needsDisplay = true; return
+            }
+            finalizing = true; pauseTimer(); view.copied = false; view.refreshControls(); view.needsDisplay = true
+            Task { [self] in
+                defer { if closed { session.close() } }
+                do {
+                    let (updated, image) = try await session.save(artifact: artifact) { ClipboardWriter.copy($0, mode: .file, to: .general, preservingOnFailure: true) }
+                    complete(artifact: updated, image: image, copied: true)
+                } catch {
+                    finalizing = false; view.refreshControls(); view.needsDisplay = true
+                    if !closed {
+                        // Eで開き直すまで失敗の説明を読めるように寿命を止める。
+                        hovered = true
+                        let alert = NSAlert(); alert.messageText = "動画を切れませんでした"
+                        alert.informativeText = error.localizedDescription + "\nEで開き直して再試行できます。切った範囲は保持しています。"
+                        NSApp.activate(); await alert.beginSheetModal(for: panel)
+                    }
+                }
+            }
+        }
+        controller.show()
+    }
     private func pauseTimer() {
         if let started { remaining = max(0, remaining - Date().timeIntervalSince(started)) }
         timer?.invalidate(); timer = nil; started = nil
     }
     private func resumeTimer() {
-        guard visible, editor == nil, !hovered, !dragging, !saving, !finalizing, timer == nil else { return }
+        guard visible, editor == nil, videoEditor == nil, !closed, !hovered, !dragging, !saving, !finalizing, timer == nil else { return }
         started = Date()
         timer = Timer.scheduledTimer(withTimeInterval: max(0.01, remaining), repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.onClose?() }
         }
     }
     func hover(_ value: Bool) {
-        guard editor == nil, visible else { return }
+        guard editor == nil, videoEditor == nil, visible else { return }
         hovered = value
         if value {
             pauseTimer()
@@ -279,7 +325,7 @@ final class ThumbnailView: NSView, NSDraggingSource {
     func configureButtons() {
         guard let card else { return }
         let definitions: [(CardAction, String, String, String, Selector)] = [
-            (.annotate, "pencil", "E", "注釈 E", #selector(ThumbnailCard.edit)),
+            (.annotate, card.artifact.kind == .mp4 ? "scissors" : "pencil", "E", card.artifact.kind == .mp4 ? "動画を編集 E" : "注釈 E", #selector(ThumbnailCard.edit)),
             (.save, "square.and.arrow.down", "S", "別名保存 S", #selector(ThumbnailCard.saveAs)),
             (.reveal, "folder", "O", "Finderで表示 O", #selector(ThumbnailCard.reveal)),
             (.close, "xmark", "×", "閉じる X・Esc", #selector(ThumbnailCard.dismiss))]

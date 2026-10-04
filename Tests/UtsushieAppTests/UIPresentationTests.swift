@@ -52,7 +52,7 @@ private func uiPixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     }}
 }
 
-@MainActor @Test func cardButtonsUsePresentationFramesAndDisableVideoAnnotation() throws {
+@MainActor @Test func cardButtonsUsePresentationFramesAndEnableVideoEditing() throws {
     let artifact = SharedArtifact(url: URL(fileURLWithPath: "/tmp/test.mp4"), kind: .mp4, width: 330, height: 210, byteCount: 88_064, duration: 12)
     let card = ThumbnailCard(artifact: artifact, image: nil, copied: true, seconds: 5, finalizing: false)
     defer { card.panel.close() }
@@ -63,7 +63,7 @@ private func uiPixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
         #expect(buttons[index].frame == CardPresentation.button(action))
         #expect(buttons[index].acceptsFirstMouse(for: nil))
     }
-    #expect(!buttons[0].isEnabled)
+    #expect(buttons[0].isEnabled)
     #expect(buttons[1...3].allSatisfy { $0.isEnabled })
     // 任意のプレビュー出力先は検証用。実際のカードを表示せずに描画する。
     if let directory = ProcessInfo.processInfo.environment["UTSUSHIE_UI_PREVIEW_DIR"] {

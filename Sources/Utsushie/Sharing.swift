@@ -17,6 +17,7 @@ struct SharedArtifact: Sendable {
     var height: Int
     var byteCount: Int
     var duration: Double? = nil
+    var videoFPS: Int? = nil
 }
 
 enum ArtifactStore {
