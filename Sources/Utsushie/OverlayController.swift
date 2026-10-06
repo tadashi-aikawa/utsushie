@@ -42,6 +42,8 @@ final class OverlayController {
             let panel = CapturePanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.setFrame(screen.frame, display: false)
             panel.isOpaque = false; panel.backgroundColor = .clear
+            // くり抜きの完全透明な画素でも、下のウィンドウへマウス入力を通さない。
+            panel.ignoresMouseEvents = false
             panel.hasShadow = false; panel.hidesOnDeactivate = false
             panel.level = .screenSaver
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
