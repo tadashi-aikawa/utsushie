@@ -7,8 +7,10 @@ public struct RecentCaptureFile: Equatable, Sendable {
     public let date: Date
     public let isRegularFile: Bool
     public let isHidden: Bool
-    public init(url: URL, date: Date, isRegularFile: Bool = true, isHidden: Bool = false) {
+    public let byteCount: Int
+    public init(url: URL, date: Date, isRegularFile: Bool = true, isHidden: Bool = false, byteCount: Int = 0) {
         self.url = url; self.date = date; self.isRegularFile = isRegularFile; self.isHidden = isHidden
+        self.byteCount = byteCount
     }
     public var kind: RecentCaptureKind? {
         switch url.pathExtension.lowercased() {
@@ -22,13 +24,17 @@ public struct RecentCaptureFile: Equatable, Sendable {
 public enum RecentCaptures {
     public static let limit = 10
     public static func newest(_ files: [RecentCaptureFile]) -> [RecentCaptureFile] {
-        Array(files.filter {
+        Array(all(files).prefix(limit))
+    }
+    /// 一覧は全件、元画像の記憶だけは最新10件に制限する。
+    public static func all(_ files: [RecentCaptureFile]) -> [RecentCaptureFile] {
+        files.filter {
             $0.isRegularFile && !$0.isHidden && !$0.url.lastPathComponent.hasPrefix(".") && $0.kind != nil
                 && !$0.url.lastPathComponent.lowercased().hasSuffix(".recording.mp4")
         }.sorted {
             if $0.date != $1.date { return $0.date > $1.date }
             return $0.url.path > $1.url.path
-        }.prefix(limit))
+        }
     }
     public static func title(file: RecentCaptureFile, width: Int, height: Int, duration: Double? = nil,
                              timeZone: TimeZone = .current) -> String {

@@ -25,6 +25,7 @@ public struct Hotkey: Equatable, Sendable {
 }
 public struct UtsushieConfig: Equatable, Sendable {
     public var hotkey = Hotkey()
+    public var libraryHotkey: Hotkey? = nil
     public var outputDir = "~/Pictures/UTSUSHIE"
     public var downscale = true
     public var quality: Double = 80
@@ -65,8 +66,10 @@ public enum ConfigLoader {
             if let section { return root[section]?.tomlValue.table?[key]?.tomlValue }
             return root[key]?.tomlValue
         }
-        func warn(_ name: String) { warnings.append("\(name) が不正なため既定値を使います") }
-        for section in ["hotkey", "webp", "clipboard", "thumbnail", "video", "privacy"] {
+        func warn(_ name: String) {
+            warnings.append(name == "libraryHotkey" ? "libraryHotkey が不正なため無効にします" : "\(name) が不正なため既定値を使います")
+        }
+        for section in ["hotkey", "libraryHotkey", "webp", "clipboard", "thumbnail", "video", "privacy"] {
             if let item = root[section], item.tomlValue.table == nil { warn(section) }
         }
         if let item = value(nil, "outputDir") {
@@ -139,6 +142,24 @@ public enum ConfigLoader {
             } else { hotkeyValid = false }
         }
         if !hotkeyValid { config.hotkey = Hotkey(); warn("hotkey") }
+        if let table = root["libraryHotkey"]?.tomlValue.table {
+            var valid = true
+            let code = table["keyCode"]?.tomlValue.int
+            let array = table["modifiers"]?.tomlValue.array
+            let bits: [String: UInt32] = ["command": 256, "shift": 512, "option": 2048, "control": 4096]
+            var flags: UInt32 = 0
+            if let array, !array.isEmpty {
+                for element in array {
+                    if let name = element.tomlValue.string, let bit = bits[name] { flags |= bit }
+                    else { valid = false }
+                }
+            } else { valid = false }
+            if let code, (0...127).contains(code), flags & (256 | 2048 | 4096) != 0, valid {
+                let candidate = Hotkey(keyCode: UInt32(code), modifiers: flags)
+                if candidate == config.hotkey { warnings.append("libraryHotkey は撮影のホットキーと同じため無効にします") }
+                else { config.libraryHotkey = candidate }
+            } else { warn("libraryHotkey") }
+        }
         return ConfigResult(config: config, warnings: warnings)
     }
     public static let template = """
@@ -148,6 +169,11 @@ public enum ConfigLoader {
     [hotkey]
     keyCode = 19 # 物理キー2。⌘⇧2
     modifiers = ["command", "shift"]
+
+    # 一覧のホットキーは任意。使う場合だけ次の3行のコメントを外します。
+    # [libraryHotkey]
+    # keyCode = 37 # 物理キーL。⌘⇧L
+    # modifiers = ["command", "shift"]
 
     [webp]
     downscale = true # 見た目の1xへ縮小

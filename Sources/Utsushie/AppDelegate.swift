@@ -9,10 +9,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var config = UtsushieConfig()
     private var warnings: [String] = []
     private let hotkey = GlobalHotkey()
+    private let libraryHotkey = GlobalHotkey(identifier: 2)
     private let overlay = OverlayController()
     private let capture = CaptureService()
     private let thumbnails = ThumbnailController()
-    private var recentCaptures: RecentCaptureMenu!
+    private var captureLibrary: CaptureLibraryController!
     private let annotationNavigationDiagnostics = AnnotationNavigationDiagnostics()
     private let recordingBorder = RecordingBorder()
     private var recordingState = RecordingState()
@@ -27,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var quitAfterRecording = false
     private var borderRect: CGRect?
     private var shootItem: NSMenuItem!
+    private var libraryItem: NSMenuItem!
     private var lastArea: LastArea?
     private var busy = false
     private var warningItem: NSMenuItem!
@@ -57,12 +59,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if selector == #selector(shoot) { shootItem = item }
             if selector == #selector(shoot) { menu.addItem(.separator()) }
         }
-        recentCaptures = RecentCaptureMenu(directory: { [weak self] in self?.config.outputURL() ?? UtsushieConfig().outputURL() },
-            onFiles: { [weak self] files in self?.thumbnails.pruneMemory(to: files) },
-            onSelect: { [weak self] url in self?.restoreCapture(url) })
-        let recentItem = NSMenuItem(title: "最近の撮影", action: nil, keyEquivalent: "")
-        recentItem.submenu = recentCaptures.menu; menu.insertItem(recentItem, at: 2)
-        thumbnails.onArtifactsChange = { [weak self] in self?.recentCaptures.refresh() }
+        captureLibrary = CaptureLibraryController(directory: { [weak self] in self?.config.outputURL() ?? UtsushieConfig().outputURL() },
+            config: { [weak self] in self?.config ?? UtsushieConfig() }, thumbnails: thumbnails)
+        libraryItem = NSMenuItem(title: "撮影の一覧を開く", action: #selector(openLibrary), keyEquivalent: "")
+        libraryItem.target = self; menu.insertItem(libraryItem, at: 2)
+        thumbnails.onArtifactsChange = { [weak self] in self?.captureLibrary.refresh() }
+        thumbnails.onLibraryExportStatus = { [weak self] url, status in self?.captureLibrary.setExportStatus(url, status: status) }
         warningItem = NSMenuItem(title: "", action: #selector(showWarnings), keyEquivalent: "")
         warningItem.target = self; menu.addItem(warningItem)
         warningItem.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "設定の警告")
@@ -76,9 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.target = self; statusItem.button?.action = #selector(statusClicked)
         reloadConfig()
         warnings += VideoEditStore.cleanupAtLaunch(directory: config.outputURL())
-        recentCaptures.refresh()
         updateWarnings()
         hotkey.onPress = { [weak self] in self?.shoot() }
+        libraryHotkey.onPress = { [weak self] in self?.openLibrary() }
         overlay.onCapture = { [weak self] request, remember, output in
             guard let self else { return }
             if output == .video { self.startRecording(request, remember: remember) }
@@ -93,17 +95,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func applicationWillTerminate(_ notification: Notification) {
         annotationNavigationDiagnostics.stop()
-        hotkey.stop(); overlay.close(); recordingBorder.close(); recordingTimer?.invalidate()
+        hotkey.stop(); libraryHotkey.stop(); captureLibrary.close()
+        overlay.close(); recordingBorder.close(); recordingTimer?.invalidate()
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
         if recordingState.phase == .idle { reloadConfig() }
-        recentCaptures.refresh()
         shootItem.isEnabled = recordingState.phase == .recording || !busy && recordingState.phase == .idle
     }
     private func reloadConfig() {
         let result = ConfigLoader.load()
         config = result.config; warnings = result.warnings
+        // 設定変更で撮影と一覧のキーを交換しても、古い一覧の登録を先に解放する。
+        libraryHotkey.unregister()
         if let warning = hotkey.register(config.hotkey) { warnings.append(warning) }
+        if let key = config.libraryHotkey {
+            if let warning = libraryHotkey.register(key) { warnings.append("撮影の一覧: " + warning) }
+        } else { libraryHotkey.unregister() }
+        libraryItem?.title = "撮影の一覧を開く" + (config.libraryHotkey.map { "  " + HotkeyPresentation.label($0) } ?? "")
         updateHotkeyLabel()
         updateWarnings()
     }
@@ -125,12 +133,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         warningItem?.title = "設定の警告 \(warnings.count)件…"
     }
     @objc private func showWarnings() { alert("UTSUSHIEの警告", warnings.joined(separator: "\n")) }
-    private func restoreCapture(_ url: URL) {
-        let seconds = config.thumbnailSeconds
-        Task {
-            do { try await thumbnails.restore(url, seconds: seconds, screen: NSScreen.main) }
-            catch { alert("撮影のカードを開けませんでした", error.localizedDescription) }
-        }
+    @objc private func openLibrary() {
+        reloadConfig()
+        captureLibrary.open()
     }
     @objc private func shoot() {
         if recordingState.phase == .recording { stopRecording(); return }

@@ -509,6 +509,7 @@ func seekingDuringTransitionPreviewCancelsAnimationAndDoesNotResumePlayback(_ ki
     #expect(loaded.image.width <= 32 && loaded.image.height <= 32)
     #expect(RecentCaptures.title(file: file, width: 64, height: 48, duration: loaded.artifact.duration).hasSuffix("MP4 0:03"))
     let controller = ThumbnailController(); controller.editorFocus = .init(activate: {}, restore: { _ in })
+    controller.annotationConfig = { UtsushieConfig() }
     defer { for card in controller.cards { controller.remove(card.id) } }
     let id = try await controller.restore(file.url, seconds: 5, screen: nil)
     let card = try #require(controller.card(for: file.url))
@@ -519,4 +520,58 @@ func seekingDuringTransitionPreviewCancelsAnimationAndDoesNotResumePlayback(_ ki
     #expect(abs(editor.timeline.document.duration - source.duration) < 0.001)
     editor.window.close()
     #expect(abs(try #require(card.timer).fireDate.timeIntervalSinceNow - 5) < 0.5)
+}
+
+@MainActor @Test func libraryVideoCompletionKeepsOriginalSuppressesStillCardsAndRecoversFromFailedCopy() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    let initial = try Data(contentsOf: source.temporaryURL)
+    let controller = ThumbnailController()
+    controller.editorFocus = .init(activate: {}, restore: { _ in })
+    controller.annotationConfig = { UtsushieConfig() }
+    controller.makeVideoSession = { VideoEditSession(artifact: $0, fps: $1, rememberDirectory: { _ in }) }
+    defer { controller.closeLibrarySessions() }
+    var statuses: [String?] = [], returned = 0
+    controller.onLibraryExportStatus = { _, status in statuses.append(status) }
+    try await controller.editFromLibrary(source.temporaryURL) { returned += 1 }
+    let card = try #require(controller.card(for: source.temporaryURL))
+    // 試験では専用pasteboardへコピーし、利用者のクリップボードを変えない。
+    let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+    card.copyEntries = { ClipboardWriter.copy($0, mode: $1, to: board, preservingOnFailure: true) }
+    let editor = try #require(card.videoEditor)
+    var document = VideoEditDocument(duration: source.duration, kept: [.init(0.3, 2.7)])
+    _ = document.addStill(at: 1.4)
+    let complete = try #require(editor.onComplete)
+    editor.window.close() // 実装と同じく閉じた後に完了する。
+    #expect(returned == 1)
+    complete(document)
+    #expect(card.finalizing && statuses.last! == "書き出し中…")
+    for _ in 0..<300 where card.finalizing { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(!card.finalizing && statuses.last! == nil)
+    #expect(controller.cards.isEmpty && !card.panel.isVisible && card.timer == nil)
+    #expect(board.pasteboardItems?.count == 1 && board.pasteboardItems?.first?.types.contains(ArtifactKind.webP.pasteboardType) == true)
+    let afterFirst = try RecentCaptureStore.files(in: dir)
+    #expect(afterFirst.filter { $0.kind == .webP }.count == 1)
+    let originals = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+        .filter { $0.lastPathComponent.hasPrefix(VideoEditStore.originalPrefix) }
+    let original = try #require(originals.first)
+    #expect(try Data(contentsOf: original) == initial)
+    let firstSaved = try Data(contentsOf: source.temporaryURL)
+    try await controller.editFromLibrary(source.temporaryURL) { returned += 1 }
+    let second = try #require(card.videoEditor)
+    #expect(second.timeline.document == document)
+    var changed = VideoEditDocument(duration: source.duration, kept: [.init(0, 3)])
+    _ = changed.addStill(at: 1.4)
+    card.copyEntries = { _, _ in false }
+    let retry = try #require(second.onComplete); second.window.close(); retry(changed)
+    for _ in 0..<300 where card.finalizing { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(statuses.last!!.hasPrefix("!") && !card.finalizing && controller.cards.isEmpty)
+    #expect(try Data(contentsOf: source.temporaryURL) == firstSaved)
+    #expect(try RecentCaptureStore.files(in: dir).filter { $0.kind == .webP }.count == 1)
+    try await controller.editFromLibrary(source.temporaryURL) { returned += 1 }
+    #expect(card.videoEditor?.timeline.document == changed)
+    card.videoEditor?.window.close(); controller.closeLibrarySessions()
+    #expect(returned == 3 && !FileManager.default.fileExists(atPath: original.path))
 }

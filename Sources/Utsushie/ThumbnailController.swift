@@ -4,24 +4,31 @@ import UtsushieCore
 @MainActor
 final class ThumbnailController {
     private(set) var cards: [ThumbnailCard] = []
+    private var libraryCards: [ThumbnailCard] = []
+    private var allCards: [ThumbnailCard] { cards + libraryCards }
     private var suspended = false
     private var editingCards: Set<UUID> = []
     private var keyboardTargetID: UUID?
     let recentImages = RecentImageMemory()
     var annotationConfig: () -> UtsushieConfig = { ConfigLoader.load().config }
     var editorFocus = AnnotationApplicationFocus()
+    var makeVideoSession: (SharedArtifact, Int) -> VideoEditSession = { VideoEditSession(artifact: $0, fps: $1) }
     var onArtifactsChange: (() -> Void)?
+    var onLibraryExportStatus: ((URL, String?) -> Void)?
 
     @discardableResult
     func add(_ artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, screen: NSScreen?, finalizing: Bool = false,
-             imageState: ImageEditState? = nil) -> UUID {
+             imageState: ImageEditState? = nil, libraryOnly: Bool = false) -> UUID {
         let card = ThumbnailCard(artifact: artifact, image: image, copied: copied, seconds: seconds, finalizing: finalizing, imageState: imageState)
         card.screen = screen ?? NSScreen.main ?? NSScreen.screens.first
         card.editorFocus = editorFocus
+        card.makeVideoSession = makeVideoSession
         card.onEditingChange = { [weak self, weak card] editing in
             guard let self, let card else { return }
             if editing { editingCards.insert(card.id) } else { editingCards.remove(card.id) }
-            for other in cards { other.setEditingSuspended(!editingCards.isEmpty, restart: !editing) }
+            for other in allCards { other.setEditingSuspended(!editingCards.isEmpty, restart: !editing) }
+            // 画像の再編集はRecentImageMemoryの最新10件へ委ねる。動画だけ一覧を閉じるまで元を持つ。
+            if !editing && libraryOnly && card.artifact.kind == .webP { card.onClose?() }
         }
         card.setEditingSuspended(!editingCards.isEmpty)
         card.onArtifactChange = { [weak self, weak card] in
@@ -32,10 +39,20 @@ final class ThumbnailController {
         card.onStills = { [weak self, weak card] stills in
             guard let self, let card else { return }
             for still in stills {
-                self.add(still.artifact, image: still.image, copied: true, seconds: seconds, screen: card.screen)
+                if card.libraryEditing {
+                    let state = ImageEditState(original: still.image)
+                    if let files = try? RecentCaptureStore.files(in: still.artifact.url.deletingLastPathComponent()) {
+                        recentImages.remember(state, at: still.artifact.url, among: files)
+                    }
+                } else { self.add(still.artifact, image: still.image, copied: true, seconds: seconds, screen: card.screen) }
             }
+            if !stills.isEmpty { onArtifactsChange?() }
         }
-        card.canShow = { [weak self] in self?.suspended == false }
+        card.onExportStatus = { [weak self, weak card] status in
+            guard let card else { return }
+            self?.onLibraryExportStatus?(card.artifact.url, status)
+        }
+        card.canShow = { [weak self] in !libraryOnly && self?.suspended == false }
         card.onRequestKeys = { [weak self, weak card] in
             guard let self, let card, self.cards.contains(where: { $0 === card }) else { return }
             self.keyboardTargetID = card.id
@@ -45,16 +62,19 @@ final class ThumbnailController {
             guard let self, let card else { return }
             card.close()
             self.cards.removeAll { $0 === card }
-            if self.keyboardTargetID == card.id { self.keyboardTargetID = self.cards.last?.id }
-            self.updateKeyboardTarget()
-            self.layout()
+            self.libraryCards.removeAll { $0 === card }
+            if !libraryOnly {
+                if self.keyboardTargetID == card.id { self.keyboardTargetID = self.cards.last?.id }
+                self.updateKeyboardTarget(); self.layout()
+            }
         }
-        cards.append(card)
+        if libraryOnly { libraryCards.append(card) } else { cards.append(card) }
         if !finalizing { rememberImage(card) }
-        keyboardTargetID = card.id
-        updateKeyboardTarget()
-        layout()
-        if !suspended { card.show() }
+        if !libraryOnly {
+            keyboardTargetID = card.id
+            updateKeyboardTarget(); layout()
+            if !suspended { card.show() }
+        }
         return card.id
     }
     func complete(_ id: UUID, artifact: SharedArtifact, image: CGImage, copied: Bool) {
@@ -69,7 +89,29 @@ final class ThumbnailController {
         cards.forEach { value ? $0.hide() : $0.show() }
     }
     func card(for url: URL) -> ThumbnailCard? {
-        cards.first { $0.artifact.url.standardizedFileURL == url.standardizedFileURL }
+        allCards.first { $0.artifact.url.standardizedFileURL == url.standardizedFileURL }
+    }
+    /// カードの編集セッションを使うが、一覧専用のカードは配置・キー・寿命へ参加させない。
+    func editFromLibrary(_ url: URL, onReturn: @escaping () -> Void) async throws {
+        var target = card(for: url)
+        if target == nil {
+            let file = RecentCaptureFile(url: url.standardizedFileURL, date: Date())
+            let state = recentImages.state(for: url)
+            let capture = try await RecentCaptureStore.load(file, maximumPixelSize: state != nil || file.kind == .mp4 ? 320 : nil)
+            guard !Task.isCancelled else { return }
+            target = card(for: url)
+            if target == nil {
+                add(capture.artifact, image: capture.image, copied: false, seconds: 5, screen: NSScreen.main,
+                    imageState: state, libraryOnly: true)
+                target = card(for: url)
+            }
+        }
+        guard let target else { return }
+        guard target.canEdit else { throw CaptureError.unavailable("書き出しが終わるまでお待ちください") }
+        target.openEditorFromLibrary(onReturn: onReturn)
+    }
+    func closeLibrarySessions() {
+        for card in libraryCards { card.onClose?() }
     }
     func pruneMemory(to files: [RecentCaptureFile]) { recentImages.retain(files) }
     private func rememberImage(_ card: ThumbnailCard) {
@@ -121,6 +163,9 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     var onStills: (([VideoStillArtifact]) -> Void)?
     var onEditingChange: ((Bool) -> Void)?
     var onArtifactChange: (() -> Void)?
+    var onExportStatus: ((String?) -> Void)?
+    private var onLibraryReturn: (() -> Void)?
+    private(set) var libraryEditing = false
     private var view: ThumbnailView!
     private(set) var timer: Timer?
     private var remaining: Double
@@ -145,6 +190,10 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     var copyImage: (SharedArtifact, Data, ClipboardMode) -> Bool = {
         ClipboardWriter.copy($0, data: $1, mode: $2, to: .general, preservingOnFailure: true)
     }
+    var copyEntries: ([ClipboardEntry], ClipboardMode) -> Bool = {
+        ClipboardWriter.copy($0, mode: $1, to: .general, preservingOnFailure: true)
+    }
+    var makeVideoSession: (SharedArtifact, Int) -> VideoEditSession = { VideoEditSession(artifact: $0, fps: $1) }
     var canEdit: Bool { !finalizing && (artifact.kind == .mp4 || imageState != nil) }
     private(set) var finalizing: Bool
 
@@ -245,7 +294,19 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     }
     func windowDidBecomeKey(_ notification: Notification) { view.refreshControls(); view.needsDisplay = true }
     @objc func dismiss() { onClose?() }
+    func openEditorFromLibrary(onReturn: @escaping () -> Void) {
+        libraryEditing = true; onLibraryReturn = onReturn
+        if editor != nil || videoEditor != nil { bringForward() } else { startEdit() }
+    }
+    private func returnToLibrary() {
+        onLibraryReturn?(); onLibraryReturn = nil
+        // 動画はonCloseの後にonCompleteを呼ぶ。ここで起点を消すと静止画カードが出てしまう。
+    }
     @objc func edit() {
+        libraryEditing = false; onLibraryReturn = nil
+        startEdit()
+    }
+    private func startEdit() {
         if artifact.kind == .mp4 { editVideo(); return }
         guard canEdit, editor == nil, let imageState else { return }
         hide()
@@ -270,13 +331,14 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             // 編集パネルが手放したキーを貼り付け先へ返す。ホバー時には再び取得できる。
             if self.canShow() { self.show(claimKeyboard: false) }
             self.onEditingChange?(false)
+            self.returnToLibrary()
         }
         controller.show()
     }
     private func editVideo() {
         guard canEdit, videoEditor == nil, let duration = artifact.duration, duration > 0 else { return }
         hide()
-        if videoSession == nil { videoSession = VideoEditSession(artifact: artifact, fps: annotationConfig().video.fps) }
+        if videoSession == nil { videoSession = makeVideoSession(artifact, annotationConfig().video.fps) }
         guard let session = videoSession else { return }
         let controller = VideoEditorController(source: session.sourceURL, document: session.document, screen: screen, focus: editorFocus)
         videoEditor = controller
@@ -286,6 +348,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             videoEditor = nil; remaining = lifetime
             if canShow() { show(claimKeyboard: false) }
             onEditingChange?(false)
+            returnToLibrary()
         }
         controller.onComplete = { [weak self] document in
             guard let self else { return }
@@ -293,21 +356,29 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             session.document = document
             let config = annotationConfig()
             finalizing = true; pauseTimer(); view.copied = false; view.refreshControls(); view.needsDisplay = true
+            onExportStatus?("書き出し中…")
             Task { [self] in
                 defer { if closed { session.close() } }
                 do {
                     let result = try await session.finish(artifact: artifact, config: config) {
-                        ClipboardWriter.copy($0, mode: config.clipboard, to: .general, preservingOnFailure: true)
+                        copyEntries($0, config.clipboard)
                     }
                     if let image = result.image {
                         complete(artifact: result.video, image: image, copied: result.stills.isEmpty)
                     } else {
                         finalizing = false; view.copied = result.stills.isEmpty
                         view.refreshControls(); view.needsDisplay = true; resumeTimer()
+                        onArtifactChange?()
                     }
                     onStills?(result.stills)
+                    onExportStatus?(nil)
+                    libraryEditing = false
                 } catch {
                     finalizing = false; view.refreshControls(); view.needsDisplay = true
+                    onExportStatus?("! 動画の編集を完了できませんでした: " + error.localizedDescription)
+                    let reportInLibrary = libraryEditing
+                    libraryEditing = false
+                    if reportInLibrary { return }
                     if !closed {
                         // Eで開き直すまで失敗の説明を読めるように寿命を止める。
                         hovered = true

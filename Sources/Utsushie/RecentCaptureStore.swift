@@ -11,15 +11,15 @@ struct LoadedCapture: Sendable {
 enum RecentCaptureStore {
     static func files(in directory: URL) throws -> [RecentCaptureFile] {
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isHiddenKey, .contentModificationDateKey]
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isHiddenKey, .contentModificationDateKey, .fileSizeKey]
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: Array(keys))
-        return RecentCaptures.newest(files.compactMap { url in
+        return RecentCaptures.all(files.compactMap { url in
             guard let values = try? url.resourceValues(forKeys: keys) else { return nil }
             return RecentCaptureFile(url: url.standardizedFileURL, date: values.contentModificationDate ?? .distantPast,
-                isRegularFile: values.isRegularFile == true, isHidden: values.isHidden == true)
+                isRegularFile: values.isRegularFile == true, isHidden: values.isHidden == true, byteCount: values.fileSize ?? 0)
         })
     }
-    /// メニューは小さい絵だけを読む。再表示時に記憶が無い画像だけ全ピクセルをデコードする。
+    /// 一覧は縮小した絵だけを読む。編集時に記憶が無い画像だけ全ピクセルをデコードする。
     static func load(_ file: RecentCaptureFile, maximumPixelSize: Int? = nil) async throws -> LoadedCapture {
         guard let kind = file.kind else { throw CaptureError.unavailable("この形式は開けません") }
         let bytes = try FileManager.default.attributesOfItem(atPath: file.url.path)[.size] as? NSNumber

@@ -150,38 +150,179 @@ func allCardLifetimesPauseDuringEitherEditorAndResumeIndependently(_ video: Bool
     memory.retain([]); #expect(memory.count == 0)
 }
 
-@MainActor @Test func recentMenuReadsImageTitlesThumbnailsAndSelectionAndDefersStructuralChanges() async throws {
+@MainActor @Test func libraryListsFilesAndKeepsSelectionAcrossUpdatesAndFinderDeletion() async throws {
     let dir = try recentDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let image = try recentImage()
     let old = try recentArtifact(image, in: dir), newest = try recentArtifact(image, in: dir, seconds: 1)
     try Data([1]).write(to: dir.appendingPathComponent(".private-original.webp"))
     try FileManager.default.createDirectory(at: dir.appendingPathComponent("folder.mp4"), withIntermediateDirectories: true)
-    var selected: URL?, listed: [RecentCaptureFile] = []
-    let recent = RecentCaptureMenu(directory: { dir }, onFiles: { listed = $0 }, onSelect: { selected = $0 })
-    recent.refresh()
-    for _ in 0..<200 where recent.menu.items.contains(where: { !$0.isEnabled }) { try await Task.sleep(for: .milliseconds(10)) }
-    #expect(listed.map(\.url) == [newest.url, old.url])
-    #expect(recent.menu.items.count == 2 && recent.menu.items.allSatisfy { $0.isEnabled && $0.image != nil && $0.title.hasSuffix("WebP 160×100") })
-    recent.menu.performActionForItem(at: 0); #expect(selected == newest.url)
-    recent.menuWillOpen(recent.menu)
+    let recent = CaptureLibraryController(directory: { dir }, config: { UtsushieConfig() }, thumbnails: recentController(), remembersFrame: false)
+    await recent.reload()
+    #expect(recent.files.map(\.url) == [newest.url, old.url])
+    #expect(recent.selection.focusedURL == newest.url)
+    recent.select(old.url)
+    let third = try recentArtifact(image, in: dir, seconds: 2)
+    await recent.reload()
+    #expect(recent.selection.focusedURL == old.url)
     try FileManager.default.removeItem(at: newest.url)
-    recent.refresh(); #expect(recent.menu.items.count == 2)
-    recent.menuDidClose(recent.menu)
-    for _ in 0..<200 where recent.menu.items.count != 1 { try await Task.sleep(for: .milliseconds(10)) }
-    #expect(recent.menu.items.count == 1)
+    await recent.reload(); #expect(recent.files.count == 2 && recent.selection.focusedURL == old.url)
     try FileManager.default.removeItem(at: old.url)
-    recent.refresh(); #expect(recent.menu.items.count == 1 && recent.menu.items[0].title == "撮影はありません" && !recent.menu.items[0].isEnabled)
+    await recent.reload(); #expect(recent.selection.focusedURL == third.url)
+    try FileManager.default.removeItem(at: third.url)
+    await recent.reload(); #expect(recent.files.isEmpty && recent.selection.urls.isEmpty)
 }
 
-@MainActor @Test func unreadableRecentCaptureIsDisabledAndDoesNotBlockOtherRows() async throws {
+@MainActor @Test func unreadableLibraryCaptureDoesNotBlockListingAndLoadsFailIndependently() async throws {
     let dir = try recentDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     _ = try recentArtifact(recentImage(), in: dir)
     try Data([1, 2]).write(to: dir.appendingPathComponent("broken.webp"))
-    let recent = RecentCaptureMenu(directory: { dir }, onFiles: { _ in }, onSelect: { _ in })
-    recent.refresh()
-    for _ in 0..<200 where recent.menu.items.contains(where: { $0.title == "読み込み中…" }) { try await Task.sleep(for: .milliseconds(10)) }
-    #expect(recent.menu.items.filter(\.isEnabled).count == 1)
-    #expect(recent.menu.items.first { !$0.isEnabled }?.title == "読み取れません: broken.webp")
+    let files = try RecentCaptureStore.files(in: dir)
+    #expect(files.count == 2)
+    var loaded = 0, failed = 0
+    for file in files {
+        do { _ = try await RecentCaptureStore.load(file, maximumPixelSize: 64); loaded += 1 }
+        catch { failed += 1 }
+    }
+    #expect(loaded == 1 && failed == 1)
+}
+
+@MainActor @Test func libraryEditingNeverShowsCardOrChangesVisibleCardPlacementAndRetainsHistory() async throws {
+    let dir = try recentDirectory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let image = try recentImage(), controller = recentController()
+    defer { controller.closeLibrarySessions(); closeRecentCards(controller) }
+    let visible = try recentArtifact(image, in: dir, seconds: 1)
+    controller.add(visible, image: image, copied: false, seconds: 20, screen: nil)
+    let sibling = try #require(controller.card(for: visible.url)), frame = sibling.panel.frame
+    let hidden = try recentArtifact(image, in: dir)
+    var returned = 0
+    try await controller.editFromLibrary(hidden.url) { returned += 1 }
+    let card = try #require(controller.card(for: hidden.url))
+    #expect(controller.cards.count == 1 && !card.panel.isVisible && card.timer == nil)
+    #expect(sibling.panel.frame == frame && sibling.timer == nil)
+    let original = try #require(card.imageState).original
+    let editor = try #require(card.editor)
+    let mark = Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 60, y: 60))
+    editor.canvas.appendPrivacyAnnotations([mark])
+    let board = NSPasteboard.withUniqueName(); defer { board.releaseGlobally() }
+    card.copyImage = { ClipboardWriter.copy($0, data: $1, mode: $2, to: board) }
+    let composed = try AnnotationRenderer.compose(original, document: editor.canvas.document)
+    try await editor.onComplete?(composed, editor.canvas.document)
+    editor.window.close()
+    #expect(returned == 1 && !card.panel.isVisible && card.timer == nil)
+    #expect(controller.card(for: hidden.url) == nil)
+    #expect(recentLifetimeIs(sibling, seconds: 20) && sibling.panel.frame == frame)
+    try await controller.editFromLibrary(hidden.url) { returned += 1 }
+    let reopened = try #require(controller.card(for: hidden.url))
+    #expect(reopened.imageState?.original === original)
+    #expect(reopened.editor?.canvas.document.annotations == [mark])
+    reopened.editor?.window.close()
+    #expect(returned == 2)
+    controller.closeLibrarySessions()
+    #expect(controller.card(for: hidden.url) == nil && controller.cards.count == 1)
+}
+
+@MainActor @Test func libraryEditingReusesAlreadyVisibleCardAndAlreadyOpenEditor() async throws {
+    let dir = try recentDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
+    let image = try recentImage(), controller = recentController()
+    defer { closeRecentCards(controller) }
+    let artifact = try recentArtifact(image, in: dir)
+    controller.add(artifact, image: image, copied: false, seconds: 10, screen: nil)
+    let card = try #require(controller.card(for: artifact.url))
+    card.edit(); let editor = try #require(card.editor)
+    var returned = false
+    try await controller.editFromLibrary(artifact.url) { returned = true }
+    #expect(controller.cards.count == 1 && card.editor === editor)
+    editor.window.close()
+    #expect(returned && card.panel.isVisible)
+}
+
+@MainActor @Test func libraryPhysicalNavigationIgnoresIMECharactersAndCommandModifiers() async throws {
+    let dir = try recentDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
+    let image = try recentImage()
+    for second in 0..<6 { _ = try recentArtifact(image, in: dir, seconds: Double(second)) }
+    let library = CaptureLibraryController(directory: { dir }, config: { UtsushieConfig() }, thumbnails: recentController(), remembersFrame: false)
+    await library.reload()
+    func key(_ code: UInt16, _ modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+            windowNumber: library.window!.windowNumber, context: nil, characters: "あ", charactersIgnoringModifiers: "あ", isARepeat: false, keyCode: code))
+    }
+    #expect(library.handleKey(try key(37)) && library.selection.focusedURL == library.files[1].url)
+    #expect(library.handleKey(try key(38)) && library.selection.focusedURL == library.files[5].url)
+    #expect(library.handleKey(try key(40)) && library.selection.focusedURL == library.files[1].url)
+    #expect(library.handleKey(try key(4)) && library.selection.focusedURL == library.files[0].url)
+    #expect(!library.handleKey(try key(37, .command)) && library.selection.focusedURL == library.files[0].url)
+    #expect(!library.handleKey(try key(36)) && library.selection.focusedURL == library.files[0].url)
+    #expect(library.numberOfPreviewItems(in: nil) == 1)
+    #expect((library.previewPanel(nil, previewItemAt: 0) as? NSURL) as URL? == library.files[0].url)
+}
+
+@MainActor @Test(arguments: [UInt16(53), 13])
+func libraryCloseKeysCloseOnlyOncePerPressWithoutPreview(_ code: UInt16) throws {
+    let dir = try recentDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
+    let library = CaptureLibraryController(directory: { dir }, config: { UtsushieConfig() }, thumbnails: recentController(), remembersFrame: false)
+    library.applicationFocus = .init(activate: {}, restore: { _ in })
+    library.open(); defer { library.close() }
+    func key(repeating: Bool) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: code == 13 ? .command : [], timestamp: 0,
+            windowNumber: library.window!.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: repeating, keyCode: code))
+    }
+    #expect(library.handleKey(try key(repeating: true)) && library.window?.isVisible == true)
+    #expect(library.handleKey(try key(repeating: false)) && library.window?.isVisible == false)
+}
+
+@MainActor @Test func libraryReusesCellsAndLimitsThumbnailReadsToVisibleFilesAndFourAtOnce() async throws {
+    let dir = try recentDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
+    for index in 0..<1200 { try Data([0]).write(to: dir.appendingPathComponent("\(index).webp")) }
+    let image = try recentImage()
+    let library = CaptureLibraryController(directory: { dir }, config: { UtsushieConfig() }, thumbnails: recentController(), remembersFrame: false)
+    library.applicationFocus = .init(activate: {}, restore: { _ in })
+    var reads = 0, simultaneous = 0, peak = 0
+    library.loadThumbnail = { file in
+        reads += 1; simultaneous += 1; peak = max(peak, simultaneous)
+        defer { simultaneous -= 1 }
+        try await Task.sleep(for: .milliseconds(20))
+        return LoadedCapture(artifact: SharedArtifact(url: file.url, kind: .webP, width: 160, height: 100, byteCount: 1), image: image)
+    }
+    library.open(); defer { library.close() }
+    for _ in 0..<300 where library.files.count != 1200 || reads == 0 || library.isLoadingThumbnails {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(library.files.count == 1200 && reads > 0 && reads < 40 && peak <= 4)
+    let content = try #require(library.window?.contentView)
+    let scroll = try #require(content.subviews.compactMap { $0 as? NSScrollView }.first)
+    let collection = try #require(scroll.documentView as? NSCollectionView)
+    #expect(collection.visibleItems().count < 40 && !collection.visibleItems().isEmpty)
+    let firstReads = reads
+    await library.reload()
+    for _ in 0..<300 where library.isLoadingThumbnails { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(reads == firstReads)
+    library.select(library.files.last!.url)
+    for _ in 0..<300 where reads == firstReads || library.isLoadingThumbnails { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(reads > firstReads && reads < 80 && peak <= 4)
+}
+
+@MainActor private final class LibraryRunningApplication: NSRunningApplication, @unchecked Sendable {
+    let identifier: pid_t
+    init(_ identifier: pid_t) { self.identifier = identifier; super.init() }
+    override var processIdentifier: pid_t { identifier }
+    override var isTerminated: Bool { false }
+}
+
+@MainActor @Test func libraryClosesBackToOpeningApplicationOnlyWhenOwnPIDIsFrontmost() throws {
+    let dir = try recentDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
+    let previous = LibraryRunningApplication(-2)
+    for ownPIDAtClose in [false, true] {
+        var front: NSRunningApplication = previous
+        var restored: NSRunningApplication?, activations = 0
+        let library = CaptureLibraryController(directory: { dir }, config: { UtsushieConfig() }, thumbnails: recentController(), remembersFrame: false)
+        library.applicationFocus = .init(isActive: { true }, frontmostApplication: { front }, activate: { activations += 1 }, restore: { restored = $0 })
+        library.open(); library.open()
+        #expect(activations == 2)
+        front = LibraryRunningApplication(ownPIDAtClose ? ProcessInfo.processInfo.processIdentifier : -3)
+        library.close()
+        #expect(ownPIDAtClose ? restored === previous : restored == nil)
+    }
 }
