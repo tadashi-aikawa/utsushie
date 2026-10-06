@@ -13,7 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let overlay = OverlayController()
     private let capture = CaptureService()
     private let thumbnails = ThumbnailController()
-    private var captureLibrary: CaptureLibraryController!
+    private var captureLibrary: CaptureLibraryController?
+    var installedStatusMenu: NSMenu? { statusItem?.menu }
     private let annotationNavigationDiagnostics = AnnotationNavigationDiagnostics()
     private let recordingBorder = RecordingBorder()
     private var recordingState = RecordingState()
@@ -49,33 +50,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.setActivationPolicy(.accessory)
         annotationNavigationDiagnostics.start()
         lastArea = LastArea.load(from: lastURL)
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.imagePosition = .imageOnly
-        statusItem.button?.imageScaling = .scaleProportionallyDown
-        statusItem.button?.image = Self.logoIcon ?? NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "UTSUSHIE")
-        let menu = NSMenu(); menu.delegate = self; menu.autoenablesItems = false
-        for (title, selector) in [("撮影", #selector(shoot)), ("保存フォルダを開く", #selector(openFolder)), ("設定ファイルを開く", #selector(openConfig))] {
-            let item = NSMenuItem(title: title, action: selector, keyEquivalent: ""); item.target = self; menu.addItem(item)
-            if selector == #selector(shoot) { shootItem = item }
-            if selector == #selector(shoot) { menu.addItem(.separator()) }
-        }
-        captureLibrary = CaptureLibraryController(directory: { [weak self] in self?.config.outputURL() ?? UtsushieConfig().outputURL() },
-            config: { [weak self] in self?.config ?? UtsushieConfig() }, thumbnails: thumbnails)
-        libraryItem = NSMenuItem(title: "撮影の一覧を開く", action: #selector(openLibrary), keyEquivalent: "")
-        libraryItem.target = self; menu.insertItem(libraryItem, at: 2)
-        thumbnails.onArtifactsChange = { [weak self] in self?.captureLibrary.refresh() }
-        thumbnails.onLibraryExportStatus = { [weak self] url, status in self?.captureLibrary.setExportStatus(url, status: status) }
-        warningItem = NSMenuItem(title: "", action: #selector(showWarnings), keyEquivalent: "")
-        warningItem.target = self; menu.addItem(warningItem)
-        warningItem.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "設定の警告")
-        menu.addItem(.separator())
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "開発版"
-        let versionItem = NSMenuItem(title: "UTSUSHIE \(version)", action: nil, keyEquivalent: "")
-        versionItem.isEnabled = false; menu.addItem(versionItem)
-        let quit = NSMenuItem(title: "UTSUSHIEを終了", action: #selector(quitApp), keyEquivalent: "q"); quit.target = self; menu.addItem(quit)
-        statusMenu = menu
-        statusItem.menu = menu
-        statusItem.button?.target = self; statusItem.button?.action = #selector(statusClicked)
+        installStatusMenu()
+        thumbnails.onArtifactsChange = { [weak self] in self?.captureLibrary?.refresh() }
+        thumbnails.onLibraryExportStatus = { [weak self] url, status in self?.captureLibrary?.setExportStatus(url, status: status) }
         reloadConfig()
         warnings += VideoEditStore.cleanupAtLaunch(directory: config.outputURL())
         updateWarnings()
@@ -92,11 +69,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.thumbnails.setSuspended(false)
         }
         overlay.onAccessibilityNeeded = { [weak self] in self?.openPrivacy("Privacy_Accessibility") }
+        // AppKitが初期化中の例外を捕捉しても、メニューと撮影の準備は完了した状態にする。
+        captureLibrary = CaptureLibraryController(directory: { [weak self] in self?.config.outputURL() ?? UtsushieConfig().outputURL() },
+            config: { [weak self] in self?.config ?? UtsushieConfig() }, thumbnails: thumbnails)
+    }
+    /// 設定や保存先を読まず、一覧の生成より先に完全なメニューを取り付ける。
+    func installStatusMenu() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.button?.imagePosition = .imageOnly
+        statusItem.button?.imageScaling = .scaleProportionallyDown
+        statusItem.button?.image = Self.logoIcon ?? NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "UTSUSHIE")
+        let menu = NSMenu(); menu.delegate = self; menu.autoenablesItems = false
+        for (title, selector) in [("撮影", #selector(shoot)), ("保存フォルダを開く", #selector(openFolder)), ("設定ファイルを開く", #selector(openConfig))] {
+            let item = NSMenuItem(title: title, action: selector, keyEquivalent: ""); item.target = self; menu.addItem(item)
+            if selector == #selector(shoot) { shootItem = item }
+            if selector == #selector(shoot) { menu.addItem(.separator()) }
+        }
+        libraryItem = NSMenuItem(title: "撮影の一覧を開く", action: #selector(openLibrary), keyEquivalent: "")
+        libraryItem.target = self; menu.insertItem(libraryItem, at: 2)
+        warningItem = NSMenuItem(title: "", action: #selector(showWarnings), keyEquivalent: "")
+        warningItem.target = self; menu.addItem(warningItem)
+        warningItem.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "設定の警告")
+        menu.addItem(.separator())
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "開発版"
+        let versionItem = NSMenuItem(title: "UTSUSHIE \(version)", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false; menu.addItem(versionItem)
+        let quit = NSMenuItem(title: "UTSUSHIEを終了", action: #selector(quitApp), keyEquivalent: "q"); quit.target = self; menu.addItem(quit)
+        statusMenu = menu
+        statusItem.menu = menu
+        statusItem.button?.target = self; statusItem.button?.action = #selector(statusClicked)
     }
     func applicationWillTerminate(_ notification: Notification) {
         annotationNavigationDiagnostics.stop()
-        hotkey.stop(); libraryHotkey.stop(); captureLibrary.close()
+        hotkey.stop(); libraryHotkey.stop(); captureLibrary?.close()
         overlay.close(); recordingBorder.close(); recordingTimer?.invalidate()
+        if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }; statusItem = nil
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
         if recordingState.phase == .idle { reloadConfig() }
@@ -135,6 +142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showWarnings() { alert("UTSUSHIEの警告", warnings.joined(separator: "\n")) }
     @objc private func openLibrary() {
         reloadConfig()
+        guard let captureLibrary else {
+            alert("撮影の一覧を開けませんでした", "アプリを再起動してください。")
+            return
+        }
         captureLibrary.open()
     }
     @objc private func shoot() {

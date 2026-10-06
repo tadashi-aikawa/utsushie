@@ -259,7 +259,7 @@ func allCardLifetimesPauseDuringEitherEditorAndResumeIndependently(_ video: Bool
     #expect((library.previewPanel(nil, previewItemAt: 0) as? NSURL) as URL? == library.files[0].url)
 }
 
-@MainActor @Test(arguments: [UInt16(53), 13])
+@MainActor @Test(arguments: [UInt16(12), 53, 13])
 func libraryCloseKeysCloseOnlyOncePerPressWithoutPreview(_ code: UInt16) throws {
     let dir = try recentDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
     let library = CaptureLibraryController(directory: { dir }, config: { UtsushieConfig() }, thumbnails: recentController(), remembersFrame: false)
@@ -271,6 +271,50 @@ func libraryCloseKeysCloseOnlyOncePerPressWithoutPreview(_ code: UInt16) throws 
     }
     #expect(library.handleKey(try key(repeating: true)) && library.window?.isVisible == true)
     #expect(library.handleKey(try key(repeating: false)) && library.window?.isVisible == false)
+}
+
+@MainActor @Test(arguments: [20, 860])
+func libraryRestoresSavedFrameBeforeAttachingDelegateAndKeepsGridPositive(_ savedWidth: Int) throws {
+    let name = "UTSUSHIE-Library-Test-\(UUID().uuidString)"
+    defer { NSWindow.removeFrame(usingName: name) }
+    let seed = NSWindow(contentRect: CGRect(x: 40, y: 40, width: savedWidth, height: 520),
+        styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+    seed.isReleasedWhenClosed = false
+    let savedFrame = seed.frame
+    seed.saveFrame(usingName: name); seed.close()
+    let directory = try recentDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    // 同じ保存済みframeで2回生成し、次回起動と同じ復元経路を通す。
+    for _ in 0..<2 {
+        let library = CaptureLibraryController(directory: { directory }, config: { UtsushieConfig() },
+            thumbnails: recentController(), frameAutosaveName: name)
+        let window = try #require(library.window)
+        defer { window.setFrameAutosaveName(""); library.close() }
+        #expect(window.frameAutosaveName == name && window.delegate === library)
+        if savedWidth >= 680 { #expect(window.frame.size == savedFrame.size) }
+        let content = try #require(window.contentView)
+        let scroll = try #require(content.subviews.compactMap { $0 as? NSScrollView }.first)
+        let collection = try #require(scroll.documentView as? NSCollectionView)
+        let layout = try #require(collection.collectionViewLayout as? NSCollectionViewFlowLayout)
+        #expect(layout.itemSize.width > 0 && layout.itemSize.height > 0)
+        library.windowDidResize(Notification(name: NSWindow.didResizeNotification, object: window))
+        library.windowDidBecomeKey(Notification(name: NSWindow.didBecomeKeyNotification, object: window))
+        #expect(layout.itemSize.width > 0 && layout.itemSize.height > 0)
+        let grid = CaptureLibrary.gridLayout(for: scroll.contentSize.width)
+        #expect(layout.itemSize == CGSize(width: grid.itemWidth, height: grid.itemHeight))
+    }
+}
+
+@MainActor @Test func applicationMenuIsCompleteAndTerminationIsSafeWithoutLibrary() throws {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    defer { delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification, object: app)) }
+    // 起動全体は実行せず、設定・利用者の保存先を読む前のメニュー生成だけを試す。
+    delegate.installStatusMenu()
+    let menu = try #require(delegate.installedStatusMenu)
+    #expect(menu.items.contains { $0.title == "撮影" && $0.target === delegate })
+    #expect(menu.items.contains { $0.title == "撮影の一覧を開く" && $0.target === delegate })
+    #expect(menu.items.contains { $0.title == "UTSUSHIEを終了" && $0.target === delegate })
 }
 
 @MainActor @Test func libraryReusesCellsAndLimitsThumbnailReadsToVisibleFilesAndFourAtOnce() async throws {

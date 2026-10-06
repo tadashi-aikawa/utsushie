@@ -8,6 +8,7 @@ final class ThumbnailController {
     private var allCards: [ThumbnailCard] { cards + libraryCards }
     private var suspended = false
     private var editingCards: Set<UUID> = []
+    private var removingURLs: Set<URL> = []
     private var keyboardTargetID: UUID?
     let recentImages = RecentImageMemory()
     var annotationConfig: () -> UtsushieConfig = { ConfigLoader.load().config }
@@ -93,6 +94,9 @@ final class ThumbnailController {
     }
     /// カードの編集セッションを使うが、一覧専用のカードは配置・キー・寿命へ参加させない。
     func editFromLibrary(_ url: URL, onReturn: @escaping () -> Void) async throws {
+        guard !removingURLs.contains(url.standardizedFileURL) else {
+            throw CaptureError.unavailable("ゴミ箱へ移しています")
+        }
         var target = card(for: url)
         if target == nil {
             let file = RecentCaptureFile(url: url.standardizedFileURL, date: Date())
@@ -106,7 +110,7 @@ final class ThumbnailController {
                 target = card(for: url)
             }
         }
-        guard let target else { return }
+        guard let target, !removingURLs.contains(url.standardizedFileURL) else { return }
         guard target.canEdit else { throw CaptureError.unavailable("書き出しが終わるまでお待ちください") }
         target.openEditorFromLibrary(onReturn: onReturn)
     }
@@ -114,6 +118,28 @@ final class ThumbnailController {
         for card in libraryCards { card.onClose?() }
     }
     func pruneMemory(to files: [RecentCaptureFile]) { recentImages.retain(files) }
+    func canRemoveFromLibrary(_ url: URL) -> Bool {
+        guard !removingURLs.contains(url.standardizedFileURL) else { return false }
+        return allCards.filter { $0.artifact.url.standardizedFileURL == url.standardizedFileURL }
+            .allSatisfy { $0.editor == nil && $0.videoEditor == nil && !$0.finalizing }
+    }
+    /// 非同期のゴミ箱移動中に、カードから同じファイルの編集を始めない。
+    func reserveLibraryRemoval(_ urls: [URL]) {
+        removingURLs.formUnion(urls.map(\.standardizedFileURL))
+        for card in allCards where removingURLs.contains(card.artifact.url.standardizedFileURL) {
+            card.setRemovalPending(true)
+        }
+    }
+    func finishLibraryRemoval(_ urls: [URL], removed: Set<URL>) {
+        forgetLibraryFiles(removed)
+        removingURLs.subtract(urls.map(\.standardizedFileURL))
+        for card in allCards where urls.contains(card.artifact.url.standardizedFileURL) { card.setRemovalPending(false) }
+    }
+    func forgetLibraryFiles(_ urls: Set<URL>) {
+        let normalized = Set(urls.map(\.standardizedFileURL))
+        for card in allCards where normalized.contains(card.artifact.url.standardizedFileURL) { card.onClose?() }
+        recentImages.remove(normalized)
+    }
     private func rememberImage(_ card: ThumbnailCard) {
         if let files = try? RecentCaptureStore.files(in: card.artifact.url.deletingLastPathComponent()) {
             if let state = card.imageState { recentImages.remember(state, at: card.artifact.url, among: files) }
@@ -123,11 +149,15 @@ final class ThumbnailController {
     }
     @discardableResult
     func restore(_ url: URL, seconds: Double, screen: NSScreen?) async throws -> UUID {
+        guard !removingURLs.contains(url.standardizedFileURL) else { throw CaptureError.unavailable("ゴミ箱へ移しています") }
         if let existing = card(for: url) { bringForward(existing); return existing.id }
         let file = RecentCaptureFile(url: url.standardizedFileURL, date: Date())
         let state = recentImages.state(for: url)
         let capture = try await RecentCaptureStore.load(file, maximumPixelSize: state != nil || file.kind == .mp4 ? 320 : nil)
         // 読み込みを待つ間に同じファイルが選ばれても、カードを重ねて増やさない。
+        guard !removingURLs.contains(url.standardizedFileURL), FileManager.default.fileExists(atPath: url.path) else {
+            throw CaptureError.unavailable("ファイルが移動されました")
+        }
         if let existing = card(for: url) { bringForward(existing); return existing.id }
         return add(capture.artifact, image: capture.image, copied: false, seconds: seconds, screen: screen, imageState: state)
     }
@@ -175,6 +205,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     private var dragging = false
     private var saving = false
     private var editingSuspended = false
+    private var removalPending = false
     private var keyMonitor: Any?
     private var previousApplication: NSRunningApplication?
     private var isKeyboardTarget = false
@@ -194,7 +225,8 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         ClipboardWriter.copy($0, mode: $1, to: .general, preservingOnFailure: true)
     }
     var makeVideoSession: (SharedArtifact, Int) -> VideoEditSession = { VideoEditSession(artifact: $0, fps: $1) }
-    var canEdit: Bool { !finalizing && (artifact.kind == .mp4 || imageState != nil) }
+    var canEdit: Bool { !finalizing && !removalPending && (artifact.kind == .mp4 || imageState != nil) }
+    var canDrag: Bool { !finalizing && !removalPending }
     private(set) var finalizing: Bool
 
     init(artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, finalizing: Bool, imageState: ImageEditState? = nil) {
@@ -250,6 +282,10 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     func setEditingSuspended(_ value: Bool, restart: Bool = false) {
         pauseTimer(); editingSuspended = value
         if restart { remaining = lifetime }
+        resumeTimer()
+    }
+    func setRemovalPending(_ value: Bool) {
+        pauseTimer(); removalPending = value; view.refreshControls()
         resumeTimer()
     }
     func setKeyboardTarget(_ value: Bool) {
@@ -396,7 +432,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         timer?.invalidate(); timer = nil; started = nil
     }
     private func resumeTimer() {
-        guard visible, editor == nil, videoEditor == nil, !closed, !hovered, !dragging, !saving, !finalizing, !editingSuspended, timer == nil else { return }
+        guard visible, editor == nil, videoEditor == nil, !closed, !hovered, !dragging, !saving, !finalizing, !editingSuspended, !removalPending, timer == nil else { return }
         started = Date()
         timer = Timer.scheduledTimer(withTimeInterval: max(0.01, remaining), repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.onClose?() }
@@ -523,7 +559,7 @@ final class ThumbnailView: NSView, NSDraggingSource {
         }
     }
     override func mouseDragged(with event: NSEvent) {
-        guard !dragged, let downEvent, let card, !card.finalizing,
+        guard !dragged, let downEvent, let card, card.canDrag,
               CardPresentation.action(at: convert(downEvent.locationInWindow, from: nil)) == nil else { return }
         let a = convert(downEvent.locationInWindow, from: nil), b = convert(event.locationInWindow, from: nil)
         guard hypot(a.x - b.x, a.y - b.y) > 4 else { return }

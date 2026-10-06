@@ -24,6 +24,17 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
     private(set) var files: [RecentCaptureFile] = []
     private(set) var sections: [CaptureDaySection] = []
     private(set) var selection = CaptureLibrarySelection()
+    private(set) var deleteConfirmation = CaptureLibraryDeleteConfirmation()
+    private var isTrashing = false
+    var trashFiles: @Sendable ([URL]) -> CaptureLibraryTrashResult = { CaptureLibraryFileActions.trash($0) }
+    var copyEntries: ([ClipboardEntry], ClipboardMode) -> Bool = {
+        ClipboardWriter.copy($0, mode: $1, to: .general, preservingOnFailure: true)
+    }
+    var isPerformingAction: Bool { actionTask != nil }
+    var footerStatus: String? { footer.status }
+    private var orderedURLs: [URL] { sections.flatMap { $0.files.map(\.url) } }
+    private var selectedURLs: [URL] { orderedURLs.filter { selection.urls.contains($0) } }
+    private var singleSelectedURL: URL? { selection.urls.count == 1 ? selectedURLs.first : nil }
     private var positions: [URL: IndexPath] = [:]
     private var columns = 4
     private var reloadTask: Task<Void, Never>?
@@ -40,16 +51,15 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
     private var isClosing = false
 
     init(directory: @escaping () -> URL, config: @escaping () -> UtsushieConfig, thumbnails: ThumbnailController,
-         remembersFrame: Bool = true) {
+         remembersFrame: Bool = true, frameAutosaveName: String = "CaptureLibrary") {
         self.directory = directory; self.config = config; self.thumbnails = thumbnails
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1100, height: 732),
             styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init(window: window)
-        window.delegate = self; window.isReleasedWhenClosed = false
+        window.isReleasedWhenClosed = false
         window.title = "撮影の一覧 0件"; window.minSize = CGSize(width: 680, height: 440)
         window.backgroundColor = UITheme.ink; window.appearance = NSAppearance(named: .darkAqua)
         window.center()
-        if remembersFrame { window.setFrameAutosaveName("CaptureLibrary") }
         let accessory = NSTitlebarAccessoryViewController()
         accessory.layoutAttribute = .right
         accessory.view = NSView(frame: CGRect(x: 0, y: 0, width: 380, height: 28))
@@ -63,12 +73,16 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         layout.sectionInset = NSEdgeInsets(top: 4, left: 18, bottom: 8, right: 18)
         collection.collectionViewLayout = layout
         collection.backgroundColors = [UITheme.ink]; collection.isSelectable = true
-        collection.allowsMultipleSelection = false
+        collection.allowsMultipleSelection = true
         collection.dataSource = self; collection.delegate = self
         collection.register(LibraryItem.self, forItemWithIdentifier: .init("Capture"))
         collection.register(LibraryDayHeader.self, forSupplementaryViewOfKind: NSCollectionView.elementKindSectionHeader,
             withIdentifier: .init("Day"))
         collection.handleKey = { [weak self] event in self?.handleKey(event) ?? false }
+        collection.onBackgroundClick = { [weak self] in
+            guard let self, !self.isTrashing else { return }
+            self.selection.select(nil); self.selectionChanged()
+        }
         scroll.documentView = collection; scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true
         scroll.drawsBackground = true; scroll.backgroundColor = UITheme.ink
         for view in [scroll, footer, empty] {
@@ -83,6 +97,10 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
             empty.centerXAnchor.constraint(equalTo: scroll.centerXAnchor), empty.centerYAnchor.constraint(equalTo: scroll.centerYAnchor)
         ])
         cache.countLimit = 120; cache.totalCostLimit = 64 * 1024 * 1024
+        // 保存済みframeの復元はresize通知を起こす。ビューを用意し、delegateなしで復元する。
+        if remembersFrame { window.setFrameAutosaveName(frameAutosaveName) }
+        resizeGrid()
+        window.delegate = self
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -90,7 +108,7 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         guard let window else { return }
         isClosing = false
         if !window.isVisible {
-            selection.select(nil); message = nil
+            selection.select(nil); cancelDelete(.selectionChange); message = nil
             if let front = applicationFocus.frontmostApplication(), front.processIdentifier != ProcessInfo.processInfo.processIdentifier {
                 previousApplication = front
             }
@@ -105,6 +123,7 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
     }
     /// 公開フォルダの状態を値として取り込み、同じURLの選択を保つ。
     func reload() async {
+        guard !isTrashing else { return }
         generation += 1; let token = generation; let directory = directory()
         do {
             let result = try await Task.detached(priority: .userInitiated) { try RecentCaptureStore.files(in: directory) }.value
@@ -115,7 +134,9 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
             for (section, day) in sections.enumerated() {
                 for (item, file) in day.files.enumerated() { positions[file.url] = IndexPath(item: item, section: section) }
             }
+            let oldSelection = selection
             selection.reconcile(result); thumbnails.pruneMemory(to: result)
+            if selection != oldSelection { cancelDelete(.selectionChange) }
             statuses = statuses.filter { positions[$0.key] != nil }
             pathLabel.stringValue = directory.path; pathLabel.toolTip = directory.path
             window?.title = "撮影の一覧 \(result.count)件"
@@ -130,18 +151,21 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         }
     }
     func windowDidBecomeKey(_ notification: Notification) { if notification.object as? NSWindow === window { refresh() } }
+    func windowDidResignKey(_ notification: Notification) {
+        if notification.object as? NSWindow === window { cancelDelete(.resignKey) }
+    }
     func windowDidResize(_ notification: Notification) { if notification.object as? NSWindow === window { resizeGrid() } }
     private func resizeGrid() {
-        let width = max(1, scroll.contentSize.width)
-        columns = CaptureLibrary.columns(for: width)
-        let itemWidth = floor((width - 36 - CGFloat(columns - 1) * 16) / CGFloat(columns))
-        // 絵の外の6ptに選択縁を描く。16:10はこの内側の絵の寸法。
-        layout.itemSize = CGSize(width: itemWidth, height: (itemWidth - 12) * 10 / 16 + 36)
+        window?.contentView?.layoutSubtreeIfNeeded()
+        let grid = CaptureLibrary.gridLayout(for: scroll.contentSize.width)
+        columns = grid.columns
+        layout.itemSize = CGSize(width: grid.itemWidth, height: grid.itemHeight)
         layout.invalidateLayout()
     }
     func windowWillClose(_ notification: Notification) {
         guard notification.object as? NSWindow === window else { return }
         isClosing = true
+        cancelDelete(.resignKey)
         closePreview(); reloadTask?.cancel(); actionTask?.cancel(); generation += 1
         loading.values.forEach { $0.cancel() }; pending.removeAll()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }; keyMonitor = nil
@@ -155,9 +179,10 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
     }
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
             guard let self, let eventWindow = event.window, self.window?.attachedSheet == nil,
                   eventWindow === self.window || eventWindow === self.previewPanel else { return event }
+            if event.type != .keyDown { self.cancelDelete(.click); return event }
             return self.handleKey(event) ? nil : event
         }
     }
@@ -165,14 +190,34 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
     func handleKey(_ event: NSEvent) -> Bool {
         guard window?.attachedSheet == nil else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if event.keyCode == 7 && modifiers.isEmpty {
+            if !isTrashing && actionTask == nil {
+                switch deleteConfirmation.press(selected: selection.urls, isRepeat: event.isARepeat) {
+                case .armed: message = nil; syncSelection(scrollToSelection: false); updateFooter()
+                case .trash: trashSelected()
+                case .ignored: break
+                }
+            }
+            return true
+        }
+        if event.keyCode == 53 && modifiers.isEmpty && deleteConfirmation.isArmed {
+            if !event.isARepeat { cancelDelete(.escape) }
+            return true
+        }
+        cancelDelete(.otherKey)
         if modifiers == .command {
             switch event.keyCode {
+            case 0:
+                if !event.isARepeat && !isTrashing {
+                    selection.selectAll(orderedURLs); selectionChanged()
+                }
+                return true
             case 8: if !event.isARepeat { copySelected() }; return true
             case 13: if !event.isARepeat { closeFromKeyboard() }; return true
             default: return false
             }
         }
-        guard modifiers.isEmpty else { return false }
+        guard modifiers.isEmpty || modifiers == .shift else { return false }
         let direction: CaptureGridDirection?
         switch event.keyCode {
         case 123, 4: direction = .left
@@ -181,39 +226,95 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         case 126, 40: direction = .up
         default: direction = nil
         }
-        if let direction { move(direction); return true }
+        if let direction { move(direction, extending: modifiers == .shift); return true }
+        guard modifiers.isEmpty else { return false }
         switch event.keyCode {
         case 14: if !event.isARepeat { editSelected() }; return true
         case 1: if !event.isARepeat { saveSelected() }; return true
         case 31:
-            if !event.isARepeat, let url = selection.focusedURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            if !event.isARepeat, requireSingleSelection(), let url = singleSelectedURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             return true
         case 49: if !event.isARepeat { togglePreview() }; return true
-        case 53: if !event.isARepeat { closeFromKeyboard() }; return true
+        case 12, 53: if !event.isARepeat { closeFromKeyboard() }; return true
         default: return false
         }
     }
-    func select(_ url: URL) {
-        guard positions[url] != nil else { return }
-        selection.select(url); message = nil; syncSelection(); updateFooter(); previewPanel?.reloadData()
+    func select(_ url: URL, mode: CaptureLibrarySelectionMode = .single) {
+        guard positions[url] != nil, !isTrashing else { return }
+        selection.select(url, mode: mode, orderedURLs: orderedURLs); selectionChanged()
     }
-    func move(_ direction: CaptureGridDirection) {
+    private func selectionChanged(scrollToSelection: Bool = true) {
+        cancelDelete(.selectionChange); message = nil; syncSelection(scrollToSelection: scrollToSelection); updateFooter()
+        if selection.urls.count != 1 { closePreview() }
+        previewPanel?.reloadData()
+    }
+    func move(_ direction: CaptureGridDirection, extending: Bool = false) {
+        if selection.focusedURL == nil, let first = orderedURLs.first {
+            select(first); return
+        }
         guard let url = selection.focusedURL, let current = positions[url] else { return }
         let next = CaptureGridPosition(section: current.section, item: current.item)
             .moved(direction, counts: sections.map { $0.files.count }, columns: columns)
-        select(sections[next.section].files[next.item].url)
+        select(sections[next.section].files[next.item].url, mode: extending ? .range : .single)
     }
     private func syncSelection(scrollToSelection: Bool = true) {
         collection.selectionIndexPaths = Set(selection.urls.compactMap { positions[$0] })
-        for item in collection.visibleItems() { item.isSelected = collection.selectionIndexPaths.contains(collection.indexPath(for: item) ?? IndexPath()) }
+        for case let item as LibraryItem in collection.visibleItems() {
+            item.isSelected = item.cell.file.map { selection.urls.contains($0.url) } ?? false
+            item.cell.deleteArmed = deleteConfirmation.isArmed && item.isSelected
+            item.cell.multipleSelection = selection.urls.count > 1
+            item.cell.needsDisplay = true
+        }
         if scrollToSelection, let url = selection.focusedURL, let position = positions[url] {
             collection.scrollToItems(at: [position], scrollPosition: .nearestHorizontalEdge.union(.nearestVerticalEdge))
         }
     }
     private func updateFooter() {
-        footer.filename = selection.focusedURL?.lastPathComponent ?? ""
-        footer.status = selection.focusedURL.flatMap { statuses[$0] } ?? message
+        footer.multiple = selection.urls.count > 1
+        footer.deleteArmed = deleteConfirmation.isArmed
+        footer.filename = footer.multiple ? "\(selection.urls.count)件を選択" : singleSelectedURL?.lastPathComponent ?? ""
+        if deleteConfirmation.isArmed {
+            let blocked = selectedURLs.filter { !thumbnails.canRemoveFromLibrary($0) }.count
+            footer.status = "! もう一度 X でゴミ箱へ \(selection.urls.count - blocked)件"
+                + (blocked > 0 ? "・編集中／書き出し中の\(blocked)件は除外" : "")
+        } else { footer.status = message ?? singleSelectedURL.flatMap { statuses[$0] } }
         footer.needsDisplay = true
+    }
+    private func cancelDelete(_ reason: CaptureLibraryDeleteInterruption) {
+        guard deleteConfirmation.interrupt(reason) else { return }
+        syncSelection(scrollToSelection: false); updateFooter()
+    }
+    private func requireSingleSelection() -> Bool {
+        guard selection.urls.count == 1 else {
+            if selection.urls.count > 1 { message = "この操作は1件ずつ"; updateFooter() }
+            return false
+        }
+        return true
+    }
+    private func trashSelected() {
+        let ordered = orderedURLs, selected = selectedURLs
+        let targets = selected.filter { thumbnails.canRemoveFromLibrary($0) }
+        let skipped = selected.count - targets.count
+        syncSelection(scrollToSelection: false)
+        guard !targets.isEmpty else {
+            message = "! 編集中／書き出し中の\(skipped)件はゴミ箱へ移せません"; updateFooter(); return
+        }
+        closePreview(); isTrashing = true; reloadTask?.cancel(); generation += 1
+        thumbnails.reserveLibraryRemoval(targets)
+        message = "ゴミ箱へ移しています \(targets.count)件"; updateFooter()
+        let trash = trashFiles
+        actionTask = Task { [self] in
+            defer { actionTask = nil }
+            // 開始済みの移動は一覧を閉じても完了させ、カードと元録画を必ず後片付けする。
+            let result = await Task.detached(priority: .userInitiated) { trash(targets) }.value
+            thumbnails.finishLibraryRemoval(targets, removed: result.removed)
+            selection.didRemove(result.removed, failed: result.failed, orderedURLs: ordered)
+            isTrashing = false
+            message = !result.failed.isEmpty ? "! \(result.failed.count)件をゴミ箱へ移せませんでした"
+                : "ゴミ箱へ移しました \(result.removed.count)件"
+            if skipped > 0 { message = (message ?? "") + "・! 編集中／書き出し中の\(skipped)件は除外" }
+            if !isClosing { await reload() }
+        }
     }
     func setExportStatus(_ url: URL, status: String?) {
         statuses[url.standardizedFileURL] = status
@@ -222,7 +323,7 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
     }
     private func fail(_ error: Error) { message = "! " + error.localizedDescription; updateFooter() }
     private func editSelected() {
-        guard let url = selection.focusedURL, actionTask == nil else { return }
+        guard requireSingleSelection(), let url = singleSelectedURL, actionTask == nil else { return }
         closePreview(); message = nil; updateFooter()
         actionTask = Task { [weak self] in
             guard let self else { return }
@@ -237,26 +338,25 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         }
     }
     private func copySelected() {
-        guard let url = selection.focusedURL, actionTask == nil else { return }
+        let urls = selectedURLs
+        guard !urls.isEmpty, actionTask == nil else { return }
         let mode = config().clipboard
         actionTask = Task { [weak self] in
             guard let self else { return }; defer { actionTask = nil }
             do {
-                let data = try await Task.detached(priority: .userInitiated) {
-                    url.pathExtension.lowercased() == "webp" && mode != .file ? try Data(contentsOf: url) : nil
+                let entries = try await Task.detached(priority: .userInitiated) {
+                    try CaptureLibraryFileActions.clipboardEntries(urls, mode: mode)
                 }.value
                 guard !Task.isCancelled else { return }
-                let artifact = SharedArtifact(url: url, kind: url.pathExtension.lowercased() == "webp" ? .webP : .mp4,
-                    width: 0, height: 0, byteCount: data?.count ?? 0)
-                guard ClipboardWriter.copy(artifact, data: data, mode: mode, to: .general, preservingOnFailure: true) else {
+                guard copyEntries(entries, mode) else {
                     throw CaptureError.unavailable("クリップボードへコピーできませんでした")
                 }
-                message = "コピー済み"; updateFooter()
+                message = "コピー済み \(entries.count)件"; updateFooter()
             } catch { fail(error) }
         }
     }
     private func saveSelected() {
-        guard let url = selection.focusedURL, let window, actionTask == nil else { return }
+        guard requireSingleSelection(), let url = singleSelectedURL, let window, actionTask == nil else { return }
         let save = NSSavePanel(); save.nameFieldStringValue = url.lastPathComponent
         save.directoryURL = url.deletingLastPathComponent(); save.canCreateDirectories = true
         save.allowedContentTypes = [UTType(filenameExtension: url.pathExtension) ?? .data]
@@ -288,14 +388,31 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         let day = sections[indexPath.section]; header.title = day.title; header.count = day.files.count; header.needsDisplay = true
         return header
     }
-    func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
-        if let index = indexPaths.first { select(sections[index.section].files[index.item].url) }
-    }
     private func configure(_ item: LibraryItem, file: RecentCaptureFile) {
         let view = item.cell
         view.file = file; view.status = statuses[file.url]; view.selected = selection.urls.contains(file.url)
-        view.onSelect = { [weak self] in self?.select(file.url) }
-        view.onEdit = { [weak self] in self?.select(file.url); self?.editSelected() }
+        view.deleteArmed = deleteConfirmation.isArmed && view.selected
+        view.multipleSelection = selection.urls.count > 1
+        view.onSelect = { [weak self] event, mouseUp in
+            guard let self else { return }
+            self.cancelDelete(.click)
+            // 選択済みの項目を押した時点では複数選択を保ち、ドラッグせず離したら1件へ戻す。
+            let modifiers = event.modifierFlags.intersection([.command, .shift])
+            if mouseUp {
+                if modifiers.isEmpty && event.clickCount == 1 { self.select(file.url) }
+            } else if event.clickCount < 2 || self.selection.urls.count <= 1 {
+                if modifiers.contains(.shift) { self.select(file.url, mode: .range) }
+                else if modifiers.contains(.command) { self.select(file.url, mode: .toggle) }
+                else if !self.selection.urls.contains(file.url) { self.select(file.url) }
+            }
+        }
+        view.onEdit = { [weak self] in self?.editSelected() }
+        view.dragItems = { [weak self] in self?.dragItems(from: file.url) ?? [] }
+        view.canMove = { [weak self] urls in
+            guard let self else { return false }
+            return urls.allSatisfy { self.thumbnails.canRemoveFromLibrary($0) }
+        }
+        view.onDragEnd = { [weak self] urls, operation in self?.dragEnded(urls, operation: operation) }
         if let thumbnail = cache.object(forKey: file.cacheKey as NSString) { view.thumbnail = thumbnail }
         else {
             view.thumbnail = nil
@@ -304,6 +421,29 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
             Task { [weak self] in self?.pumpThumbnails() }
         }
         view.needsDisplay = true
+    }
+    func dragURLs(from url: URL) -> [URL] {
+        guard !isTrashing else { return [] }
+        selection.prepareDrag(from: url); selectionChanged(scrollToSelection: false)
+        let urls = selectedURLs
+        guard !urls.contains(where: { thumbnails.card(for: $0)?.finalizing == true || statuses[$0] == "書き出し中…" }) else {
+            message = "! 書き出し中の項目を含むためドラッグできません"; updateFooter(); return []
+        }
+        return urls
+    }
+    private func dragItems(from url: URL) -> [(URL, NSImage?)] {
+        let byURL = Dictionary(uniqueKeysWithValues: files.map { ($0.url, $0) })
+        return dragURLs(from: url).map { url in
+            let file = byURL[url]
+            return (url, file.flatMap { cache.object(forKey: $0.cacheKey as NSString)?.image })
+        }
+    }
+    func dragEnded(_ urls: [URL], operation: NSDragOperation) {
+        guard operation.contains(.move) else { return }
+        let missing = Set(urls.filter { !FileManager.default.fileExists(atPath: $0.path) })
+        thumbnails.forgetLibraryFiles(missing)
+        selection.didRemove(missing, orderedURLs: orderedURLs)
+        refresh()
     }
     func collectionView(_ collectionView: NSCollectionView, willDisplay item: NSCollectionViewItem, forRepresentedObjectAt indexPath: IndexPath) {
         Task { [weak self] in self?.pumpThumbnails() }
@@ -348,8 +488,9 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         MainActor.assumeIsolated { panel.dataSource = nil; panel.delegate = nil; previewPanel = nil }
     }
     private func togglePreview() {
+        guard requireSingleSelection() else { return }
         if previewPanel?.isVisible == true { closePreview(); return }
-        guard selection.focusedURL != nil, let panel = QLPreviewPanel.shared() else { return }
+        guard singleSelectedURL != nil, let panel = QLPreviewPanel.shared() else { return }
         panel.makeKeyAndOrderFront(nil)
     }
     private func closePreview() { previewPanel?.orderOut(nil) }
@@ -361,9 +502,9 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         case .library: window?.close()
         }
     }
-    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { selection.focusedURL == nil ? 0 : 1 }
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int { singleSelectedURL == nil ? 0 : 1 }
     func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
-        selection.focusedURL.map { $0 as NSURL }
+        singleSelectedURL.map { $0 as NSURL }
     }
     func previewPanel(_ panel: QLPreviewPanel!, handle event: NSEvent!) -> Bool { event.type == .keyDown && handleKey(event) }
 }
@@ -388,7 +529,9 @@ private final class LibraryThumbnail: NSObject {
 @MainActor
 private final class LibraryCollectionView: NSCollectionView {
     var handleKey: ((NSEvent) -> Bool)?
+    var onBackgroundClick: (() -> Void)?
     override func keyDown(with event: NSEvent) { if handleKey?(event) != true { super.keyDown(with: event) } }
+    override func mouseDown(with event: NSEvent) { onBackgroundClick?() }
 }
 
 @MainActor
@@ -398,6 +541,7 @@ private final class LibraryItem: NSCollectionViewItem {
     override var isSelected: Bool { didSet { cell.selected = isSelected; cell.needsDisplay = true } }
     override func prepareForReuse() {
         super.prepareForReuse(); cell.file = nil; cell.thumbnail = nil; cell.onSelect = nil; cell.onEdit = nil
+        cell.dragItems = nil; cell.canMove = nil; cell.onDragEnd = nil; cell.deleteArmed = false
     }
 }
 
@@ -406,29 +550,56 @@ private final class LibraryCell: NSView, NSDraggingSource {
     var file: RecentCaptureFile?
     var thumbnail: LibraryThumbnail?
     var selected = false
+    var deleteArmed = false
     var status: String?
-    var onSelect: (() -> Void)?
+    var multipleSelection = false
+    private var doubleClickBlocked = false
+    var onSelect: ((NSEvent, Bool) -> Void)?
     var onEdit: (() -> Void)?
+    var dragItems: (() -> [(URL, NSImage?)])?
+    var canMove: (([URL]) -> Bool)?
+    var onDragEnd: (([URL], NSDragOperation) -> Void)?
+    private var draggedURLs: [URL] = []
     private var downEvent: NSEvent?
     private var dragged = false
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {
-        downEvent = event; dragged = false; onSelect?()
-        if event.clickCount == 2 { onEdit?() }
+        if let collection = superview as? NSCollectionView { window?.makeFirstResponder(collection) }
+        if event.clickCount == 1 { doubleClickBlocked = multipleSelection }
+        downEvent = event; dragged = false; onSelect?(event, false)
+        if event.clickCount == 2 && !doubleClickBlocked { onEdit?() }
     }
-    override func mouseUp(with event: NSEvent) { downEvent = nil }
+    override func mouseUp(with event: NSEvent) {
+        if !dragged, let downEvent { onSelect?(downEvent, true) }
+        downEvent = nil
+    }
     override func mouseDragged(with event: NSEvent) {
-        guard !dragged, let downEvent, let file, status != "書き出し中…" else { return }
+        guard !dragged, let downEvent else { return }
         let a = convert(downEvent.locationInWindow, from: nil), b = convert(event.locationInWindow, from: nil)
         guard hypot(a.x - b.x, a.y - b.y) > 4 else { return }
         dragged = true
-        let item = NSDraggingItem(pasteboardWriter: file.url as NSURL)
-        item.setDraggingFrame(CGRect(x: b.x - 100, y: b.y - 60, width: 200, height: 120), contents: thumbnail?.image)
-        beginDraggingSession(with: [item], event: downEvent, source: self)
+        let captures = dragItems?() ?? []
+        guard !captures.isEmpty else { return }
+        draggedURLs = captures.map(\.0)
+        let items = captures.enumerated().map { offset, capture in
+            let item = NSDraggingItem(pasteboardWriter: capture.0 as NSURL)
+            item.setDraggingFrame(CGRect(x: b.x - 100 + CGFloat(offset % 6) * 8,
+                y: b.y - 60 + CGFloat(offset % 6) * 8, width: 200, height: 120), contents: capture.1 ?? thumbnail?.image)
+            return item
+        }
+        beginDraggingSession(with: items, event: downEvent, source: self)
     }
-    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        switch CaptureLibraryDragOperation.allowed(commandPressed: NSEvent.modifierFlags.contains(.command)) {
+        case .copy: return .copy
+        case .move: return canMove?(draggedURLs) == true ? .move : []
+        }
+    }
     func ignoreModifierKeys(for session: NSDraggingSession) -> Bool { true }
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        onDragEnd?(draggedURLs, operation); draggedURLs = []; downEvent = nil
+    }
     override func draw(_ dirtyRect: NSRect) {
         let preview = CGRect(x: 6, y: 6, width: max(1, bounds.width - 12), height: max(1, bounds.width - 12) * 10 / 16)
         UIDrawing.fill(preview, color: .black, radius: 6)
@@ -446,7 +617,7 @@ private final class LibraryCell: NSView, NSDraggingSource {
         }
         if selected {
             let path = NSBezierPath(roundedRect: preview.insetBy(dx: -4, dy: -4), xRadius: 10, yRadius: 10)
-            UITheme.indigo.setStroke(); path.lineWidth = 2.5; path.stroke()
+            (deleteArmed ? UITheme.red : UITheme.indigo).setStroke(); path.lineWidth = 2.5; path.stroke()
         }
         if let duration = thumbnail?.capture?.artifact.duration {
             let text = CaptureLibrary.videoBadge(duration)
@@ -496,11 +667,16 @@ private final class LibraryDayHeader: NSView {
 private final class LibraryFooter: NSView {
     var filename = ""
     var status: String?
+    var multiple = false
+    var deleteArmed = false
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
         UITheme.ink.setFill(); bounds.fill()
         NSColor.white.withAlphaComponent(0.07).setFill(); CGRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
-        var hints = [("←↓↑→ HJKL", "移動"), ("E", "編集"), ("S", "保存"), ("O", "Finder"), ("⌘C", "コピー"), ("Space", "プレビュー"), ("Esc", "閉じる")]
+        let closeHint = (deleteArmed ? "Esc" : "Q Esc", deleteArmed ? "確認解除" : "閉じる")
+        var hints = multiple
+            ? [("⇧←↓↑→", "範囲"), ("⌘A", "全選択"), ("X", "ゴミ箱"), ("⌘C", "コピー"), closeHint]
+            : [("←↓↑→ HJKL", "移動"), ("E", "編集"), ("S", "保存"), ("O", "Finder"), ("X", "ゴミ箱"), ("⌘C", "コピー"), ("Space", "プレビュー"), closeHint]
         func measure(_ hints: [(String, String)]) -> [(CGFloat, CGFloat)] {
             hints.map { key, label in
                 (max(17, ceil((key as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 10.5, weight: .medium)]).width) + 8),
@@ -508,13 +684,16 @@ private final class LibraryFooter: NSView {
             }
         }
         func width(_ sizes: [(CGFloat, CGFloat)]) -> CGFloat { sizes.reduce(CGFloat(0)) { $0 + $1.0 + $1.1 + 19 } - 14 }
+        let label = multiple && status != nil ? filename + "・" + (status ?? "") : status ?? filename
+        let labelWidth = ceil((label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .medium)]).width)
+        let reserved = status == nil ? CGFloat(180) : min(bounds.width - 120, max(300, labelWidth + 48))
         var sizes = measure(hints), hintWidth = width(sizes)
-        // ファイル名に132ptを残す。Escは最後まで落とさず、他の手引きをこの順で省く。
-        for key in ["←↓↑→ HJKL", "O", "S", "⌘C", "Space", "E"] where hintWidth > bounds.width - 180 {
+        // ファイル名に132ptを残す。閉じる手引きは最後まで落とさず、他はこの順で省く。
+        for key in ["←↓↑→ HJKL", "⇧←↓↑→", "⌘A", "O", "S", "Space", "E", "⌘C", "X"] where hintWidth > bounds.width - reserved {
             hints.removeAll { $0.0 == key }; sizes = measure(hints); hintWidth = width(sizes)
         }
-        UIDrawing.text(status ?? filename, in: CGRect(x: 16, y: 12, width: max(60, bounds.width - hintWidth - 48), height: 18), size: 11.5,
-            color: status?.hasPrefix("!") == true ? UITheme.red : UITheme.key)
+        UIDrawing.text(label, in: CGRect(x: 16, y: 12, width: max(60, bounds.width - hintWidth - 48), height: 18), size: 11.5,
+            color: status?.contains("!") == true ? UITheme.red : UITheme.key)
         var x = bounds.width - hintWidth - 16
         for ((key, label), (keyWidth, labelWidth)) in zip(hints, sizes) {
             UIDrawing.key(key, in: CGRect(x: x, y: 12, width: keyWidth, height: 17))

@@ -71,6 +71,9 @@ final class RecentImageMemory {
     private var states: [URL: ImageEditState] = [:]
     var count: Int { states.count }
     func state(for url: URL) -> ImageEditState? { states[url.standardizedFileURL] }
+    func remove(_ urls: Set<URL>) {
+        for url in urls { states.removeValue(forKey: url.standardizedFileURL) }
+    }
     func remember(_ state: ImageEditState, at url: URL, among files: [RecentCaptureFile]) {
         retain(files)
         let url = url.standardizedFileURL

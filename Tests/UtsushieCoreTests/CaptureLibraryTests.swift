@@ -61,6 +61,30 @@ private func libraryFile(_ name: String, _ seconds: Double = 0) -> RecentCapture
     #expect(CaptureLibrary.columns(for: 1100) == 4 && CaptureLibrary.columns(for: 680) == 2)
 }
 
+@Test(arguments: [Double(-100), 0, 1, 12, 36, 49, 543, 544, 680, 1100, .nan, .infinity, -.infinity, .greatestFiniteMagnitude])
+func libraryGridAlwaysProducesFinitePositiveItemSize(_ width: Double) {
+    let grid = CaptureLibrary.gridLayout(for: width)
+    #expect(grid.columns >= 1)
+    #expect(grid.itemWidth.isFinite && grid.itemWidth >= 13)
+    #expect(grid.itemHeight.isFinite && grid.itemHeight > 36)
+    #expect(CaptureLibrary.columns(for: width) == grid.columns)
+    if width.isFinite && width >= 49 {
+        // 最大の有限値でも列幅の合計を掛け算でオーバーフローさせず検証する。
+        let roomPerItem = (width - 36 - 16 * Double(grid.columns - 1)) / Double(grid.columns)
+        #expect(grid.itemWidth <= roomPerItem)
+    }
+}
+
+@Test func libraryGridColumnCountUsesTheSameInsetsAndSpacingAsItemSize() {
+    let boundary = CaptureLibrary.gridLayout(for: 544)
+    #expect(boundary.columns == 2 && boundary.itemWidth == 246)
+    #expect(CaptureLibrary.gridLayout(for: 543).columns == 1)
+    let regular = CaptureLibrary.gridLayout(for: 1100)
+    #expect(regular.columns == 4 && regular.itemWidth == 254 && regular.itemHeight == 187.25)
+    let compact = CaptureLibrary.gridLayout(for: 680)
+    #expect(compact.columns == 2 && compact.itemWidth == 314)
+}
+
 @Test func libraryMetadataAndVideoBadgesAreCompactAndGuardInvalidDuration() {
     let file = libraryFile("image.webp"), zone = TimeZone(secondsFromGMT: 9 * 3600)!
     #expect(CaptureLibrary.metadata(file: file, width: 1280, height: 800, bytes: 186 * 1024, timeZone: zone) == "09:00  1280×800  186 KB")
@@ -97,4 +121,105 @@ private func libraryFile(_ name: String, _ seconds: Double = 0) -> RecentCapture
     #expect(conflict.warnings.contains { $0.contains("撮影のホットキーと同じ") })
     let custom = ConfigLoader.parse(toml: "[hotkey]\nkeyCode = 37\nmodifiers = [\"option\"]\n[libraryHotkey]\nkeyCode = 37\nmodifiers = [\"option\"]")
     #expect(custom.config.libraryHotkey == nil && custom.config.hotkey.keyCode == 37)
+}
+
+@Test func libraryShiftSelectionExpandsShrinksAndCrossesAnchorInDisplayOrder() {
+    let urls = (0..<7).map { libraryFile("range-\($0).webp").url }
+    var selection = CaptureLibrarySelection()
+    selection.select(urls[3])
+    selection.select(urls[6], mode: .range, orderedURLs: urls)
+    #expect(selection.urls == Set(urls[3...6]) && selection.anchorURL == urls[3])
+    selection.select(urls[4], mode: .range, orderedURLs: urls)
+    #expect(selection.urls == Set(urls[3...4]))
+    selection.select(urls[1], mode: .range, orderedURLs: urls)
+    #expect(selection.urls == Set(urls[1...3]) && selection.focusedURL == urls[1])
+    selection.select(urls[3], mode: .range, orderedURLs: urls)
+    #expect(selection.urls == [urls[3]])
+}
+
+@Test func libraryCommandToggleAllAndPlainSelectionKeepFocusAndAnchor() {
+    let urls = (0..<4).map { libraryFile("toggle-\($0).webp").url }
+    var selection = CaptureLibrarySelection()
+    selection.select(urls[0])
+    selection.select(urls[2], mode: .toggle, orderedURLs: urls)
+    #expect(selection.urls == [urls[0], urls[2]] && selection.anchorURL == urls[2])
+    selection.select(urls[2], mode: .toggle, orderedURLs: urls)
+    #expect(selection.urls == [urls[0]] && selection.focusedURL == urls[2])
+    selection.select(urls[3], mode: .range, orderedURLs: urls)
+    #expect(selection.urls == [urls[2], urls[3]])
+    selection.selectAll(urls)
+    #expect(selection.urls == Set(urls) && selection.focusedURL == urls[3])
+    selection.select(urls[1], mode: .single, orderedURLs: urls)
+    #expect(selection.urls == [urls[1]] && selection.anchorURL == urls[1])
+    selection.select(urls[1], mode: .toggle, orderedURLs: urls)
+    #expect(selection.urls.isEmpty && selection.anchorURL == urls[1])
+    selection.selectAll([])
+    #expect(selection.urls.isEmpty && selection.focusedURL == nil && selection.anchorURL == nil)
+}
+
+@Test func libraryMultipleSelectionReconcilesRemovedFocusWithoutLosingSurvivors() {
+    let files = (0..<4).map { libraryFile("reconcile-\($0).webp") }, urls = files.map(\.url)
+    var selection = CaptureLibrarySelection()
+    selection.selectAll(urls)
+    selection.reconcile(Array(files[1...].reversed()))
+    #expect(selection.urls == Set(urls[1...]) && selection.focusedURL == urls[3] && selection.anchorURL == urls[3])
+    selection.reconcile([files[2], files[3]])
+    #expect(selection.urls == [urls[2], urls[3]])
+    selection.select(urls[3], mode: .toggle, orderedURLs: urls)
+    selection.reconcile([files[2], files[3]])
+    #expect(selection.urls == [urls[2]] && selection.focusedURL == urls[3])
+    selection.reconcile([])
+    #expect(selection.urls.isEmpty && selection.focusedURL == nil && selection.anchorURL == nil)
+}
+
+@Test func libraryDeletionNeedsTwoDistinctPressesAndIgnoresRepeats() {
+    let first = libraryFile("delete-a.webp").url, second = libraryFile("delete-b.webp").url
+    var confirmation = CaptureLibraryDeleteConfirmation()
+    #expect(confirmation.press(selected: [first], isRepeat: true) == .ignored && !confirmation.isArmed)
+    #expect(confirmation.press(selected: [], isRepeat: false) == .ignored)
+    #expect(confirmation.press(selected: [first], isRepeat: false) == .armed)
+    #expect(confirmation.press(selected: [first], isRepeat: true) == .ignored && confirmation.isArmed)
+    #expect(confirmation.press(selected: [second], isRepeat: false) == .armed)
+    #expect(confirmation.press(selected: [second], isRepeat: false) == .trash && !confirmation.isArmed)
+}
+
+@Test(arguments: CaptureLibraryDeleteInterruption.allCases)
+func libraryDeletionConfirmationCancelsOnEveryInterruption(_ reason: CaptureLibraryDeleteInterruption) {
+    var confirmation = CaptureLibraryDeleteConfirmation()
+    let urls: Set<URL> = [libraryFile("interrupt.webp").url]
+    _ = confirmation.press(selected: urls, isRepeat: false)
+    #expect(confirmation.interrupt(reason) && !confirmation.isArmed)
+    let cancelledAgain = confirmation.interrupt(reason)
+    #expect(!cancelledAgain)
+    #expect(confirmation.press(selected: urls, isRepeat: false) == .armed)
+}
+
+@Test func libraryDeletedSelectionMovesForwardThenBackOrEmptyAndRetainsFailures() {
+    let urls = (0..<6).map { libraryFile("next-\($0).webp").url }
+    var selection = CaptureLibrarySelection()
+    selection.selectAll(urls)
+    selection.didRemove(Set(urls[1...3]), orderedURLs: urls)
+    #expect(selection.urls == [urls[4]])
+    selection.didRemove(Set(urls[4...]), orderedURLs: Array(urls[0...0]) + Array(urls[4...]))
+    #expect(selection.urls == [urls[0]])
+    selection.didRemove([urls[0]], orderedURLs: [urls[0]])
+    #expect(selection.urls.isEmpty && selection.focusedURL == nil)
+    selection.didRemove([urls[1], urls[3]], failed: [urls[2], urls[4]], orderedURLs: urls)
+    #expect(selection.urls == [urls[2], urls[4]] && selection.focusedURL == urls[2])
+    selection.didRemove([], failed: [urls[5]], orderedURLs: urls)
+    #expect(selection.urls == [urls[5]])
+    selection.didRemove([urls[1], urls[4]], orderedURLs: urls)
+    #expect(selection.urls == [urls[2]])
+}
+
+@Test func libraryDragPreservesSelectedSetOrSelectsOnlyOutsideItemAndForcesOperation() {
+    let urls = (0..<3).map { libraryFile("drag-\($0).webp").url }
+    var selection = CaptureLibrarySelection()
+    selection.select(urls[0]); selection.select(urls[1], mode: .toggle, orderedURLs: urls)
+    selection.prepareDrag(from: urls[0])
+    #expect(selection.urls == [urls[0], urls[1]])
+    selection.prepareDrag(from: urls[2])
+    #expect(selection.urls == [urls[2]] && selection.anchorURL == urls[2])
+    #expect(CaptureLibraryDragOperation.allowed(commandPressed: false) == .copy)
+    #expect(CaptureLibraryDragOperation.allowed(commandPressed: true) == .move)
 }
