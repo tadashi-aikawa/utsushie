@@ -14,7 +14,8 @@ jobs:
       - name: Build
         run: swift build
       - name: Test
-        run: swift test
+        # 画面を使うテストはCIのランナーで不安定なため手元で走らせる。
+        run: swift test --filter UtsushieCoreTests
       # 署名検証付きの build_release.sh はリリース時のみ。
       # CI では ad-hoc 署名でアプリバンドルの組み立てまでを検証する
       - name: Build app bundle

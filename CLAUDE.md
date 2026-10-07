@@ -397,6 +397,9 @@ swift test
 open .build/UTSUSHIE.app
 ```
 
+- CIはビルド・`UtsushieCoreTests`・`.app`の組み立てを確かめます。
+- `UtsushieAppTests`は手元の`swift test`で確かめます。
+  - 理由: 画面を使うテストはCIのランナーで不安定なためです。
 - 署名はUTSUSHIE専用の自己署名証明書`utsushie-dev`を使います。
   - 設定: 別の証明書は`CODESIGN_IDENTITY`で指定できます。
   - 証明書がなければad-hoc署名になり、再ビルドのたびに権限の再許可が要ることがあります。
