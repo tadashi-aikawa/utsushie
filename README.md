@@ -8,9 +8,6 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画にして、すぐ貼
 
 ## インストール
 
-> [!NOTE]
-> 配布は準備中です。初回リリース後に次のコマンドで導入できます。
-
 ```sh
 brew install --cask tadashi-aikawa/tap/utsushie
 ```
@@ -335,3 +332,7 @@ effort = "low"                    # low / medium / high
 - `privacy.effort`は`low`、`medium`、`high`から選べます。既定は`low`です。
 - AIの判断や文字・顔の検出には見落としがあります。公開前に画像を確認してください。
 - 不正な値はその項目だけ既定値に戻り、メニューに警告が出ます
+
+## ライセンス
+
+[MIT](LICENSE)
