@@ -28,6 +28,11 @@ private func privacyResponse(_ ids: [Int]) -> Data {
         windowNumber: 0, context: nil, characters: code == 4 ? "h" : "", charactersIgnoringModifiers: code == 4 ? "h" : "",
         isARepeat: repeating, keyCode: code))
 }
+@MainActor private func waitForPrivacy(_ editor: AnnotationEditorController) async throws {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while editor.isFindingPrivacy, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(!editor.isFindingPrivacy)
+}
 private actor PrivacyCalls {
     var count = 0
     func increment() { count += 1 }
@@ -121,7 +126,8 @@ private final class PrivacyTimings: @unchecked Sendable {
     })
     let image = try privacyImage()
     let task = Task { try await service.detect(image: image, config: PrivacyConfig()) }
-    try await waitUntil("認識が開始しませんでした") { await gate.isSuspended }
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while !(await gate.isSuspended), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
     #expect(await gate.isSuspended)
     task.cancel()
     await gate.resume()
@@ -159,7 +165,7 @@ private final class PrivacyTimings: @unchecked Sendable {
     editor.canvas.keyDown(with: try privacyKey(4, repeating: true))
     editor.canvas.keyDown(with: try privacyKey(15))
     #expect(editor.canvas.tool == .rectangle)
-    try await waitUntil("モザイクの検索が完了しませんでした") { !editor.isFindingPrivacy }
+    try await waitForPrivacy(editor)
     #expect(await calls.count == 1)
     #expect(editor.canvas.document.annotations.count == 4 && editor.hintText == "3 か所にモザイクを入れました")
     editor.canvas.undoAnnotation()
@@ -332,7 +338,7 @@ func privacyClientInvokesConfiguredExecutableWithTextOnlyAndRequiredFlags(_ effo
     try await Task.sleep(for: .milliseconds(100))
     #expect(editor.isFindingPrivacy && editor.canvas.document.annotations.count == 1 && !editor.canvas.history.canUndo)
     editor.canvas.mouseUp(with: try privacyMouse(editor.canvas, type: .leftMouseUp, at: CGPoint(x: 600, y: 200)))
-    try await waitUntil("モザイクの検索が完了しませんでした") { !editor.isFindingPrivacy }
+    try await waitForPrivacy(editor)
     #expect(editor.canvas.document.annotations.map(\.tool) == [.rectangle, .mosaic])
     editor.canvas.undoAnnotation()
     #expect(editor.canvas.document.annotations.map(\.tool) == [.rectangle])

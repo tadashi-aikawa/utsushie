@@ -91,8 +91,7 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     bar.frame = CGRect(x: 0, y: 0, width: 1040, height: 75)
     bar.layoutSubtreeIfNeeded()
     #expect(bar.trays.map { $0.buttons.map(\.title) } == [["選択"], ["枠", "スポット", "矢印"], ["文字", "番号"], ["モザイク", "AIで隠す"]])
-    // ランナーごとの字幅差を1ptだけ許容し、グループ間の余白を確かめる。
-    #expect(bar.trays.last!.frame.maxX + 10 <= bar.undoButton.frame.minX + 1)
+    #expect(bar.trays.last!.frame.maxX + 10 <= bar.undoButton.frame.minX)
     #expect(bar.finishButton.frame.maxX <= bar.bounds.maxX - 14)
     #expect(bar.hintView.frame.maxX < bar.dimensions.frame.minX)
     for tray in bar.trays { for button in tray.buttons {
@@ -170,7 +169,7 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     editor.toolbar.aiButton.performClick(nil)
     #expect(editor.toolbar.aiButton.title == "探しています" && editor.toolbar.aiButton.key == "Esc")
     #expect(editor.hintText.isEmpty && editor.toolbar.aiButton.naturalWidth == width)
-    try await waitUntil("モザイクの検索が完了しませんでした") { !editor.isFindingPrivacy }
+    for _ in 0..<100 where editor.isFindingPrivacy { try await Task.sleep(for: .milliseconds(10)) }
     #expect(!editor.isFindingPrivacy && editor.hintText == "1 か所にモザイクを入れました")
     #expect(editor.toolbar.aiButton.title == "AIで隠す" && editor.toolbar.aiButton.naturalWidth == width)
     // スペースは注釈を変えない操作でも結果を消す。

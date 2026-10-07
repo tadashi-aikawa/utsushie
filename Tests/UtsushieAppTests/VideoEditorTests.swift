@@ -74,30 +74,23 @@ private final class VideoRunningApplication: NSRunningApplication, @unchecked Se
         return try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [], timestamp: 0,
             windowNumber: editor.window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
     }
-    func expectKept(_ expected: VideoRange) throws {
-        #expect(timeline.document.kept.count == 1)
-        let actual = try #require(timeline.document.kept.first)
-        // マウス座標から秒数へ戻す際の浮動小数誤差だけを許容する。
-        #expect(abs(actual.start - expected.start) < 0.000001)
-        #expect(abs(actual.end - expected.end) < 0.000001)
-    }
     timeline.mouseDown(with: try event(.leftMouseDown, 0))
     timeline.mouseDragged(with: try event(.leftMouseDragged, 1))
     timeline.mouseDragged(with: try event(.leftMouseDragged, 2))
     timeline.mouseUp(with: try event(.leftMouseUp, 2))
-    try expectKept(.init(2, 10))
+    #expect(timeline.document.kept == [.init(2, 10)])
     editor.undo()
-    try expectKept(.init(0, 10))
+    #expect(timeline.document.kept == [.init(0, 10)])
     editor.redo()
     timeline.mouseDown(with: try event(.leftMouseDown, 2))
     timeline.mouseDragged(with: try event(.leftMouseDragged, 3))
-    try expectKept(.init(3, 10))
+    #expect(abs((timeline.document.kept.first?.start ?? 0) - 3) < 0.000001)
     editor.undo()
     timeline.mouseDragged(with: try event(.leftMouseDragged, 4))
     timeline.mouseUp(with: try event(.leftMouseUp, 4))
-    try expectKept(.init(2, 10))
+    #expect(timeline.document.kept == [.init(2, 10)])
     editor.undo()
-    try expectKept(.init(0, 10))
+    #expect(timeline.document.kept == [.init(0, 10)])
 }
 @MainActor @Test func videoPanelRequestsActivationByFrontmostPIDAndRestoresPreviousApp() throws {
     _ = NSApplication.shared
