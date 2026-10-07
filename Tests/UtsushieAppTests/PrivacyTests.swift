@@ -37,6 +37,20 @@ private actor PrivacyCalls {
     var count = 0
     func increment() { count += 1 }
 }
+private actor PrivacyRecognitionGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+    var isSuspended: Bool { continuation != nil }
+    func suspend() async {
+        guard !released else { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func resume() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
 private final class PrivacyTimings: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [(PrivacyDiagnostics.Stage, Double)] = []
@@ -49,9 +63,7 @@ private final class PrivacyTimings: @unchecked Sendable {
 @MainActor @Test func privacyVisionRecognizesJapaneseAndEnglishInPixelCoordinates() async throws {
     let image = try privacyImage(text: true)
     let timings = PrivacyTimings()
-    let recognized = try await Task.detached {
-        try PrivacyVision.recognize(image, diagnostics: PrivacyDiagnostics(record: timings.record))
-    }.value
+    let recognized = try await PrivacyVision.recognize(image, diagnostics: PrivacyDiagnostics(record: timings.record))
     #expect(timings.events.map { $0.0 } == [.textRecognition])
     #expect(timings.events[0].1 > 0)
     #expect(recognized.warning == nil && recognized.faces.isEmpty)
@@ -98,6 +110,30 @@ private final class PrivacyTimings: @unchecked Sendable {
     let result = try await service.detect(image: privacyImage(), config: PrivacyConfig())
     #expect(await calls.count == 0)
     #expect(result.annotations.isEmpty && result.message == "隠す箇所は見つかりませんでした")
+}
+
+@MainActor @Test func privacyCancellationDuringRecognitionDiscardsResultAndSkipsAI() async throws {
+    let gate = PrivacyRecognitionGate()
+    let calls = PrivacyCalls()
+    let line = PrivacyTextLine(id: 1, text: "secret", rect: CGRect(x: 100, y: 100, width: 200, height: 30))
+    let service = PrivacyDetectionService(recognize: { _ in
+        // Visionと同じく、開始済みの認識はキャンセル後にも結果を返す。
+        await gate.suspend()
+        return PrivacyRecognition(lines: [line], faces: [CGRect(x: 10, y: 10, width: 50, height: 50)])
+    }, select: { _, _ in
+        await calls.increment()
+        return privacyResponse([1])
+    })
+    let image = try privacyImage()
+    let task = Task { try await service.detect(image: image, config: PrivacyConfig()) }
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while !(await gate.isSuspended), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(await gate.isSuspended)
+    task.cancel()
+    await gate.resume()
+    do { _ = try await task.value; Issue.record("認識中のキャンセル後に結果を返した") }
+    catch is CancellationError { }
+    #expect(await calls.count == 0)
 }
 
 @MainActor @Test func privacyHIsDisabledByDefaultAndIgnoresModifiers() throws {

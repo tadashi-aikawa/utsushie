@@ -40,13 +40,13 @@ struct PrivacyDetectionResult: Sendable {
 
 /// Visionへ渡すのは撮影時の元画像。Claudeへ渡す境界は文字の行だけに限定する。
 struct PrivacyDetectionService: Sendable {
-    var recognize: @Sendable (CGImage) throws -> PrivacyRecognition = { try PrivacyVision.recognize($0) }
+    var recognize: @Sendable (CGImage) async throws -> PrivacyRecognition = { try await PrivacyVision.recognize($0) }
     var select: @Sendable ([PrivacyTextLine], PrivacyConfig) async throws -> Data = { lines, config in
         try await ClaudePrivacyClient.select(lines: lines, config: config)
     }
 
     func detect(image: CGImage, config: PrivacyConfig) async throws -> PrivacyDetectionResult {
-        let recognized = try await Task.detached(priority: .userInitiated) { try recognize(image) }.value
+        let recognized = try await recognize(image)
         try Task.checkCancellation()
         var rectangles = recognized.faces
         var warning = recognized.warning
@@ -68,7 +68,19 @@ struct PrivacyDetectionService: Sendable {
 }
 
 enum PrivacyVision {
-    static func recognize(_ image: CGImage, diagnostics: PrivacyDiagnostics = PrivacyDiagnostics()) throws -> PrivacyRecognition {
+    private static let queue = DispatchQueue(label: "com.tadashi-aikawa.utsushie.privacy-vision", qos: .userInitiated)
+
+    static func recognize(_ image: CGImage, diagnostics: PrivacyDiagnostics = PrivacyDiagnostics()) async throws -> PrivacyRecognition {
+        // Visionの内部の同期待ちでSwiftの協調スレッドを塞がない。
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do { continuation.resume(returning: try recognizeSynchronously(image, diagnostics: diagnostics)) }
+                catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+
+    private static func recognizeSynchronously(_ image: CGImage, diagnostics: PrivacyDiagnostics) throws -> PrivacyRecognition {
         let size = CGSize(width: image.width, height: image.height)
         let handler = VNImageRequestHandler(cgImage: image, orientation: .up)
         var result = PrivacyRecognition()
