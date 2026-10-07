@@ -97,12 +97,16 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
             empty.centerXAnchor.constraint(equalTo: scroll.centerXAnchor), empty.centerYAnchor.constraint(equalTo: scroll.centerYAnchor)
         ])
         cache.countLimit = 120; cache.totalCostLimit = 64 * 1024 * 1024
+        scroll.contentView.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(clipFrameDidChange(_:)),
+            name: NSView.frameDidChangeNotification, object: scroll.contentView)
         // 保存済みframeの復元はresize通知を起こす。ビューを用意し、delegateなしで復元する。
         if remembersFrame { window.setFrameAutosaveName(frameAutosaveName) }
         resizeGrid()
         window.delegate = self
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { NotificationCenter.default.removeObserver(self) }
 
     func open() {
         guard let window else { return }
@@ -157,9 +161,18 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
     func windowDidResize(_ notification: Notification) { if notification.object as? NSWindow === window { resizeGrid() } }
     private func resizeGrid() {
         window?.contentView?.layoutSubtreeIfNeeded()
-        let grid = CaptureLibrary.gridLayout(for: scroll.contentSize.width)
+        updateGridLayout()
+    }
+    @objc private func clipFrameDidChange(_ notification: Notification) {
+        // スクロールバーの出入りでも幅が変わる。通知中に親のレイアウトを再入させない。
+        updateGridLayout()
+    }
+    private func updateGridLayout() {
+        let grid = CaptureLibrary.gridLayout(for: scroll.contentView.bounds.width)
+        let itemSize = CGSize(width: grid.itemWidth, height: grid.itemHeight)
+        guard columns != grid.columns || layout.itemSize != itemSize else { return }
         columns = grid.columns
-        layout.itemSize = CGSize(width: grid.itemWidth, height: grid.itemHeight)
+        layout.itemSize = itemSize
         layout.invalidateLayout()
     }
     func windowWillClose(_ notification: Notification) {
