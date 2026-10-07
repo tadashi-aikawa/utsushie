@@ -331,8 +331,8 @@ func libraryRestoresSavedFrameBeforeAttachingDelegateAndKeepsGridPositive(_ save
         return LoadedCapture(artifact: SharedArtifact(url: file.url, kind: .webP, width: 160, height: 100, byteCount: 1), image: image)
     }
     library.open(); defer { library.close() }
-    for _ in 0..<300 where library.files.count != 1200 || reads == 0 || library.isLoadingThumbnails {
-        try await Task.sleep(for: .milliseconds(10))
+    try await waitUntil("一覧とサムネイルの読み込みが完了しませんでした") {
+        library.files.count == 1200 && reads > 0 && !library.isLoadingThumbnails
     }
     #expect(library.files.count == 1200 && reads > 0 && reads < 40 && peak <= 4)
     let content = try #require(library.window?.contentView)
@@ -341,10 +341,12 @@ func libraryRestoresSavedFrameBeforeAttachingDelegateAndKeepsGridPositive(_ save
     #expect(collection.visibleItems().count < 40 && !collection.visibleItems().isEmpty)
     let firstReads = reads
     await library.reload()
-    for _ in 0..<300 where library.isLoadingThumbnails { try await Task.sleep(for: .milliseconds(10)) }
+    try await waitUntil("サムネイルの読み込みが完了しませんでした") { !library.isLoadingThumbnails }
     #expect(reads == firstReads)
     library.select(library.files.last!.url)
-    for _ in 0..<300 where reads == firstReads || library.isLoadingThumbnails { try await Task.sleep(for: .milliseconds(10)) }
+    try await waitUntil("移動先のサムネイルの読み込みが完了しませんでした") {
+        reads != firstReads && !library.isLoadingThumbnails
+    }
     #expect(reads > firstReads && reads < 80 && peak <= 4)
 }
 

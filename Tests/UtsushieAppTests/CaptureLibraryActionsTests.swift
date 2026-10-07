@@ -19,14 +19,6 @@ private func actionsDirectory() throws -> URL {
         windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: repeatKey, keyCode: code))
 }
 
-@MainActor private func finishActions(_ library: CaptureLibraryController) async throws {
-    for _ in 0..<1000 {
-        if !library.isPerformingAction { return }
-        try await Task.sleep(for: .milliseconds(5))
-    }
-    Issue.record("一覧の操作が完了しませんでした")
-}
-
 @Test func libraryTrashMovesOnlyTemporaryFilesAndReportsIndependentFailures() throws {
     let directory = try actionsDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -93,7 +85,7 @@ func libraryCopiesAllImagesAndVideosInDisplayOrderWithoutGeneralPasteboard(_ mod
     defer { board.releaseGlobally() }
     library.copyEntries = { entries, mode in ClipboardWriter.copy(entries, mode: mode, to: board) }
     _ = library.handleKey(try actionsKey(8, flags: .command))
-    try await finishActions(library)
+    try await waitUntil("一覧の操作が完了しませんでした") { !library.isPerformingAction }
     #expect(board.pasteboardItems?.count == 4 && library.footerStatus == "コピー済み 4件")
     _ = library.handleKey(try actionsKey(124))
     #expect(library.selection.urls.count == 1)
@@ -132,7 +124,7 @@ func libraryCopiesAllImagesAndVideosInDisplayOrderWithoutGeneralPasteboard(_ mod
     _ = library.handleKey(try actionsKey(53))
     #expect(!library.deleteConfirmation.isArmed && library.files.count == 3)
     _ = library.handleKey(try actionsKey(7)); _ = library.handleKey(try actionsKey(7))
-    try await finishActions(library)
+    try await waitUntil("一覧の操作が完了しませんでした") { !library.isPerformingAction }
     #expect(library.files.map(\.url) == [failed] && library.selection.urls == [failed])
     #expect(library.footerStatus?.hasPrefix("!") == true && thumbnails.recentImages.count == 1)
     for artifact in artifacts { #expect((thumbnails.card(for: artifact.url) != nil) == (artifact.url == failed)) }
@@ -163,7 +155,7 @@ func libraryCopiesAllImagesAndVideosInDisplayOrderWithoutGeneralPasteboard(_ mod
     _ = library.handleKey(try actionsKey(0, flags: .command))
     #expect(library.dragURLs(from: urls[0]).isEmpty)
     _ = library.handleKey(try actionsKey(7)); _ = library.handleKey(try actionsKey(7))
-    try await finishActions(library)
+    try await waitUntil("一覧の操作が完了しませんでした") { !library.isPerformingAction }
     #expect(Set(library.files.map(\.url)) == Set(urls[0...1]))
     #expect(library.footerStatus?.contains("2件は除外") == true)
     #expect(thumbnails.card(for: urls[0])?.editor != nil && thumbnails.card(for: urls[1])?.finalizing == true)

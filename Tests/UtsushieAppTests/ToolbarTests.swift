@@ -170,7 +170,7 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     editor.toolbar.aiButton.performClick(nil)
     #expect(editor.toolbar.aiButton.title == "探しています" && editor.toolbar.aiButton.key == "Esc")
     #expect(editor.hintText.isEmpty && editor.toolbar.aiButton.naturalWidth == width)
-    for _ in 0..<100 where editor.isFindingPrivacy { try await Task.sleep(for: .milliseconds(10)) }
+    try await waitUntil("モザイクの検索が完了しませんでした") { !editor.isFindingPrivacy }
     #expect(!editor.isFindingPrivacy && editor.hintText == "1 か所にモザイクを入れました")
     #expect(editor.toolbar.aiButton.title == "AIで隠す" && editor.toolbar.aiButton.naturalWidth == width)
     // スペースは注釈を変えない操作でも結果を消す。

@@ -148,10 +148,11 @@ private func editableVideo(in directory: URL, width: Int = 64, height: Int = 48)
     input.expectsMediaDataInRealTime = false; writer.add(input)
     #expect(writer.startWriting()); writer.startSession(atSourceTime: .zero)
     for index in 0..<90 {
-        while !input.isReadyForMoreMediaData {
+        guard try await waitUntil("動画のWriterが入力を受け付けませんでした", condition: {
+            if input.isReadyForMoreMediaData { return true }
             if writer.status == .failed { throw try #require(writer.error) }
-            try await Task.sleep(for: .milliseconds(1))
-        }
+            return false
+        }) else { return }
         #expect(input.append(try sample(time: Double(index) / 30).buffer))
     }
     writer.endSession(atSourceTime: CMTime(seconds: 3, preferredTimescale: 60000)); input.markAsFinished()
@@ -333,18 +334,14 @@ func seekingDuringTransitionPreviewCancelsAnimationAndDoesNotResumePlayback(_ ki
     let editor = VideoEditorController(source: source.temporaryURL, document: document, screen: nil,
         focus: .init(activate: {}, restore: { _ in }))
     defer { editor.window.close() }
-    for _ in 0..<100 where !editor.canCapture { try await Task.sleep(for: .milliseconds(20)) }
+    try await waitUntil("動画編集の準備が完了しませんでした") { editor.canCapture }
     #expect(editor.canCapture)
     let preview = try #require(editor.window.contentView?.subviews.first { view in
         view.layer?.sublayers?.contains { $0 is AVPlayerLayer } == true
     })
     editor.seek(to: 0.6, resume: true)
-    var sawTransition = false
-    for _ in 0..<150 {
-        if preview.layer?.sublayers?.contains(where: { $0.contents != nil && !$0.isHidden }) == true {
-            sawTransition = true; break
-        }
-        try await Task.sleep(for: .milliseconds(20))
+    let sawTransition = try await waitUntil("つなぎのプレビューが始まりませんでした") {
+        preview.layer?.sublayers?.contains(where: { $0.contents != nil && !$0.isHidden }) == true
     }
     #expect(sawTransition)
     editor.seek(to: 1.4)
@@ -473,7 +470,7 @@ func seekingDuringTransitionPreviewCancelsAnimationAndDoesNotResumePlayback(_ ki
     let editor = VideoEditorController(source: source.temporaryURL, document: VideoEditDocument(duration: source.duration),
         screen: nil, focus: .init(activate: {}, restore: { _ in }))
     defer { editor.window.close() }
-    for _ in 0..<200 where !editor.canCapture { try await Task.sleep(for: .milliseconds(10)) }
+    try await waitUntil("動画編集の準備が完了しませんでした") { editor.canCapture }
     #expect(editor.canCapture)
     editor.seek(to: 1.2)
     let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
@@ -548,7 +545,7 @@ func seekingDuringTransitionPreviewCancelsAnimationAndDoesNotResumePlayback(_ ki
     #expect(returned == 1)
     complete(document)
     #expect(card.finalizing && statuses.last! == "書き出し中…")
-    for _ in 0..<300 where card.finalizing { try await Task.sleep(for: .milliseconds(10)) }
+    try await waitUntil("動画の書き出しが完了しませんでした") { !card.finalizing }
     #expect(!card.finalizing && statuses.last! == nil)
     #expect(controller.cards.isEmpty && !card.panel.isVisible && card.timer == nil)
     #expect(board.pasteboardItems?.count == 1 && board.pasteboardItems?.first?.types.contains(ArtifactKind.webP.pasteboardType) == true)
@@ -566,7 +563,7 @@ func seekingDuringTransitionPreviewCancelsAnimationAndDoesNotResumePlayback(_ ki
     _ = changed.addStill(at: 1.4)
     card.copyEntries = { _, _ in false }
     let retry = try #require(second.onComplete); second.window.close(); retry(changed)
-    for _ in 0..<300 where card.finalizing { try await Task.sleep(for: .milliseconds(10)) }
+    try await waitUntil("動画の書き出しが完了しませんでした") { !card.finalizing }
     #expect(statuses.last!!.hasPrefix("!") && !card.finalizing && controller.cards.isEmpty)
     #expect(try Data(contentsOf: source.temporaryURL) == firstSaved)
     #expect(try RecentCaptureStore.files(in: dir).filter { $0.kind == .webP }.count == 1)
