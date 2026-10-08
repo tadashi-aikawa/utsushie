@@ -18,7 +18,7 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     }
     public var key: String {
         switch self {
-        case .selection: "esc"
+        case .selection: "v"
         case .rectangle: "r"
         case .spotlight: "s"
         case .text: "t"
@@ -31,7 +31,7 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     }
     public var keyCode: UInt16 {
         switch self {
-        case .selection: 53
+        case .selection: 9
         case .rectangle: 15
         case .spotlight: 1
         case .text: 17
@@ -174,7 +174,7 @@ public struct AnnotationDocument: Equatable, Sendable {
            let handle = AnnotationGeometry.resizeHandle(at: point, annotation: annotation, tolerance: tolerance) {
             return .resize(annotation.id, handle)
         }
-        if let id = hit(at: point, style: style, tolerance: tolerance, includeAreaInterior: tool == .selection),
+        if let id = hit(at: point, style: style, tolerance: tolerance, includeAreaInterior: tool == .selection || selected.count > 1),
            let annotation = annotations.first(where: { $0.id == id }) {
             let band: Double
             if annotation.tool == .spotlight { band = max(tolerance, style.lineWidth + style.edge * 2) }

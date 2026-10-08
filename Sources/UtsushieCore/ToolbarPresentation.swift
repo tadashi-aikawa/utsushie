@@ -16,7 +16,7 @@ public enum AnnotationToolbarPresentation {
     public static let aiDisabled = "AIで隠すは、設定ファイルで ai = true にすると使えます"
 
     public static func hint(tool: AnnotationTool, nextNumber: Int, editingText: Bool = false,
-                            discardArmed: Bool = false, findingPrivacy: Bool = false,
+                            findingPrivacy: Bool = false,
                             message: ToolbarHint? = nil, saving: Bool = false) -> ToolbarHint {
         if saving { return ToolbarHint("書き出し中…") }
         if let message { return message }

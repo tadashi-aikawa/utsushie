@@ -192,19 +192,22 @@ final class AnnotationToolbarView: NSView {
     let aiButton: ToolbarButton
     let undoButton = ToolbarButton(title: "↶", face: .plain)
     let redoButton = ToolbarButton(title: "↷", face: .plain)
-    let discardButton = ToolbarButton(title: "破棄", key: "Q", face: .secondary, confirmationTitle: "もう一度")
-    let finishButton = ToolbarButton(title: "完了", key: "⌘↩", face: .primary)
+    let finishButton = ToolbarButton(title: "完了", key: "↩", face: .primary)
     let zoomButton = ToolbarButton(title: "100%", face: .zoom)
     let hintView = ToolbarHintView()
     let dimensions = NSTextField(labelWithString: "")
     let trays: [ToolbarTray]
+    var minimumWidth: CGFloat {
+        max(AnnotationToolbarPresentation.minimumWidth, trays.reduce(28) { $0 + $1.naturalWidth + 10 }
+            + finishButton.naturalWidth + 80)
+    }
     override var isFlipped: Bool { true }
     init() {
         let ai = ToolbarButton(title: "AIで隠す", key: "H", face: .outline)
         aiButton = ai
         var buttons: [AnnotationTool: ToolbarButton] = [:]
         for tool in AnnotationTool.allCases {
-            let button = ToolbarButton(title: tool.label, key: tool == .selection ? "Esc" : tool.key.uppercased())
+            let button = ToolbarButton(title: tool.label, key: tool.key.uppercased())
             let symbol: String
             switch tool {
             case .selection: symbol = "cursorarrow"
@@ -233,14 +236,14 @@ final class AnnotationToolbarView: NSView {
         dimensions.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
         dimensions.textColor = UITheme.key
         trays.forEach { addSubview($0) }
-        [undoButton, redoButton, discardButton, finishButton, zoomButton, hintView, dimensions].forEach { addSubview($0) }
+        [undoButton, redoButton, finishButton, zoomButton, hintView, dimensions].forEach { addSubview($0) }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func draw(_ dirtyRect: NSRect) {
         UITheme.ink.setFill(); bounds.fill()
         NSColor.black.setFill(); CGRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1).fill()
         NSColor.white.withAlphaComponent(0.12).setFill()
-        CGRect(x: discardButton.frame.minX - 9, y: 15, width: 1, height: 20).fill()
+        CGRect(x: finishButton.frame.minX - 9, y: 15, width: 1, height: 20).fill()
     }
     override func layout() {
         super.layout()
@@ -251,9 +254,9 @@ final class AnnotationToolbarView: NSView {
             x += tray.naturalWidth + 10
         }
         var right = bounds.width - 14
-        for button in [finishButton, discardButton, redoButton, undoButton] {
+        for button in [finishButton, redoButton, undoButton] {
             button.frame = CGRect(x: right - button.naturalWidth, y: 11, width: button.naturalWidth, height: 28)
-            right = button.frame.minX - (button === discardButton ? 18 : button === redoButton ? 2 : 6)
+            right = button.frame.minX - (button === finishButton ? 18 : button === redoButton ? 2 : 6)
         }
         zoomButton.frame = CGRect(x: bounds.width - 90, y: 47, width: 76, height: 22)
         let dimensionWidth = ceil(dimensions.intrinsicContentSize.width)

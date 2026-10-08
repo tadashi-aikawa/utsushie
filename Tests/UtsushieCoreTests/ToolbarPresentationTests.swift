@@ -17,12 +17,10 @@ import Testing
     let error = ToolbarHint("隠す箇所を探せませんでした", isError: true)
     for message in [result, error, ToolbarHint(AnnotationToolbarPresentation.aiDisabled)] {
         #expect(AnnotationToolbarPresentation.hint(tool: .number, nextNumber: 4, editingText: true, message: message) == message)
-        let discard = AnnotationToolbarPresentation.hint(tool: .number, nextNumber: 4, editingText: true, discardArmed: true, message: message)
-        #expect(discard == message)
     }
     #expect(AnnotationToolbarPresentation.hint(tool: .number, nextNumber: 4, findingPrivacy: true).text.isEmpty)
     #expect(AnnotationToolbarPresentation.hint(tool: .text, nextNumber: 4, editingText: true, findingPrivacy: true).text == "⏎で確定 ・ ⇧⏎で改行")
-    #expect(AnnotationToolbarPresentation.hint(tool: .text, nextNumber: 4, discardArmed: true, message: error, saving: true).text == "書き出し中…")
+    #expect(AnnotationToolbarPresentation.hint(tool: .text, nextNumber: 4, message: error, saving: true).text == "書き出し中…")
 }
 
 @Test func overlayToolbarFitsContentWithEqualOuterPadding() {

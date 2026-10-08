@@ -61,4 +61,10 @@ import Testing
         let changed = AnnotationGeometry.resized(annotation, handle: .arrowEnd, to: CGPoint(x: 100, y: 90), shift: true, imageSize: size)
         #expect(abs(changed.end.x - changed.end.y) < 0.00001)
     }
+    let wideImage = CGSize(width: 160, height: 100)
+    let largeEnd = AnnotationGeometry.creationPoint(CGPoint(x: 120, y: 120), from: .zero,
+                                                    tool: .rectangle, shift: true, imageSize: wideImage)
+    let large = Annotation(tool: .rectangle, start: .zero, end: largeEnd)
+    let placed = AnnotationGeometry.placed(large, bounds: large.rect, imageSize: wideImage)
+    #expect(placed.rect.size == CGSize(width: 100, height: 100))
 }

@@ -26,8 +26,6 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     private var undoButton: ToolbarButton { toolbar.undoButton }
     private var redoButton: ToolbarButton { toolbar.redoButton }
     private var finishButton: ToolbarButton { toolbar.finishButton }
-    private var discardButton: ToolbarButton { toolbar.discardButton }
-    private var discardArmed = false
     private var saving = false
     private var closing = false
     private let initial: AnnotationDocument
@@ -62,8 +60,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         window.hidesOnDeactivate = false
         window.level = .floating
         window.acceptsMouseMovedEvents = true
-        let toolbarWidth = max(AnnotationToolbarPresentation.minimumWidth, toolbar.trays.reduce(28) { $0 + $1.naturalWidth + 10 }
-                               + toolbar.finishButton.naturalWidth + toolbar.discardButton.naturalWidth + 80)
+        let toolbarWidth = toolbar.minimumWidth
         window.minSize = CGSize(width: toolbarWidth, height: 383)
         if size.width < toolbarWidth { window.setContentSize(CGSize(width: toolbarWidth, height: size.height)) }
         window.delegate = self
@@ -74,7 +71,6 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         configure(undoButton, title: "↶", action: #selector(undoAnnotation))
         configure(redoButton, title: "↷", action: #selector(redoAnnotation))
         undoButton.toolTip = "取り消し ⌘Z"; redoButton.toolTip = "やり直し ⇧⌘Z"
-        configure(discardButton, title: "破棄", action: #selector(discard))
         configure(finishButton, title: "完了", action: #selector(finish))
         configure(toolbar.aiButton, title: "AIで隠す", action: #selector(privacyButtonPressed))
         configure(toolbar.zoomButton, title: "100%", action: #selector(showZoomMenu))
@@ -86,12 +82,11 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         window.setFrameOrigin(CGPoint(x: visible.midX - window.frame.width / 2, y: visible.midY - window.frame.height / 2))
         canvas.onChange = { [weak self] in
             guard let self else { return }
-            discardArmed = false
             if !isFindingPrivacy { privacyMessage = nil }
             update()
         }
         canvas.onToolChange = { tool in Self.lastTool = tool }
-        canvas.onDiscard = { [weak self] in self?.discard() }
+        canvas.onFinish = { [weak self] in self?.finish() }
         canvas.onPrivacy = { [weak self] in self?.findPrivacy() }
         canvas.onCancelPrivacy = { [weak self] in self?.cancelPrivacy() ?? false }
         canvas.onUserOperation = { [weak self] in self?.clearPrivacyMessage() }
@@ -139,10 +134,9 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         toolbar.aiButton.setAccessibilityLabel(toolbar.aiButton.title)
         toolbar.aiButton.setAccessibilityHelp(isFindingPrivacy ? "Escで中止" : privacyConfig.ai ? "Hで隠す箇所を探す" : AnnotationToolbarPresentation.aiDisabled)
         toolbar.zoomButton.isEnabled = !saving
-        discardButton.armed = discardArmed
         toolbar.hintView.hint = AnnotationToolbarPresentation.hint(tool: canvas.tool, nextNumber: canvas.document.nextNumber,
-            editingText: canvas.isEditingText, discardArmed: discardArmed, findingPrivacy: isFindingPrivacy, message: privacyMessage, saving: saving)
-        [undoButton, redoButton, discardButton, finishButton, toolbar.aiButton, toolbar.zoomButton].forEach { $0.needsDisplay = true }
+            editingText: canvas.isEditingText, findingPrivacy: isFindingPrivacy, message: privacyMessage, saving: saving)
+        [undoButton, redoButton, finishButton, toolbar.aiButton, toolbar.zoomButton].forEach { $0.needsDisplay = true }
         toolbar.needsLayout = true
     }
     func clearPrivacyMessage() {
@@ -190,11 +184,10 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     func findPrivacy() {
         guard !saving, !closing, !isFindingPrivacy, !canvas.isEditingText else { return }
         guard privacyConfig.ai else {
-            discardArmed = false
             privacyMessage = ToolbarHint(AnnotationToolbarPresentation.aiDisabled); update(); return
         }
         let operation = UUID()
-        privacyOperation = operation; privacyMessage = nil; discardArmed = false; update()
+        privacyOperation = operation; privacyMessage = nil; update()
         privacyTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -227,14 +220,14 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         guard !saving, let tool = toolButtons.first(where: { $0.value === sender })?.key else { return }
         clearPrivacyMessage()
         canvas.commitText(); canvas.tool = tool; Self.lastTool = tool
-        discardArmed = false; update(); window.makeFirstResponder(canvas)
+        update(); window.makeFirstResponder(canvas)
     }
     @objc private func undoAnnotation() { guard !saving else { return }; canvas.commitText(); canvas.undoAnnotation() }
     @objc private func redoAnnotation() { guard !saving else { return }; canvas.commitText(); canvas.redoAnnotation() }
     func handleEquivalent(_ event: NSEvent) -> Bool {
         guard window.attachedSheet == nil else { return false }
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        if flags == .command, event.keyCode == 13 { discard(); return true } // W
+        if flags == .command, event.keyCode == 13 { finish(); return true } // W
         if flags == .command, event.keyCode == 36 || event.keyCode == 76 { finish(); return true }
         if canvas.handleZoomKey(event) { return true }
         if canvas.isEditingText { return false }
@@ -243,19 +236,15 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         if flags == [.command, .shift], event.keyCode == 6 { redoAnnotation(); return true }
         return false
     }
-    @objc private func discard() {
-        guard !saving, window.attachedSheet == nil else { return }
-        if canvas.hasChanges(comparedTo: initial), !discardArmed {
-            discardArmed = true; update()
-        } else { close() }
-    }
     @objc private func finish() {
-        guard !saving, window.attachedSheet == nil else { return }
+        guard !saving, !closing, window.attachedSheet == nil else { return }
         cancelPrivacy()
         canvas.commitText()
+        canvas.finishGesture()
         let document = canvas.document
+        guard document != initial else { close(); return }
         saving = true; canvas.isEnabled = false
-        finishButton.isEnabled = false; discardButton.isEnabled = false
+        finishButton.isEnabled = false
         toolButtons.values.forEach { $0.isEnabled = false }; update()
         Task { [self] in
             do {
@@ -264,7 +253,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
                 close()
             } catch {
                 saving = false; canvas.isEnabled = true
-                finishButton.isEnabled = true; discardButton.isEnabled = true
+                finishButton.isEnabled = true
                 toolButtons.values.forEach { $0.isEnabled = true }; update()
                 let alert = NSAlert(); alert.messageText = "注釈を保存できませんでした"; alert.informativeText = error.localizedDescription
                 await alert.beginSheetModal(for: window)
@@ -274,7 +263,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     private func close() { cancelPrivacy(); closing = true; window.close() }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if closing { return true }
-        discard(); return false
+        finish(); return false
     }
     func windowWillClose(_ notification: Notification) {
         cancelPrivacy()
@@ -355,12 +344,14 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     var tool: AnnotationTool { didSet { updateCursor(); needsDisplay = true } }
     var onChange: (() -> Void)?
     var onUserOperation: (() -> Void)?
-    var onDiscard: (() -> Void)?
+    var onFinish: (() -> Void)?
     var onPrivacy: (() -> Void)?
     var onCancelPrivacy: (() -> Bool)?
     var isEnabled = true
     private(set) var selection: Set<UUID> = []
     private var gesture: Gesture?
+    private var selectionBeforeGesture: Set<UUID> = []
+    private var viewportBeforeGesture: AnnotationViewport?
     private var preview: AnnotationDocument?
     private var composed: CGImage?
     private var renderedDocument: AnnotationDocument?
@@ -493,13 +484,12 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         updateCursor()
     }
     private func cancelGesture() { gesture = nil; preview = nil; frozenImageRect = nil; marqueeRect = nil; toggleOnClick = nil }
+    func finishGesture() {
+        if let preview { history.commit(preview) }
+        cancelGesture(); changed()
+    }
     func undoAnnotation() { cancelGesture(); history.undo(); selection = []; changed() }
     func redoAnnotation() { cancelGesture(); history.redo(); selection = []; changed() }
-    func hasChanges(comparedTo initial: AnnotationDocument) -> Bool {
-        if history.document != initial { return true }
-        guard let textInput, let textAnnotation else { return false }
-        return textInput.string != textAnnotation.text
-    }
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         cursorPoint = bounds.contains(p) ? point(event) : nil
@@ -538,6 +528,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         guard isEnabled else { return }
         onUserOperation?()
         commitText(); window?.makeFirstResponder(self)
+        selectionBeforeGesture = selection
+        viewportBeforeGesture = manualViewport
         if spacePressed {
             gesture = .pan(viewport, convert(event.locationInWindow, from: nil)); updateCursor(); return
         }
@@ -545,10 +537,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         cursorPoint = p
         toggleOnClick = nil
         if event.modifierFlags.contains(.shift),
-           let id = document.hit(at: p, style: style, tolerance: 7 / displayScale, includeAreaInterior: tool == .selection) {
+           let id = document.hit(at: p, style: style, tolerance: 7 / displayScale, includeAreaInterior: true) {
             toggleOnClick = (id, selection)
         }
-        let interaction = document.interaction(at: p, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
+        let interaction = document.interaction(at: p, selected: selection, tool: toggleOnClick == nil ? tool : .selection, style: style, tolerance: 7 / displayScale)
         switch interaction {
         case .resize(let id, let handle):
             guard let annotation = document.annotations.first(where: { $0.id == id }) else { return }
@@ -683,11 +675,11 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             if !event.isARepeat { onPrivacy?() }
             return
         }
-        if flags.isEmpty, event.keyCode == 12 {
-            if !event.isARepeat { onDiscard?() }
+        if flags.isEmpty, event.keyCode == 36 || event.keyCode == 76 {
+            if !event.isARepeat { onFinish?() }
             return
         }
-        if flags.isEmpty, event.keyCode == 53 { escape(); return }
+        if flags.isEmpty, event.keyCode == 53 { if !event.isARepeat { escape() }; return }
         if flags.isEmpty, let next = AnnotationTool.allCases.first(where: { $0.keyCode == event.keyCode }) {
             tool = next; rememberTool(); changed(); return
         }
@@ -707,9 +699,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         guard isEnabled else { return }
         if onCancelPrivacy?() == true { return }
         if isEditingText { commitText(); return }
-        cancelGesture()
-        if tool != .selection { tool = .selection; rememberTool(); changed() }
-        else if !selection.isEmpty { selection = []; changed() }
+        if let gesture {
+            if case .pan = gesture { manualViewport = viewportBeforeGesture }
+            selection = selectionBeforeGesture
+            cancelGesture(); changed(); layoutText(); return
+        }
+        if !selection.isEmpty { selection = []; changed() }
+        else { onFinish?() }
     }
     override func deleteBackward(_ sender: Any?) { deleteSelected() }
     override func deleteForward(_ sender: Any?) { deleteSelected() }

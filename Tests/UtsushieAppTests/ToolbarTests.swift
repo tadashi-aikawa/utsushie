@@ -88,9 +88,9 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     let editor = AnnotationEditorController(image: try toolbarImage(), document: AnnotationDocument(), screen: nil)
     defer { editor.window.close() }
     let bar = editor.toolbar
-    bar.frame = CGRect(x: 0, y: 0, width: 1040, height: 75)
+    bar.frame = CGRect(x: 0, y: 0, width: editor.window.minSize.width, height: 75)
     bar.layoutSubtreeIfNeeded()
-    #expect(bar.trays.map { $0.buttons.map(\.title) } == [["選択"], ["枠", "スポット", "矢印"], ["文字", "番号"], ["モザイク", "AIで隠す"]])
+    #expect(bar.trays.map { $0.buttons.map(\.title) } == [["選択"], ["枠", "スポット", "矢印", "直線", "蛍光ペン"], ["文字", "番号"], ["モザイク", "AIで隠す"]])
     #expect(bar.trays.last!.frame.maxX + 10 <= bar.undoButton.frame.minX)
     #expect(bar.finishButton.frame.maxX <= bar.bounds.maxX - 14)
     #expect(bar.hintView.frame.maxX < bar.dimensions.frame.minX)
@@ -98,7 +98,7 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
         #expect(tray.bounds.contains(button.frame))
         #expect(button.acceptsFirstMouse(for: nil) && button.needsPanelToBecomeKey)
     }}
-    #expect(bar.toolButtons[.selection]?.key == "Esc")
+    #expect(bar.toolButtons[.selection]?.key == "V")
     #expect(bar.aiButton.face == .outline && bar.aiButton.dimmed && bar.aiButton.isEnabled)
     let root = try #require(editor.window.contentView)
     root.frame.size = CGSize(width: 1200, height: 915)
@@ -107,7 +107,7 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     #expect(editor.canvas.displayScale == 1)
 }
 
-@MainActor @Test func annotationToolbarButtonsClearAIMessageAndConfirmDiscardInFixedWidthButton() throws {
+@MainActor @Test func annotationToolbarButtonsClearAIMessageAndOnlyOfferUndoRedoFinish() throws {
     let editor = AnnotationEditorController(image: try toolbarImage(), document: AnnotationDocument(), screen: nil)
     defer { editor.window.close() }
     editor.toolbar.aiButton.performClick(nil)
@@ -116,14 +116,10 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     #expect(editor.canvas.tool == .number && editor.hintText == "クリックで1 ・ 指す点からドラッグで引き出し線")
     editor.canvas.appendPrivacyAnnotations([Annotation(tool: .number, start: CGPoint(x: 100, y: 100))])
     editor.toolbar.layoutSubtreeIfNeeded()
-    let frame = editor.toolbar.discardButton.frame
-    editor.toolbar.discardButton.performClick(nil)
-    editor.toolbar.layoutSubtreeIfNeeded()
-    #expect(editor.toolbar.discardButton.title == "もう一度" && editor.toolbar.discardButton.armed)
-    #expect(editor.toolbar.discardButton.frame == frame)
+    #expect(editor.toolbar.subviews.compactMap { $0 as? ToolbarButton }.filter { $0 !== editor.toolbar.zoomButton }.map(\.title) == ["↶", "↷", "完了"])
     #expect(editor.hintText == "クリックで2 ・ 指す点からドラッグで引き出し線")
     editor.toolbar.toolButtons[.rectangle]?.performClick(nil)
-    #expect(!editor.toolbar.discardButton.armed && editor.toolbar.discardButton.title == "破棄" && editor.hintText.isEmpty)
+    #expect(editor.hintText.isEmpty)
 }
 
 @MainActor @Test func annotationToolbarDimensionsFollowOutsideArrowDuringDrag() throws {
@@ -186,20 +182,19 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     guard let directory = ProcessInfo.processInfo.environment["UTSUSHIE_UI_PREVIEW_DIR"] else { return }
     let url = URL(fileURLWithPath: directory, isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    let states: [(String, AnnotationTool, Bool, Bool, Bool, ToolbarHint?)] = [
-        ("number", .number, false, false, false, nil),
-        ("rectangle", .rectangle, false, false, false, nil),
-        ("selection", .selection, false, false, false, nil),
-        ("text", .text, false, false, false, nil),
-        ("editing-text", .text, true, false, false, nil),
-        ("ai-searching", .rectangle, false, false, true, nil),
-        ("ai-result", .rectangle, false, false, false, ToolbarHint("3 か所にモザイクを入れました")),
-        ("ai-error", .rectangle, false, false, false, ToolbarHint("隠す箇所を探せませんでした", isError: true)),
-        ("ai-disabled", .rectangle, false, false, false, ToolbarHint(AnnotationToolbarPresentation.aiDisabled)),
-        ("discard", .rectangle, false, true, false, nil)
+    let states: [(String, AnnotationTool, Bool, Bool, ToolbarHint?)] = [
+        ("number", .number, false, false, nil),
+        ("rectangle", .rectangle, false, false, nil),
+        ("selection", .selection, false, false, nil),
+        ("text", .text, false, false, nil),
+        ("editing-text", .text, true, false, nil),
+        ("ai-searching", .rectangle, false, true, nil),
+        ("ai-result", .rectangle, false, false, ToolbarHint("3 か所にモザイクを入れました")),
+        ("ai-error", .rectangle, false, false, ToolbarHint("隠す箇所を探せませんでした", isError: true)),
+        ("ai-disabled", .rectangle, false, false, ToolbarHint(AnnotationToolbarPresentation.aiDisabled))
     ]
-    for width: CGFloat in [1040, 1200] {
-        for (name, tool, editing, armed, searching, message) in states {
+    for width: CGFloat in [AnnotationToolbarView().minimumWidth, 1200] {
+        for (name, tool, editing, searching, message) in states {
             let bar = AnnotationToolbarView()
             bar.appearance = NSAppearance(named: .darkAqua)
             bar.frame = CGRect(x: 0, y: 0, width: width, height: AnnotationToolbarPresentation.height)
@@ -208,11 +203,10 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
             bar.aiButton.key = searching ? "Esc" : "H"
             bar.aiButton.dimmed = name == "ai-disabled"
             bar.redoButton.isEnabled = false
-            bar.discardButton.armed = armed
             bar.dimensions.stringValue = "書き出し 960 × 600"
             bar.zoomButton.title = "100%"
             bar.hintView.hint = AnnotationToolbarPresentation.hint(tool: tool, nextNumber: 4,
-                editingText: editing, discardArmed: armed, findingPrivacy: searching, message: message)
+                editingText: editing, findingPrivacy: searching, message: message)
             bar.layoutSubtreeIfNeeded()
             let bitmap = try #require(bar.bitmapImageRepForCachingDisplay(in: bar.bounds))
             bar.cacheDisplay(in: bar.bounds, to: bitmap)

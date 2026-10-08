@@ -153,7 +153,7 @@ private func pixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
 }
 @MainActor @Test func annotationToolSwitchUsesPhysicalKeysDespiteDifferentCharacters() throws {
     let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .number)
-    let mappings: [(UInt16, AnnotationTool)] = [(15, .rectangle), (1, .spotlight), (17, .text), (45, .number), (0, .arrow), (46, .mosaic)]
+    let mappings: [(UInt16, AnnotationTool)] = [(9, .selection), (15, .rectangle), (1, .spotlight), (17, .text), (45, .number), (0, .arrow), (37, .line), (35, .highlighter), (46, .mosaic)]
     for (keyCode, tool) in mappings {
         let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .function, timestamp: 0,
             windowNumber: 0, context: nil, characters: "す", charactersIgnoringModifiers: "す", isARepeat: false, keyCode: keyCode))
@@ -186,12 +186,12 @@ private func pixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     }
 }
 @MainActor
-private func annotationMouseEvent(_ canvas: AnnotationCanvas, type: NSEvent.EventType, at point: CGPoint) throws -> NSEvent {
+private func annotationMouseEvent(_ canvas: AnnotationCanvas, type: NSEvent.EventType, at point: CGPoint, flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
     let viewPoint = CGPoint(x: canvas.imageRect.minX + point.x * canvas.displayScale, y: canvas.imageRect.minY + point.y * canvas.displayScale)
-    return try #require(NSEvent.mouseEvent(with: type, location: canvas.convert(viewPoint, to: nil), modifierFlags: [], timestamp: 0,
+    return try #require(NSEvent.mouseEvent(with: type, location: canvas.convert(viewPoint, to: nil), modifierFlags: flags, timestamp: 0,
         windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
 }
-@MainActor @Test func annotationEscapeCommitsTextThenSelectsThenClearsWithoutDiscard() throws {
+@MainActor @Test func annotationEscapeCommitsTextThenClearsSelectionThenFinishes() throws {
     let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .text)
     canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
     canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 20)))
@@ -202,14 +202,39 @@ private func annotationMouseEvent(_ canvas: AnnotationCanvas, type: NSEvent.Even
     #expect(!canvas.isEditingText && canvas.tool == .text)
     #expect(canvas.document.annotations.first?.text == "入力")
     #expect(!canvas.selection.isEmpty)
+    var finishes = 0
+    canvas.onFinish = { finishes += 1 }
     canvas.escape()
-    #expect(canvas.tool == .selection && !canvas.selection.isEmpty)
-    canvas.escape()
-    #expect(canvas.selection.isEmpty)
+    #expect(canvas.tool == .text && canvas.selection.isEmpty && finishes == 0)
     let document = canvas.document
     canvas.escape()
-    #expect(canvas.document == document && canvas.tool == .selection)
+    #expect(canvas.document == document && canvas.tool == .text && finishes == 1)
 }
+@MainActor @Test func annotationEscapeDuringDragCancelsPreviewWithoutAddingAnnotationsOrClosing() throws {
+    for tool in [AnnotationTool.rectangle, .line, .highlighter, .selection] {
+        let number = Annotation(tool: .number, start: CGPoint(x: 120, y: 80))
+        let initial = AnnotationDocument(annotations: [number])
+        let canvas = AnnotationCanvas(image: try annotationFixture(), document: initial, tool: .selection)
+        canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+        var finishes = 0
+        canvas.onFinish = { finishes += 1 }
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: number.start))
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: number.start))
+        canvas.tool = tool
+        let start = CGPoint(x: 20, y: 20), end = CGPoint(x: 140, y: 90)
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: start))
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: end))
+        #expect(canvas.isInteracting)
+        if tool != .selection { #expect(canvas.document.annotations.count == 2) }
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: 53))
+        #expect(!canvas.isInteracting && finishes == 0)
+        #expect(canvas.document == initial && !canvas.history.canUndo)
+        #expect(canvas.selection == [number.id])
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: end))
+        #expect(canvas.document == initial && finishes == 0)
+    }
+}
+
 @MainActor @Test func annotationSelectionDoesNotCreateAndSelectedEdgeResizesWhileHoldingTool() throws {
     let area = Annotation(tool: .spotlight, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 140, y: 80))
     let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [area]), tool: .selection)
@@ -233,6 +258,112 @@ private func annotationMouseEvent(_ canvas: AnnotationCanvas, type: NSEvent.Even
 private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags: NSEvent.ModifierFlags = [], repeating: Bool = false) throws -> NSEvent {
     try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
         windowNumber: 0, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: repeating, keyCode: keyCode))
+}
+
+@MainActor @Test func annotationShiftClickMarqueeGroupMoveDeleteAndClipboard() throws {
+    let a = Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 50, y: 50))
+    let b = Annotation(tool: .number, start: CGPoint(x: 100, y: 50))
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [a, b]), tool: .selection)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    func click(_ p: CGPoint, flags: NSEvent.ModifierFlags = []) throws {
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: p, flags: flags))
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: p, flags: flags))
+    }
+    func drag(_ from: CGPoint, _ to: CGPoint, flags: NSEvent.ModifierFlags = []) throws {
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: from, flags: flags))
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: to, flags: flags))
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: to, flags: flags))
+    }
+    try click(CGPoint(x: 35, y: 35))
+    try click(b.start, flags: .shift)
+    #expect(canvas.selection == [a.id, b.id])
+    try click(b.start, flags: .shift)
+    #expect(canvas.selection == [a.id])
+    try drag(CGPoint(x: 150, y: 80), CGPoint(x: 100, y: 55), flags: .shift)
+    #expect(canvas.selection == [a.id, b.id])
+    let beforeMove = canvas.document
+    try drag(CGPoint(x: 35, y: 35), CGPoint(x: 45, y: 37), flags: .shift)
+    #expect(canvas.selection == [a.id, b.id])
+    #expect(canvas.document.annotations[0].start == CGPoint(x: 30, y: 20))
+    #expect(canvas.document.annotations[1].start == CGPoint(x: 110, y: 50))
+    canvas.undoAnnotation(); #expect(canvas.document == beforeMove)
+    try drag(CGPoint(x: 5, y: 5), CGPoint(x: 120, y: 80))
+    #expect(canvas.selection == [a.id, b.id])
+    #expect(canvas.handleClipboardKey(try annotationKeyEvent(keyCode: 8, flags: .command)))
+    #expect(canvas.handleClipboardKey(try annotationKeyEvent(keyCode: 9, flags: .command)))
+    #expect(canvas.document.annotations.count == 4 && canvas.selection.count == 2)
+    #expect(canvas.document.annotations[2].start == CGPoint(x: 23.2, y: 23.2))
+    #expect(canvas.document.number(for: canvas.document.annotations[3].id) == 2)
+    canvas.undoAnnotation(); #expect(canvas.document == beforeMove)
+    try drag(CGPoint(x: 5, y: 5), CGPoint(x: 120, y: 80))
+    #expect(canvas.handleClipboardKey(try annotationKeyEvent(keyCode: 2, flags: .command)))
+    #expect(canvas.document.annotations.count == 4)
+    canvas.deleteBackward(nil)
+    #expect(canvas.document == beforeMove)
+    canvas.undoAnnotation(); #expect(canvas.document.annotations.count == 4)
+    try click(CGPoint(x: 35, y: 35))
+    #expect(canvas.selection.count == 1)
+}
+
+@MainActor @Test func annotationHighlighterLocksStraightModeAtMouseDownAndRetainsClosedPaths() throws {
+    for straight in [false, true] {
+        let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .highlighter)
+        canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+        let start = CGPoint(x: 20, y: 20)
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: start, flags: straight ? .shift : []))
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 80, y: 20), flags: straight ? [] : .shift))
+        let end = straight ? CGPoint(x: 180, y: 90) : start
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: end, flags: straight ? [] : .shift))
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: end))
+        let annotation = try #require(canvas.document.annotations.first)
+        if straight { #expect(annotation.points == [start, CGPoint(x: 160, y: 90)]) }
+        else { #expect(annotation.points.count > 2 && annotation.points.last == start) }
+        canvas.undoAnnotation(); #expect(canvas.document.annotations.isEmpty)
+    }
+}
+
+@MainActor @Test func annotationShiftConstraintsFollowCurrentDragFlags() throws {
+    for tool in [AnnotationTool.line, .arrow, .rectangle, .spotlight, .mosaic] {
+        let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: tool)
+        canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+        let start = CGPoint(x: 20, y: 20), end = CGPoint(x: 80, y: 65)
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: start))
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: end, flags: .shift))
+        let constrained = try #require(canvas.document.annotations.first)
+        #expect(abs(constrained.rect.width - constrained.rect.height) < 0.00001)
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: end))
+        #expect(canvas.document.annotations.first?.end == end)
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: end))
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: end, flags: .shift))
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 100, y: 75), flags: .shift))
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 100, y: 75), flags: .shift))
+        let resized = try #require(canvas.document.annotations.first)
+        #expect(abs(resized.rect.width - resized.rect.height) < 0.00001)
+        canvas.undoAnnotation(); #expect(canvas.document.annotations.first?.end == end)
+    }
+}
+
+@MainActor @Test func annotationHighlighterComposesAboveCurtainAndBelowRedLines() throws {
+    let spot = Annotation(tool: .spotlight, start: CGPoint(x: 10, y: 10), end: CGPoint(x: 40, y: 40))
+    let pen = Annotation(tool: .highlighter, start: CGPoint(x: 5, y: 60), end: CGPoint(x: 150, y: 60))
+    let line = Annotation(tool: .line, start: CGPoint(x: 80, y: 40), end: CGPoint(x: 80, y: 80))
+    let image = try AnnotationRenderer.compose(annotationFixture(), document: AnnotationDocument(annotations: [line, pen, spot]))
+    let yellow = try pixel(image, x: 60, y: 60)
+    // 黄55%を暗幕の灰色128へ合成する。
+    #expect(abs(yellow[0] - 191) <= 2 && abs(yellow[1] - 173) <= 2 && abs(yellow[2] - 84) <= 2)
+    #expect(try pixel(image, x: 80, y: 60) == [229, 53, 42, 255])
+}
+
+@MainActor @Test func annotationClipboardKeysStayInTextViewWhileEditing() throws {
+    let editor = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil)
+    defer { editor.window.close() }
+    editor.canvas.tool = .text
+    editor.canvas.mouseDown(with: try annotationMouseEvent(editor.canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 20)))
+    editor.canvas.mouseUp(with: try annotationMouseEvent(editor.canvas, type: .leftMouseUp, at: CGPoint(x: 20, y: 20)))
+    #expect(editor.canvas.isEditingText)
+    for code: UInt16 in [8, 9, 2] {
+        #expect(!editor.handleEquivalent(try annotationKeyEvent(keyCode: code, flags: .command)))
+    }
 }
 
 @MainActor @Test func annotationEditorUsesNonactivatingPanelAndInputViewsRequestKeys() throws {
@@ -262,18 +393,21 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     #expect(editor.canvas.document.annotations.first?.text.contains("変換") == true)
 }
 
-@MainActor @Test func annotationDiscardUsesUnmodifiedPhysicalQAndIgnoresRepeat() throws {
+@MainActor @Test func annotationFinishUsesUnmodifiedEnterAndEscapeAndIgnoresRepeat() throws {
     let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .rectangle)
-    var discards = 0
-    canvas.onDiscard = { discards += 1 }
+    var finishes = 0
+    canvas.onFinish = { finishes += 1 }
     canvas.keyDown(with: try annotationKeyEvent(keyCode: 12, characters: "た", flags: .function))
-    #expect(discards == 1)
-    canvas.keyDown(with: try annotationKeyEvent(keyCode: 12, repeating: true))
-    canvas.keyDown(with: try annotationKeyEvent(keyCode: 12, flags: .shift))
-    #expect(discards == 1 && canvas.tool == .rectangle)
+    #expect(finishes == 0)
+    for code: UInt16 in [36, 76, 53] {
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: code, flags: .function))
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: code, repeating: true))
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: code, flags: .shift))
+    }
+    #expect(finishes == 3 && canvas.tool == .rectangle)
     canvas.isEnabled = false
-    canvas.keyDown(with: try annotationKeyEvent(keyCode: 12))
-    #expect(discards == 1)
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 36))
+    #expect(finishes == 3)
 }
 
 @MainActor @Test func annotationQIsTextDuringInputAndCommandQIsNotDiscard() throws {
@@ -285,21 +419,25 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     editor.canvas.mouseDown(with: try annotationMouseEvent(editor.canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 20)))
     editor.canvas.mouseUp(with: try annotationMouseEvent(editor.canvas, type: .leftMouseUp, at: CGPoint(x: 20, y: 20)))
     let input = try #require(editor.canvas.subviews.compactMap { $0 as? AnnotationTextView }.first)
-    var discards = 0
-    editor.canvas.onDiscard = { discards += 1 }
+    var finishes = 0
+    editor.canvas.onFinish = { finishes += 1 }
     let event = try annotationKeyEvent(keyCode: 12)
     editor.canvas.keyDown(with: event)
     input.keyDown(with: event)
-    #expect(discards == 0 && editor.canvas.isEditingText && input.string == "q")
+    #expect(finishes == 0 && editor.canvas.isEditingText && input.string == "q")
     #expect(!editor.handleEquivalent(try annotationKeyEvent(keyCode: 12, flags: .command)))
 }
 
-@MainActor @Test func annotationQDiscardsUnchangedImmediatelyAndChangedOnSecondPress() throws {
+@MainActor @Test func annotationCloseKeysSaveChangesAndSkipUnchangedSave() async throws {
     _ = NSApplication.shared
-    for changed in [false, true] {
+    for (code, flags) in [(UInt16(36), NSEvent.ModifierFlags()), (53, []), (13, .command), (36, .command)] {
+      for changed in [false, true] {
         let editor = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil)
+        defer { editor.window.close() }
         var closed = false
+        var saves = 0
         editor.onClose = { closed = true }
+        editor.onComplete = { _, document in saves += 1; #expect(document.annotations.count == 1) }
         if changed {
             editor.canvas.tool = .number
             editor.canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
@@ -310,15 +448,16 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
             #expect(editor.window.performKeyEquivalent(with: try annotationKeyEvent(keyCode: 6, characters: "つ", flags: [.command, .shift])))
             #expect(editor.canvas.document.annotations.count == 1)
         }
-        let event = try annotationKeyEvent(keyCode: 12)
-        editor.canvas.keyDown(with: event)
-        #expect(closed == !changed)
-        if changed {
-            editor.canvas.keyDown(with: try annotationKeyEvent(keyCode: 12, repeating: true))
+        let event = try annotationKeyEvent(keyCode: code, flags: flags)
+        if flags == .command { #expect(editor.handleEquivalent(event)) }
+        else { editor.canvas.keyDown(with: event) }
+        if changed && code == 53 {
             #expect(!closed)
             editor.canvas.keyDown(with: event)
-            #expect(closed)
         }
+        for _ in 0..<100 where !closed { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(closed && saves == (changed ? 1 : 0))
+      }
     }
 }
 
@@ -531,7 +670,7 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: end))
     let created = try #require(canvas.document.annotations.first)
     #expect(created.start == start && created.end == end && canvas.exportLayout.right > 20)
-    canvas.escape(); canvas.escape() // 選択モードへ戻し、選択も外す。
+    canvas.escape() // 選択を外す。道具は維持する。
     #expect(canvas.selection.isEmpty)
     canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: end))
     canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 200, y: 50)))

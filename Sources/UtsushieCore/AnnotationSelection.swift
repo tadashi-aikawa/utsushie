@@ -73,7 +73,7 @@ extension AnnotationGeometry {
         guard shift else { return point }
         if [.arrow, .line].contains(tool) { return angleConstrained(point, from: anchor) }
         if [.rectangle, .spotlight, .mosaic].contains(tool) {
-            return squareConstrained(point, from: anchor, imageSize: tool.allowsMargin ? nil : imageSize)
+            return squareEndpoint(point, from: anchor, tool: tool, imageSize: imageSize)
         }
         return point
     }
@@ -87,11 +87,22 @@ extension AnnotationGeometry {
             case .arrowEnd: point = angleConstrained(point, from: annotation.start)
             case .topLeft, .topRight, .bottomRight, .bottomLeft:
                 let anchor = resized(annotation, handle: handle, to: point).start
-                point = squareConstrained(point, from: anchor, imageSize: annotation.tool.allowsMargin ? nil : imageSize)
+                point = squareEndpoint(point, from: anchor, tool: annotation.tool, imageSize: imageSize)
             default: break
             }
         }
         return resized(annotation, handle: handle, to: point)
+    }
+
+    private static func squareEndpoint(_ point: CGPoint, from anchor: CGPoint, tool: AnnotationTool, imageSize: CGSize) -> CGPoint {
+        let endpoint = squareConstrained(point, from: anchor, imageSize: tool.allowsMargin ? nil : imageSize)
+        let rect = Annotation(tool: tool, start: anchor, end: endpoint).rect
+        let side = min(imageSize.width, imageSize.height)
+        // 中心が内側の枠は画像内へ収める。片辺だけ切って正方形を崩さない。
+        guard tool == .rectangle, rect.width > side,
+              containsCenter(of: rect, in: CGRect(origin: .zero, size: imageSize)) else { return endpoint }
+        return CGPoint(x: anchor.x + (endpoint.x < anchor.x ? -side : side),
+                       y: anchor.y + (endpoint.y < anchor.y ? -side : side))
     }
 
     public static func segmentIntersects(_ rect: CGRect, from a: CGPoint, to b: CGPoint) -> Bool {

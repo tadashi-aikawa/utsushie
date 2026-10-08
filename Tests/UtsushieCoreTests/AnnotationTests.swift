@@ -179,7 +179,7 @@ func annotationPlacementUsesCenterAndToolRestriction(_ tool: AnnotationTool) {
     let crossing = Annotation(tool: tool, start: CGPoint(x: -10, y: 200), end: CGPoint(x: 70, y: 280))
     let crossingBounds = document.bounds(of: crossing, style: style)
     let inImage = AnnotationGeometry.placed(crossing, bounds: crossingBounds, imageSize: size)
-    if tool == .arrow { #expect(inImage == crossing) }
+    if [.arrow, .line].contains(tool) { #expect(inImage == crossing) }
     else if AnnotationGeometry.containsCenter(of: crossingBounds, in: CGRect(origin: .zero, size: size)) {
         #expect(document.bounds(of: inImage, style: style).minX == 0)
     }
