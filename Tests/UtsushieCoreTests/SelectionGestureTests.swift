@@ -22,6 +22,59 @@ func smallMovementCapturesWindowOnlyOnRelease(_ delta: CGPoint, _ hasWindow: Boo
     #expect(state.pointerUp(at: CGPoint(x: 3, y: 4)) == .captureArea(CGRect(x: 0, y: 0, width: 3, height: 4)))
 }
 
+@Test(arguments: [false, true], [false, true])
+func clickMovementKeepsPreviousAreaVisible(_ video: Bool, _ option: Bool) {
+    var state = CaptureState()
+    if video { _ = state.key(48, hasLast: true) }
+    let last = CGRect(x: 100, y: 100, width: 400, height: 300)
+    #expect(!state.gesture.isSelectingArea)
+    _ = state.pointerDown(at: CGPoint(x: 150, y: 150), last: last, movingLast: option)
+    state.pointerDragged(to: CGPoint(x: 154, y: 150))
+    #expect(!state.gesture.isSelectingArea)
+    #expect(state.gesture.lastPreview == nil)
+    #expect(state.pointerUp(at: CGPoint(x: 154, y: 150), hasWindow: true) == .captureWindow)
+    #expect(!state.gesture.isSelectingArea)
+}
+
+@Test(arguments: [false, true])
+func newAreaDragHidesPreviousAreaUntilRelease(_ video: Bool) {
+    var state = CaptureState()
+    if video { _ = state.key(48, hasLast: true) }
+    let last = CGRect(x: 100, y: 100, width: 400, height: 300)
+    let start = CGPoint(x: 150, y: 150)
+    _ = state.pointerDown(at: start, last: last)
+    state.pointerDragged(to: CGPoint(x: 154.01, y: 150))
+    #expect(state.gesture.isSelectingArea)
+    state.pointerDragged(to: start)
+    #expect(state.gesture.isSelectingArea)
+    #expect(state.pointerUp(at: start, hasWindow: true) == .none)
+    #expect(!state.gesture.isSelectingArea)
+
+    _ = state.pointerDown(at: start, last: last)
+    state.pointerDragged(to: CGPoint(x: 170, y: 190))
+    #expect(state.gesture.isSelectingArea)
+    #expect(state.key(53, hasLast: true) == .cancel)
+    #expect(!state.gesture.isSelectingArea)
+}
+
+@Test(arguments: [false, true])
+func optionDragKeepsMovingPreviousAreaVisible(_ video: Bool) {
+    var state = CaptureState()
+    if video { _ = state.key(48, hasLast: true) }
+    let last = CGRect(x: 100, y: 100, width: 400, height: 300)
+    _ = state.pointerDown(at: CGPoint(x: 150, y: 150), last: last, movingLast: true)
+    state.pointerDragged(to: CGPoint(x: 170, y: 190))
+    #expect(!state.gesture.isSelectingArea)
+    #expect(state.gesture.lastPreview == last.offsetBy(dx: 20, dy: 40))
+    #expect(state.pointerUp(at: CGPoint(x: 170, y: 190)) == .moveLast(last.offsetBy(dx: 20, dy: 40)))
+    #expect(!state.gesture.isSelectingArea)
+
+    _ = state.pointerDown(at: .zero, last: last, movingLast: true)
+    state.pointerDragged(to: CGPoint(x: 20, y: 40))
+    #expect(state.gesture.isSelectingArea)
+    #expect(state.gesture.lastPreview == nil)
+}
+
 @Test func areaDragCapturesOnlyOnRelease() {
     var state = CaptureState()
     _ = state.pointerDown(at: CGPoint(x: 100, y: 100), last: nil)

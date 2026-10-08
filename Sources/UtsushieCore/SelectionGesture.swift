@@ -15,6 +15,7 @@ public struct SelectionGesture: Sendable {
     public private(set) var isDragging = false
     public private(set) var areaPreview: CGRect?
     public private(set) var lastPreview: CGRect?
+    public var isSelectingArea: Bool { isDragging && originalLast == nil }
 
     public init() {}
     public mutating func begin(at point: CGPoint, last: CGRect?, movingLast: Bool = false) {

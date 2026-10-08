@@ -13,7 +13,9 @@ final class OverlayController {
     private(set) var state = CaptureState()
     private(set) var last: CGRect?
     var selection: CGRect? { state.gesture.areaPreview }
-    var displayedLast: CGRect? { state.gesture.lastPreview ?? last }
+    var displayedLast: CGRect? {
+        state.gesture.isSelectingArea ? nil : state.gesture.lastPreview ?? last
+    }
     private(set) var highlighted: CaptureRequest?
     private(set) var highlightedApp = ""
     var config = UtsushieConfig()
