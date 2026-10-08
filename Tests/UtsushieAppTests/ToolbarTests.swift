@@ -160,7 +160,7 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     controls.colorButtons[.yellow]?.performClick(nil)
     #expect(canvas.document == initial && !canvas.history.canUndo)
     bar.toolButtons[.number]?.performClick(nil)
-    #expect(controls.isHidden && !bar.hintView.isHidden && !editor.hintText.isEmpty)
+    #expect(controls.isHidden && !bar.inkControls.isHidden && bar.hintView.isHidden)
 }
 
 @MainActor @Test func annotationToolbarButtonsClearAIMessageAndOnlyOfferUndoRedoFinish() throws {
@@ -168,6 +168,7 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     defer { editor.window.close() }
     editor.toolbar.aiButton.performClick(nil)
     #expect(editor.hintText == AnnotationToolbarPresentation.aiDisabled)
+    #expect(!editor.toolbar.hintView.isHidden && editor.toolbar.inkControls.isHidden && editor.toolbar.highlighterControls.isHidden)
     editor.toolbar.toolButtons[.number]?.performClick(nil)
     #expect(editor.canvas.tool == .number && editor.hintText == "クリックで1 ・ 指す点からドラッグで引き出し線")
     editor.canvas.appendPrivacyAnnotations([Annotation(tool: .number, start: CGPoint(x: 100, y: 100))])
@@ -176,6 +177,85 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     #expect(editor.hintText == "クリックで2 ・ 指す点からドラッグで引き出し線")
     editor.toolbar.toolButtons[.rectangle]?.performClick(nil)
     #expect(editor.hintText.isEmpty)
+}
+
+@MainActor @Test func annotationInkToolbarChangesMixedSelectionInOneUndoAndFitsLowerRow() throws {
+    let image = try toolbarImage()
+    let defaults = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: .rectangle)
+    let oldColor = try #require(defaults.inkColor)
+    let penDefaults = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: .highlighter)
+    let oldPenColor = try #require(penDefaults.highlighterColor)
+    defer { defaults.applyInkColor(oldColor); penDefaults.applyHighlighterAction(.color(oldPenColor)) }
+    let a = Annotation(tool: .rectangle, start: CGPoint(x: 100, y: 100), end: CGPoint(x: 250, y: 150), inkColor: .indigo)
+    let b = Annotation(tool: .line, start: CGPoint(x: 100, y: 200), end: CGPoint(x: 250, y: 200), inkColor: .white)
+    let pen = Annotation(tool: .highlighter, start: CGPoint(x: 100, y: 250), end: CGPoint(x: 250, y: 250), highlighterColor: .pink)
+    let mosaic = Annotation(tool: .mosaic, start: CGPoint(x: 100, y: 300), end: CGPoint(x: 250, y: 350))
+    let unselected = Annotation(tool: .number, start: CGPoint(x: 600, y: 500), inkColor: .black)
+    let initial = AnnotationDocument(annotations: [a, b, pen, mosaic, unselected])
+    let editor = AnnotationEditorController(image: image, document: initial, screen: nil)
+    defer { editor.window.close() }
+    let bar = editor.toolbar, canvas = editor.canvas, controls = bar.inkControls
+    editor.window.contentView?.layoutSubtreeIfNeeded()
+    bar.toolButtons[.selection]?.performClick(nil)
+    func selectMixed() throws {
+        canvas.mouseDown(with: try toolbarMouse(canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 20)))
+        canvas.mouseDragged(with: try toolbarMouse(canvas, type: .leftMouseDragged, at: CGPoint(x: 400, y: 400)))
+        canvas.mouseUp(with: try toolbarMouse(canvas, type: .leftMouseUp, at: CGPoint(x: 400, y: 400)))
+    }
+    try selectMixed()
+    #expect(canvas.selection == [a.id, b.id, pen.id, mosaic.id])
+    #expect(!controls.isHidden && bar.highlighterControls.isHidden && bar.hintView.isHidden)
+    #expect(controls.colorButtons.count == 5 && controls.colorButtons.values.allSatisfy { $0.state == .off })
+    controls.colorButtons[.green]?.performClick(nil)
+    let colored = initial.settingInk([a.id, b.id], color: .green)
+    #expect(canvas.document == colored && controls.colorButtons[.green]?.state == .on)
+    #expect(editor.window.firstResponder === canvas)
+    canvas.keyDown(with: try toolbarKey(2)) // Dはインクの色を変えない。
+    #expect(canvas.document == colored)
+    canvas.undoAnnotation(); #expect(canvas.document == initial && !canvas.history.canUndo)
+    try selectMixed()
+    canvas.keyDown(with: try toolbarKey(23))
+    #expect(canvas.document == initial.settingInk([a.id, b.id], color: .white))
+    canvas.undoAnnotation(); #expect(canvas.document == initial && !canvas.history.canUndo)
+    bar.toolButtons[.rectangle]?.performClick(nil)
+    bar.frame = CGRect(x: 0, y: 0, width: bar.minimumWidth, height: 75)
+    bar.layoutSubtreeIfNeeded()
+    #expect(controls.frame.origin == CGPoint(x: 16, y: 46) && controls.frame.height == 25)
+    #expect(controls.frame.maxX < bar.dimensions.frame.minX)
+    for button in controls.colorButtons.values {
+        #expect(controls.bounds.contains(button.frame))
+        #expect(button.needsPanelToBecomeKey && button.acceptsFirstMouse(for: nil))
+    }
+    #expect(!controls.subviews.contains { $0 is ToolbarButton })
+    bar.toolButtons[.highlighter]?.performClick(nil)
+    #expect(controls.isHidden && !bar.highlighterControls.isHidden)
+    bar.highlighterControls.colorButtons[.cyan]?.performClick(nil)
+    #expect(canvas.document == initial && !canvas.history.canUndo)
+    bar.toolButtons[.mosaic]?.performClick(nil)
+    #expect(controls.isHidden && bar.highlighterControls.isHidden && !bar.hintView.isHidden)
+    bar.toolButtons[.text]?.performClick(nil)
+    canvas.mouseDown(with: try toolbarMouse(canvas, type: .leftMouseDown, at: CGPoint(x: 500, y: 100)))
+    canvas.mouseUp(with: try toolbarMouse(canvas, type: .leftMouseUp, at: CGPoint(x: 500, y: 100)))
+    #expect(canvas.isEditingText && controls.isHidden && !bar.hintView.isHidden)
+    #expect(editor.hintText == "⏎で確定 ・ ⇧⏎で改行")
+}
+
+@MainActor @Test func whiteInkColorButtonKeepsDarkEdgeAndShowsSelectedRing() throws {
+    let button = InkColorButton(color: .white)
+    button.frame = CGRect(x: 0, y: 0, width: 24, height: 25)
+    var rings: [Int] = []
+    for state in [NSControl.StateValue.off, .on] {
+        button.state = state
+        let image = try toolbarBitmap(width: 24, height: 25) {
+            NSColor.gray.setFill(); button.bounds.fill()
+            button.draw(button.bounds)
+        }
+        let bytes = try #require(image.dataProvider?.data) as Data
+        let edge = 12 * image.bytesPerRow + 4 * 4
+        #expect(bytes[edge] < 100 && bytes[edge + 1] < 100 && bytes[edge + 2] < 100)
+        rings.append(Int(bytes[12 * image.bytesPerRow + 3 * 4]))
+    }
+    #expect(rings[0] < 170 && rings[1] > 220)
 }
 
 @MainActor @Test func annotationToolbarDimensionsFollowOutsideArrowDuringDrag() throws {

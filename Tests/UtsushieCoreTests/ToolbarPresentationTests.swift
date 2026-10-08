@@ -12,11 +12,21 @@ import Testing
     #expect(editing.text == "⏎で確定 ・ ⇧⏎で改行" && editing.keys == ["⇧⏎", "⏎"])
 }
 
-@Test func highlighterControlsAppearForToolOrSelectedHighlighters() {
+@Test func colorControlsFollowToolAndGiveInkPriorityInMixedSelection() {
+    let inkTools: [AnnotationTool] = [.rectangle, .spotlight, .arrow, .line, .text, .number]
+    let selections: [[AnnotationTool]] = [[], [.highlighter], [.mosaic], [.highlighter, .mosaic], [.line, .highlighter], [.text, .number], [.number, .mosaic]]
     for tool in AnnotationTool.allCases {
-        #expect(AnnotationToolbarPresentation.showsHighlighterControls(tool: tool, selectedTools: []) == (tool == .highlighter))
-        #expect(AnnotationToolbarPresentation.showsHighlighterControls(tool: tool, selectedTools: [.line, .highlighter]))
-        #expect(AnnotationToolbarPresentation.showsHighlighterControls(tool: tool, selectedTools: [.text, .number]) == (tool == .highlighter))
+        for selected in selections {
+            let expected: AnnotationColorControls
+            switch tool {
+            case .highlighter: expected = .highlighter
+            case .mosaic: expected = .none
+            case .selection:
+                expected = selected.contains(where: { inkTools.contains($0) }) ? .ink : selected.contains(.highlighter) ? .highlighter : .none
+            default: expected = .ink
+            }
+            #expect(AnnotationToolbarPresentation.colorControls(tool: tool, selectedTools: selected) == expected)
+        }
     }
 }
 

@@ -4,6 +4,14 @@ import CoreGraphics
 extension AnnotationDocument {
     public mutating func remove(_ ids: Set<UUID>) { annotations.removeAll { ids.contains($0.id) } }
 
+    public func settingInk(_ ids: Set<UUID>, color: InkColor) -> AnnotationDocument {
+        var result = self
+        for index in result.annotations.indices where ids.contains(result.annotations[index].id) && result.annotations[index].tool.usesInkColor {
+            result.annotations[index].inkColor = color
+        }
+        return result
+    }
+
     /// 混在する選択でも、蛍光ペン以外の注釈と指定しない軸は保つ。
     public func settingHighlighter(_ ids: Set<UUID>, color: HighlighterColor? = nil, darkBackground: Bool? = nil) -> AnnotationDocument {
         var result = self

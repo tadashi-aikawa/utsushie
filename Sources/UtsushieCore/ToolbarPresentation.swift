@@ -10,13 +10,21 @@ public struct ToolbarHint: Equatable, Sendable {
     }
 }
 
+public enum AnnotationColorControls: Equatable, Sendable {
+    case none, ink, highlighter
+}
+
 public enum AnnotationToolbarPresentation {
     public static let height: CGFloat = 75
     public static let minimumWidth: CGFloat = 1040
     public static let aiDisabled = "AIで隠すは、設定ファイルで ai = true にすると使えます"
 
-    public static func showsHighlighterControls(tool: AnnotationTool, selectedTools: [AnnotationTool]) -> Bool {
-        tool == .highlighter || selectedTools.contains(.highlighter)
+    public static func colorControls(tool: AnnotationTool, selectedTools: [AnnotationTool]) -> AnnotationColorControls {
+        if tool == .highlighter { return .highlighter }
+        if tool.usesInkColor { return .ink }
+        guard tool == .selection else { return .none }
+        if selectedTools.contains(where: \.usesInkColor) { return .ink }
+        return selectedTools.contains(.highlighter) ? .highlighter : .none
     }
 
     public static func hint(tool: AnnotationTool, nextNumber: Int, editingText: Bool = false,

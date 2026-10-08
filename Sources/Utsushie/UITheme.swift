@@ -8,6 +8,18 @@ enum UITheme {
     static let ink = color(0x1C1C1E)
     static let red = color(0xE5352A)
     static let redFace = color(0xD23125)
+    static func ink(_ choice: InkColor) -> NSColor {
+        switch choice {
+        case .red: red
+        case .indigo: indigo
+        case .green: color(0x1F9D55)
+        case .black: ink
+        case .white: .white
+        }
+    }
+    static func inkFace(_ choice: InkColor) -> NSColor { choice == .red ? redFace : ink(choice) }
+    static func inkEdge(_ choice: InkColor) -> NSColor { choice == .white ? ink : .white }
+    static func inkText(_ choice: InkColor) -> NSColor { choice == .white ? ink : .white }
     static func highlighter(_ choice: HighlighterColor) -> NSColor {
         let hex: Int
         switch choice {

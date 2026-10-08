@@ -244,6 +244,62 @@ final class HighlighterControlsView: NSView {
 }
 
 @MainActor
+final class InkColorButton: NSButton {
+    let color: InkColor
+    override var needsPanelToBecomeKey: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    init(color: InkColor) {
+        self.color = color
+        super.init(frame: .zero)
+        title = ""; isBordered = false; setButtonType(.momentaryPushIn)
+        toolTip = "\(color.label) \(color.key)"
+        setAccessibilityLabel("インク \(color.label)")
+        setAccessibilityHelp("キー \(color.key)")
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func draw(_ dirtyRect: NSRect) {
+        let rect = CGRect(x: bounds.midX - 8, y: bounds.midY - 8, width: 16, height: 16)
+        UITheme.ink(color).withAlphaComponent(isEnabled ? 1 : 0.35).setFill()
+        NSBezierPath(ovalIn: rect).fill()
+        if state == .on || isHighlighted {
+            // 白は墨の縁の外へ選択の白い輪を置き、白い面に埋もれさせない。
+            let border = NSBezierPath(ovalIn: rect.insetBy(dx: color == .white ? -1 : 1, dy: color == .white ? -1 : 1))
+            NSColor.white.setStroke(); border.lineWidth = 2; border.stroke()
+        }
+        if color == .white {
+            let border = NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5))
+            UITheme.ink.setStroke(); border.lineWidth = 1; border.stroke()
+        }
+    }
+}
+
+@MainActor
+final class InkControlsView: NSView {
+    let colorButtons: [InkColor: InkColorButton]
+    var naturalWidth: CGFloat { CGFloat(InkColor.allCases.count) * 26 }
+    override var isFlipped: Bool { true }
+    init() {
+        colorButtons = Dictionary(uniqueKeysWithValues: InkColor.allCases.map { ($0, InkColorButton(color: $0)) })
+        super.init(frame: .zero)
+        isHidden = true
+        InkColor.allCases.forEach { addSubview(colorButtons[$0]!) }
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func update(color: InkColor?, enabled: Bool) {
+        for (choice, button) in colorButtons {
+            button.state = choice == color ? .on : .off
+            button.isEnabled = enabled; button.needsDisplay = true
+        }
+    }
+    override func layout() {
+        super.layout()
+        for (index, color) in InkColor.allCases.enumerated() {
+            colorButtons[color]?.frame = CGRect(x: CGFloat(index) * 26, y: 0, width: 24, height: 25)
+        }
+    }
+}
+
+@MainActor
 final class AnnotationToolbarView: NSView {
     let toolButtons: [AnnotationTool: ToolbarButton]
     let aiButton: ToolbarButton
@@ -253,6 +309,7 @@ final class AnnotationToolbarView: NSView {
     let zoomButton = ToolbarButton(title: "100%", face: .zoom)
     let hintView = ToolbarHintView()
     let highlighterControls = HighlighterControlsView()
+    let inkControls = InkControlsView()
     let dimensions = NSTextField(labelWithString: "")
     let trays: [ToolbarTray]
     var minimumWidth: CGFloat {
@@ -294,7 +351,7 @@ final class AnnotationToolbarView: NSView {
         dimensions.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
         dimensions.textColor = UITheme.key
         trays.forEach { addSubview($0) }
-        [undoButton, redoButton, finishButton, zoomButton, hintView, highlighterControls, dimensions].forEach { addSubview($0) }
+        [undoButton, redoButton, finishButton, zoomButton, hintView, highlighterControls, inkControls, dimensions].forEach { addSubview($0) }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func draw(_ dirtyRect: NSRect) {
@@ -322,5 +379,7 @@ final class AnnotationToolbarView: NSView {
         hintView.frame = CGRect(x: 16, y: 46, width: max(0, dimensions.frame.minX - 28), height: 25)
         highlighterControls.frame = CGRect(x: 16, y: 46, width: highlighterControls.naturalWidth, height: 25)
         highlighterControls.needsLayout = true
+        inkControls.frame = CGRect(x: 16, y: 46, width: inkControls.naturalWidth, height: 25)
+        inkControls.needsLayout = true
     }
 }

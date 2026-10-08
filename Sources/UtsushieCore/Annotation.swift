@@ -54,6 +54,41 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
         }
     }
     public var allowsMargin: Bool { [.text, .number, .arrow, .line, .rectangle].contains(self) }
+    public var usesInkColor: Bool { [.rectangle, .spotlight, .arrow, .line, .text, .number].contains(self) }
+}
+
+public enum InkColor: String, CaseIterable, Sendable {
+    case red, indigo, green, black, white
+
+    public var label: String {
+        switch self {
+        case .red: "朱"
+        case .indigo: "藍"
+        case .green: "緑"
+        case .black: "墨"
+        case .white: "白"
+        }
+    }
+    public var key: String {
+        switch self {
+        case .red: "1"
+        case .indigo: "2"
+        case .green: "3"
+        case .black: "4"
+        case .white: "5"
+        }
+    }
+    public init?(keyCode: UInt16, modified: Bool = false, editingText: Bool = false) {
+        guard !modified, !editingText else { return nil }
+        switch keyCode {
+        case 18: self = .red
+        case 19: self = .indigo
+        case 20: self = .green
+        case 21: self = .black
+        case 23: self = .white
+        default: return nil
+        }
+    }
 }
 
 public enum HighlighterColor: String, CaseIterable, Sendable {
@@ -105,13 +140,15 @@ public struct Annotation: Equatable, Sendable, Identifiable {
     public var points: [CGPoint]
     public var highlighterColor: HighlighterColor
     public var darkBackground: Bool
+    public var inkColor: InkColor
     public init(id: UUID = UUID(), tool: AnnotationTool, start: CGPoint, end: CGPoint? = nil, text: String = "", leaderTarget: CGPoint? = nil, points: [CGPoint] = [],
-                highlighterColor: HighlighterColor = .yellow, darkBackground: Bool = false) {
+                highlighterColor: HighlighterColor = .yellow, darkBackground: Bool = false, inkColor: InkColor = .red) {
         self.id = id; self.tool = tool; self.start = start; self.end = end ?? start; self.text = text
         self.leaderTarget = [.text, .number].contains(tool) ? leaderTarget : nil
         self.points = tool == .highlighter ? (points.isEmpty ? [start, end ?? start] : points) : []
         self.highlighterColor = tool == .highlighter ? highlighterColor : .yellow
         self.darkBackground = tool == .highlighter && darkBackground
+        self.inkColor = tool.usesInkColor ? inkColor : .red
     }
     public var rect: CGRect {
         let vertices = tool == .highlighter ? points : [start, end]

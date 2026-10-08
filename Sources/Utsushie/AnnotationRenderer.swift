@@ -4,8 +4,6 @@ import UtsushieCore
 /// プレビューと書き出しで同じ描画を使う。入力は撮影時のCGImageに限定する。
 @MainActor
 enum AnnotationRenderer {
-    static var red: NSColor { UITheme.red }
-
     static func bitmap(width: Int, height: Int) throws -> CGContext {
         guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -85,20 +83,30 @@ enum AnnotationRenderer {
     }
     private static func drawSpotFrames(_ spots: [Annotation], style: AnnotationStyle, context: CGContext) {
         guard !spots.isEmpty else { return }
+        func path(_ spot: Annotation, expansion: Double) -> CGPath {
+            let radius = min(style.radius, min(spot.rect.width, spot.rect.height) / 2) + expansion
+            return CGPath(roundedRect: spot.rect.insetBy(dx: -expansion, dy: -expansion), cornerWidth: radius, cornerHeight: radius, transform: nil)
+        }
         func union(expansion: Double) -> CGPath {
             spots.reduce(CGMutablePath() as CGPath) { result, spot in
-                let radius = min(style.radius, min(spot.rect.width, spot.rect.height) / 2) + expansion
-                let path = CGPath(roundedRect: spot.rect.insetBy(dx: -expansion, dy: -expansion), cornerWidth: radius, cornerHeight: radius, transform: nil)
-                return result.union(path, using: .winding)
+                result.union(path(spot, expansion: expansion), using: .winding)
             }
         }
-        // 白2px・朱3px・白2pxの帯を穴の外へ作る。和集合の差を塗り、隣の穴に線を残さない。
+        // 縁・インクの帯は全穴の和集合から求める。色が違っても隣の穴や帯へ縁を重ねない。
         let holes = union(expansion: 0)
+        let inner = union(expansion: style.edge)
+        let middle = union(expansion: style.edge + style.lineWidth)
         context.saveGState()
-        context.setFillColor(NSColor.white.cgColor)
-        context.addPath(union(expansion: style.lineWidth + style.edge * 2).subtracting(holes, using: .winding)); context.fillPath()
-        context.setFillColor(red.cgColor)
-        context.addPath(union(expansion: style.edge + style.lineWidth).subtracting(union(expansion: style.edge), using: .winding)); context.fillPath()
+        for outer in [true, false] {
+            for spot in spots {
+                let band = outer
+                    ? path(spot, expansion: style.lineWidth + style.edge * 2).subtracting(middle, using: .winding)
+                        .union(path(spot, expansion: style.edge).subtracting(holes, using: .winding), using: .winding)
+                    : path(spot, expansion: style.edge + style.lineWidth).subtracting(inner, using: .winding)
+                context.setFillColor((outer ? UITheme.inkEdge(spot.inkColor) : UITheme.ink(spot.inkColor)).cgColor)
+                context.addPath(band); context.fillPath()
+            }
+        }
         context.restoreGState()
     }
     private static func drawLeader(_ annotation: Annotation, document: AnnotationDocument, style: AnnotationStyle, context: CGContext) {
@@ -107,7 +115,7 @@ enum AnnotationRenderer {
         defer { context.restoreGState() }
         context.setLineCap(.round)
         for outer in [true, false] {
-            let color = outer ? NSColor.white.cgColor : red.cgColor
+            let color = (outer ? UITheme.inkEdge(annotation.inkColor) : UITheme.ink(annotation.inkColor)).cgColor
             context.setStrokeColor(color); context.setFillColor(color)
             context.setLineWidth(style.lineWidth + (outer ? style.edge * 2 : 0))
             context.move(to: segment.target); context.addLine(to: segment.labelEdge); context.strokePath()
@@ -161,15 +169,15 @@ enum AnnotationRenderer {
         case .line:
             context.setLineCap(.round)
             for outer in [true, false] {
-                context.setStrokeColor(outer ? NSColor.white.cgColor : red.cgColor)
+                context.setStrokeColor((outer ? UITheme.inkEdge(annotation.inkColor) : UITheme.ink(annotation.inkColor)).cgColor)
                 context.setLineWidth(style.lineWidth * 1.5 + (outer ? style.edge * 2 : 0))
                 context.move(to: annotation.start); context.addLine(to: annotation.end); context.strokePath()
             }
         case .rectangle:
             let path = CGPath(roundedRect: annotation.rect, cornerWidth: style.radius, cornerHeight: style.radius, transform: nil)
-            context.addPath(path); context.setStrokeColor(NSColor.white.cgColor)
+            context.addPath(path); context.setStrokeColor(UITheme.inkEdge(annotation.inkColor).cgColor)
             context.setLineWidth(style.lineWidth + style.edge * 2); context.strokePath()
-            context.addPath(path); context.setStrokeColor(red.cgColor)
+            context.addPath(path); context.setStrokeColor(UITheme.ink(annotation.inkColor).cgColor)
             context.setLineWidth(style.lineWidth); context.strokePath()
         case .arrow:
             let a = annotation.start, b = annotation.end
@@ -183,9 +191,9 @@ enum AnnotationRenderer {
             head.addLine(to: CGPoint(x: back.x + sin(angle) * length * 0.45, y: back.y - cos(angle) * length * 0.45))
             head.closeSubpath()
             context.setLineCap(.round); context.setLineJoin(.round)
-            // 白い下地を先にまとめて描いてから朱を載せ、矢じりの付け根に白線を残さない。
+            // 下地を先にまとめて描いてからインクを載せ、矢じりの付け根に縁の線を残さない。
             for outer in [true, false] {
-                let color = outer ? NSColor.white.cgColor : red.cgColor
+                let color = (outer ? UITheme.inkEdge(annotation.inkColor) : UITheme.ink(annotation.inkColor)).cgColor
                 context.setStrokeColor(color); context.setFillColor(color)
                 context.setLineWidth(line + (outer ? style.edge * 2 : 0))
                 context.move(to: a); context.addLine(to: back); context.strokePath()
@@ -195,26 +203,26 @@ enum AnnotationRenderer {
             }
         case .text:
             let rect = annotation.rect
-            context.setFillColor(UITheme.redFace.cgColor)
+            context.setFillColor(UITheme.inkFace(annotation.inkColor).cgColor)
             let path = CGPath(roundedRect: rect, cornerWidth: style.radius, cornerHeight: style.radius, transform: nil)
-            context.setStrokeColor(NSColor.white.cgColor); context.setLineWidth(style.edge * 2)
+            context.setStrokeColor(UITheme.inkEdge(annotation.inkColor).cgColor); context.setLineWidth(style.edge * 2)
             context.addPath(path); context.drawPath(using: .fillStroke)
             context.addPath(path); context.fillPath()
             (annotation.text as NSString).draw(at: CGPoint(x: rect.minX + style.horizontalPadding, y: rect.minY + style.verticalPadding),
-                withAttributes: [.font: NSFont.systemFont(ofSize: style.fontSize, weight: .bold), .foregroundColor: NSColor.white])
+                withAttributes: [.font: NSFont.systemFont(ofSize: style.fontSize, weight: .bold), .foregroundColor: UITheme.inkText(annotation.inkColor)])
         case .number:
             let number = document.number(for: annotation.id) ?? document.nextNumber
             let rect = style.numberRect(at: annotation.start, number: number)
             context.setShadow(offset: CGSize(width: 0, height: 1), blur: 3, color: CGColor(gray: 0, alpha: 0.35))
             let path = CGPath(roundedRect: rect, cornerWidth: rect.height / 2, cornerHeight: rect.height / 2, transform: nil)
-            // 線はパスの中心に出る。2倍幅の白線の上から元の朱面を塗り、外側へedgeだけ残す。
-            context.setFillColor(UITheme.redFace.cgColor); context.setStrokeColor(NSColor.white.cgColor); context.setLineWidth(style.edge * 2)
+            // 線はパスの中心に出る。2倍幅の縁の上から札の面を塗り、外側へedgeだけ残す。
+            context.setFillColor(UITheme.inkFace(annotation.inkColor).cgColor); context.setStrokeColor(UITheme.inkEdge(annotation.inkColor).cgColor); context.setLineWidth(style.edge * 2)
             context.addPath(path)
             context.drawPath(using: .fillStroke)
             context.setShadow(offset: .zero, blur: 0, color: nil)
             context.addPath(path); context.fillPath()
             let string = String(number) as NSString
-            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: style.fontSize, weight: .bold), .foregroundColor: NSColor.white]
+            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: style.fontSize, weight: .bold), .foregroundColor: UITheme.inkText(annotation.inkColor)]
             let size = string.size(withAttributes: attributes)
             string.draw(at: CGPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2), withAttributes: attributes)
         }

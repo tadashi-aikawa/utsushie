@@ -34,7 +34,7 @@ extension AnnotationDocument {
             let target = original.leaderTarget.map { CGPoint(x: $0.x + delta.x, y: $0.y + delta.y) }
             var copy = Annotation(tool: moved.tool, start: moved.start, end: moved.end, text: moved.text,
                                   leaderTarget: target, points: moved.points,
-                                  highlighterColor: moved.highlighterColor, darkBackground: moved.darkBackground)
+                                  highlighterColor: moved.highlighterColor, darkBackground: moved.darkBackground, inkColor: moved.inkColor)
             // 番号は新しいIDを追加した順で採番する。元の番号の文字列を複製しない。
             copy = AnnotationGeometry.placed(copy, bounds: bounds(of: copy, style: style), imageSize: imageSize)
             annotations.append(copy); ids.insert(copy.id)

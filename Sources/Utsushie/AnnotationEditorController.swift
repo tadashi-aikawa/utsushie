@@ -79,6 +79,9 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         }
         toolbar.highlighterControls.darkButton.target = self
         toolbar.highlighterControls.darkButton.action = #selector(toggleHighlighterBackground)
+        for button in toolbar.inkControls.colorButtons.values {
+            button.target = self; button.action = #selector(selectInkColor(_:))
+        }
         toolbar.zoomButton.toolTip = "倍率メニュー ・ ピンチでも拡大縮小"
         root.bar = toolbar; root.canvas = canvas
         root.addSubview(canvas)
@@ -141,10 +144,14 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         toolbar.zoomButton.isEnabled = !saving
         toolbar.hintView.hint = AnnotationToolbarPresentation.hint(tool: canvas.tool, nextNumber: canvas.document.nextNumber,
             editingText: canvas.isEditingText, findingPrivacy: isFindingPrivacy, message: privacyMessage, saving: saving)
-        toolbar.highlighterControls.isHidden = !canvas.showsHighlighterControls
-        toolbar.hintView.isHidden = canvas.showsHighlighterControls
+        // 状態と文字入力の手引きは、色の部品より優先する。
+        let colorControls: AnnotationColorControls = saving || privacyMessage != nil || isFindingPrivacy || canvas.isEditingText ? .none : canvas.colorControls
+        toolbar.highlighterControls.isHidden = colorControls != .highlighter
+        toolbar.inkControls.isHidden = colorControls != .ink
+        toolbar.hintView.isHidden = colorControls != .none
         toolbar.highlighterControls.update(color: canvas.highlighterColor, darkBackground: canvas.highlighterDarkBackground,
                                           enabled: !saving && canvas.isEnabled && !canvas.isInteracting)
+        toolbar.inkControls.update(color: canvas.inkColor, enabled: !saving && canvas.isEnabled && !canvas.isInteracting)
         [undoButton, redoButton, finishButton, toolbar.aiButton, toolbar.zoomButton].forEach { $0.needsDisplay = true }
         toolbar.needsLayout = true
     }
@@ -234,6 +241,11 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     @objc private func selectHighlighterColor(_ sender: HighlighterColorButton) {
         guard !saving else { return }
         canvas.applyHighlighterAction(.color(sender.color))
+        window.makeFirstResponder(canvas)
+    }
+    @objc private func selectInkColor(_ sender: InkColorButton) {
+        guard !saving else { return }
+        canvas.applyInkColor(sender.color)
         window.makeFirstResponder(canvas)
     }
     @objc private func toggleHighlighterBackground() {
@@ -361,6 +373,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     // lastToolと同じく、プロセス内だけで次に描く蛍光ペンの設定を共有する。
     private static var lastHighlighterColor: HighlighterColor = .yellow
     private static var lastHighlighterDarkBackground = false
+    private static var lastInkColor: InkColor = .red
     let original: CGImage
     private(set) var history: AnnotationHistory
     var tool: AnnotationTool { didSet { updateCursor(); needsDisplay = true } }
@@ -414,9 +427,25 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private var selectedHighlighters: [Annotation] {
         history.document.annotations.filter { selection.contains($0.id) && $0.tool == .highlighter }
     }
-    var showsHighlighterControls: Bool {
-        AnnotationToolbarPresentation.showsHighlighterControls(tool: tool,
+    var colorControls: AnnotationColorControls {
+        AnnotationToolbarPresentation.colorControls(tool: tool,
             selectedTools: history.document.annotations.filter { selection.contains($0.id) }.map(\.tool))
+    }
+    var showsHighlighterControls: Bool { colorControls == .highlighter }
+    var showsInkControls: Bool { colorControls == .ink }
+    private var selectedInkAnnotations: [Annotation] {
+        history.document.annotations.filter { selection.contains($0.id) && $0.tool.usesInkColor }
+    }
+    var inkColor: InkColor? {
+        let colors = Set(selectedInkAnnotations.map(\.inkColor))
+        return colors.isEmpty ? Self.lastInkColor : colors.count == 1 ? colors.first : nil
+    }
+    func applyInkColor(_ color: InkColor) {
+        guard isEnabled, !isInteracting, window?.attachedSheet == nil, showsInkControls else { return }
+        onUserOperation?()
+        Self.lastInkColor = color
+        if !selectedInkAnnotations.isEmpty { history.commit(history.document.settingInk(selection, color: color)) }
+        changed()
     }
     var highlighterColor: HighlighterColor? {
         let colors = Set(selectedHighlighters.map(\.highlighterColor))
@@ -627,7 +656,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         selection = []
         guard tool.allowsMargin || CGRect(origin: .zero, size: imageSize).contains(p) else { changed(); return }
         let annotation = Annotation(tool: tool, start: p, highlighterColor: Self.lastHighlighterColor,
-                                    darkBackground: Self.lastHighlighterDarkBackground)
+                                    darkBackground: Self.lastHighlighterDarkBackground, inkColor: Self.lastInkColor)
         highlighterStraight = event.modifierFlags.contains(.shift)
         frozenImageRect = imageRect
         gesture = [.text, .number].contains(tool) ? .label(annotation) : .create(annotation)
@@ -657,13 +686,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             let anchor = initial.start
             guard AnnotationGeometry.isValidDrag(tool: initial.tool, from: anchor, to: p, displayScale: displayScale) else { preview = nil; changed(); return }
             if initial.tool == .number {
-                annotation = Annotation(id: initial.id, tool: .number, start: p, leaderTarget: anchor)
+                annotation = Annotation(id: initial.id, tool: .number, start: p, leaderTarget: anchor, inkColor: initial.inkColor)
                 break
             }
             let size = AnnotationRenderer.textSize("入力", style: style)
             let rect = CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2, width: size.width, height: size.height)
             annotation = Annotation(id: initial.id, tool: .text, start: rect.origin,
-                                    end: CGPoint(x: rect.maxX, y: rect.maxY), text: "入力", leaderTarget: anchor)
+                                    end: CGPoint(x: rect.maxX, y: rect.maxY), text: "入力", leaderTarget: anchor, inkColor: initial.inkColor)
         case .create(let initial):
             annotation = initial.tool == .highlighter ? (preview?.annotations.first { $0.id == initial.id } ?? initial) : initial
             annotation.end = AnnotationGeometry.creationPoint(p, from: initial.start, tool: initial.tool, shift: shift, imageSize: imageSize)
@@ -706,13 +735,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             let p = point(event)
             let leader = AnnotationGeometry.isValidDrag(tool: initial.tool, from: anchor, to: p, displayScale: displayScale)
             if initial.tool == .number {
-                let annotation = placed(Annotation(id: initial.id, tool: .number, start: leader ? p : anchor, leaderTarget: leader ? anchor : nil))
+                let annotation = placed(Annotation(id: initial.id, tool: .number, start: leader ? p : anchor, leaderTarget: leader ? anchor : nil, inkColor: initial.inkColor))
                 var next = history.document; next.replace(annotation); history.commit(next); selection = [annotation.id]
                 cancelGesture(); changed(); return
             }
             let size = AnnotationRenderer.textSize("入力", style: style)
             let origin = leader ? CGPoint(x: p.x - size.width / 2, y: p.y - size.height / 2) : anchor
-            let annotation = placed(Annotation(id: initial.id, tool: .text, start: origin, end: CGPoint(x: origin.x + size.width, y: origin.y + size.height), leaderTarget: leader ? anchor : nil))
+            let annotation = placed(Annotation(id: initial.id, tool: .text, start: origin, end: CGPoint(x: origin.x + size.width, y: origin.y + size.height), leaderTarget: leader ? anchor : nil, inkColor: initial.inkColor))
             cancelGesture()
             beginText(annotation)
             return
@@ -739,6 +768,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         if handleZoomKey(event) { return }
         if handleClipboardKey(event) { return }
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if showsInkControls, let color = InkColor(keyCode: event.keyCode, modified: !flags.isEmpty, editingText: isEditingText) {
+            if !event.isARepeat { applyInkColor(color) }
+            return
+        }
         if showsHighlighterControls, let action = HighlighterAction(keyCode: event.keyCode, modified: !flags.isEmpty, editingText: isEditingText) {
             if !event.isARepeat { applyHighlighterAction(action) }
             return
@@ -820,7 +853,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         textAnchor = annotation.leaderTarget == nil ? annotation.start : CGPoint(x: annotation.rect.midX, y: annotation.rect.midY)
         let input = AnnotationTextView(frame: .zero)
         input.isRichText = false; input.allowsUndo = true; input.drawsBackground = true
-        input.backgroundColor = UITheme.redFace; input.textColor = .white
+        input.backgroundColor = UITheme.inkFace(annotation.inkColor); input.textColor = UITheme.inkText(annotation.inkColor)
         input.wantsLayer = true; input.layer?.masksToBounds = true
         input.navigationCanvas = self
         input.textContainerInset = CGSize(width: style.horizontalPadding * displayScale, height: style.verticalPadding * displayScale)
@@ -915,9 +948,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         if tool == .number, let cursorPoint, !isEditingText, gesture == nil {
             let string = String(document.nextNumber) as NSString
             let r = viewRect(style.numberRect(at: cursorPoint, number: document.nextNumber))
-            AnnotationRenderer.red.withAlphaComponent(0.45).setFill()
+            UITheme.inkFace(Self.lastInkColor).withAlphaComponent(0.45).setFill()
             NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
-            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: style.fontSize * displayScale, weight: .bold), .foregroundColor: NSColor.white.withAlphaComponent(0.6)]
+            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: style.fontSize * displayScale, weight: .bold), .foregroundColor: UITheme.inkText(Self.lastInkColor).withAlphaComponent(0.6)]
             let size = string.size(withAttributes: attributes)
             string.draw(at: CGPoint(x: r.midX - size.width / 2, y: r.midY - size.height / 2), withAttributes: attributes)
         }

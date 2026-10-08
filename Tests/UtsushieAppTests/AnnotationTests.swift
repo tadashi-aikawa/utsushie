@@ -538,9 +538,11 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     let canvas = AnnotationCanvas(image: image, document: initial, tool: .selection)
     canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
     func select() throws {
+        canvas.tool = .selection
         canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 5, y: 5)))
         canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 75, y: 70)))
         canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 75, y: 70)))
+        canvas.tool = .highlighter
     }
     try select()
     #expect(canvas.selection == [a.id, b.id, number.id] && canvas.showsHighlighterControls)
@@ -765,6 +767,110 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
         #expect(try pixel(image, x: x, y: y)[0...2] == [255, 255, 255])
     }
     #expect(try pixel(image, x: 80, y: 40)[0...2] == [210, 49, 37])
+}
+
+@MainActor @Test func annotationWhiteInkTextHasDarkLettersAndOuterEdge() throws {
+    let label = Annotation(tool: .text, start: CGPoint(x: 50, y: 40), end: CGPoint(x: 130, y: 80), text: "H", inkColor: .white)
+    let image = try AnnotationRenderer.compose(annotationFixture(), document: AnnotationDocument(annotations: [label]))
+    for (x, y) in [(80, 38), (48, 60), (131, 60), (80, 81)] {
+        #expect(try pixel(image, x: x, y: y)[0...2] == [28, 28, 30])
+    }
+    #expect(try pixel(image, x: 80, y: 40) == [255, 255, 255, 255])
+    var inkPixels = 0
+    for y in 46..<72 { for x in 61..<85 {
+        if try pixel(image, x: x, y: y)[0...2] == [28, 28, 30] { inkPixels += 1 }
+    }}
+    #expect(inkPixels > 8)
+}
+
+@MainActor @Test(arguments: InkColor.allCases) func annotationInkPaletteColorsStrokesFacesAndLeaders(color: InkColor) throws {
+    let stroke: [Int]
+    switch color {
+    case .red: stroke = [229, 53, 42]
+    case .indigo: stroke = [66, 112, 192]
+    case .green: stroke = [31, 157, 85]
+    case .black: stroke = [28, 28, 30]
+    case .white: stroke = [255, 255, 255]
+    }
+    let edge = color == .white ? [28, 28, 30] : [255, 255, 255]
+    let face = color == .red ? [210, 49, 37] : stroke
+    let cases: [(Annotation, CGPoint, CGPoint)] = [
+        (Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 140, y: 80), inkColor: color), CGPoint(x: 80, y: 20), CGPoint(x: 80, y: 17)),
+        (Annotation(tool: .spotlight, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 140, y: 80), inkColor: color), CGPoint(x: 80, y: 16), CGPoint(x: 80, y: 18)),
+        (Annotation(tool: .arrow, start: CGPoint(x: 20, y: 50), end: CGPoint(x: 140, y: 50), inkColor: color), CGPoint(x: 60, y: 50), CGPoint(x: 60, y: 46)),
+        (Annotation(tool: .line, start: CGPoint(x: 20, y: 50), end: CGPoint(x: 140, y: 50), inkColor: color), CGPoint(x: 60, y: 50), CGPoint(x: 60, y: 46)),
+        (Annotation(tool: .text, start: CGPoint(x: 50, y: 40), end: CGPoint(x: 130, y: 80), leaderTarget: CGPoint(x: 20, y: 60), inkColor: color), CGPoint(x: 80, y: 40), CGPoint(x: 80, y: 38)),
+        (Annotation(tool: .number, start: CGPoint(x: 100, y: 50), leaderTarget: CGPoint(x: 20, y: 50), inkColor: color), CGPoint(x: 90, y: 50), CGPoint(x: 87, y: 50))
+    ]
+    for (annotation, center, border) in cases {
+        let image = try AnnotationRenderer.compose(annotationFixture(width: 320), document: AnnotationDocument(annotations: [annotation]))
+        let expected = [.text, .number].contains(annotation.tool) ? face : stroke
+        #expect(try pixel(image, x: Int(center.x), y: Int(center.y))[0...2] == expected[0...2])
+        let outline = try pixel(image, x: Int(border.x), y: Int(border.y))
+        for channel in 0..<3 { #expect(abs(outline[channel] - edge[channel]) <= 1) }
+        if [.text, .number].contains(annotation.tool) {
+            #expect(try pixel(image, x: 20, y: Int(annotation.leaderTarget!.y))[0...2] == stroke[0...2])
+            #expect(try pixel(image, x: 35, y: Int(annotation.leaderTarget!.y))[0...2] == stroke[0...2])
+        }
+    }
+}
+
+@MainActor @Test func annotationColoredSpotFramesKeepOverlappingAndNestedHolesClear() throws {
+    let original = try annotationFixture(width: 960, height: 600, patterned: true)
+    let first = Annotation(tool: .spotlight, start: CGPoint(x: 100, y: 100), end: CGPoint(x: 300, y: 260), inkColor: .indigo)
+    let overlap = Annotation(tool: .spotlight, start: CGPoint(x: 240, y: 160), end: CGPoint(x: 440, y: 320), inkColor: .white)
+    let nested = Annotation(tool: .spotlight, start: CGPoint(x: 140, y: 140), end: CGPoint(x: 200, y: 200), inkColor: .green)
+    let image = try AnnotationRenderer.compose(original, document: AnnotationDocument(annotations: [first, overlap, nested]))
+    #expect(try pixel(image, x: 180, y: 96)[0...2] == [66, 112, 192])
+    #expect(try pixel(image, x: 270, y: 324)[0...2] == [255, 255, 255])
+    for y in [321, 326] { #expect(try pixel(image, x: 270, y: y)[0...2] == [28, 28, 30]) }
+    for (x, y) in [(180, 100), (240, 200), (300, 200), (170, 140), (200, 170)] {
+        #expect(try pixel(image, x: x, y: y) == pixel(original, x: x, y: y))
+    }
+}
+
+@MainActor @Test func annotationInkKeysRememberDefaultsAndPreserveColorAcrossCreationAndTextInput() throws {
+    let image = try annotationFixture()
+    let defaults = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: .rectangle)
+    let oldColor = try #require(defaults.inkColor)
+    defer { defaults.applyInkColor(oldColor) }
+    for (code, color): (UInt16, InkColor) in [(18, .red), (19, .indigo), (20, .green), (21, .black), (23, .white)] {
+        defaults.keyDown(with: try annotationKeyEvent(keyCode: code, characters: "す", flags: .function))
+        #expect(defaults.inkColor == color && !defaults.history.canUndo)
+    }
+    for flags: NSEvent.ModifierFlags in [.shift, .command, .option, .control] {
+        defaults.keyDown(with: try annotationKeyEvent(keyCode: 18, flags: flags))
+        #expect(defaults.inkColor == .white)
+    }
+    defaults.keyDown(with: try annotationKeyEvent(keyCode: 18, repeating: true))
+    #expect(defaults.inkColor == .white)
+    for tool in [AnnotationTool.selection, .mosaic] {
+        defaults.tool = tool
+        defaults.keyDown(with: try annotationKeyEvent(keyCode: 18))
+        #expect(defaults.inkColor == .white)
+    }
+    defaults.tool = .rectangle
+    for tool in [AnnotationTool.rectangle, .spotlight, .arrow, .line, .text, .number] {
+        let canvas = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: tool)
+        canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+        #expect(canvas.inkColor == .white)
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 20)))
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 100, y: 60)))
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: 18))
+        #expect(canvas.document.annotations.first?.inkColor == .white && canvas.displayedSelection.isEmpty)
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 100, y: 60)))
+        if tool == .text {
+            let input = try #require(canvas.subviews.compactMap { $0 as? AnnotationTextView }.first)
+            #expect(input.backgroundColor == UITheme.ink(.white) && input.textColor == UITheme.ink)
+            input.string = "12345"
+            canvas.keyDown(with: try annotationKeyEvent(keyCode: 18))
+            canvas.applyInkColor(.red)
+            #expect(input.string == "12345" && canvas.document.annotations.first?.inkColor == .white)
+            canvas.commitText()
+        }
+        #expect(canvas.document.annotations.first?.inkColor == .white)
+        canvas.undoAnnotation(); #expect(canvas.document.annotations.isEmpty && !canvas.history.canUndo)
+    }
 }
 
 @MainActor @Test func annotationExpandedSaveUpdatesDimensionsAndWebPThenShrinksFromOriginal() throws {
