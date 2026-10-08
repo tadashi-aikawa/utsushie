@@ -305,6 +305,61 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     #expect(canvas.selection.count == 1)
 }
 
+@MainActor @Test func annotationMarqueePreviewsIntersectionAndRestoresSelectionOnEscape() throws {
+    let a = Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 50, y: 50))
+    let b = Annotation(tool: .number, start: CGPoint(x: 120, y: 70))
+    let initial = AnnotationDocument(annotations: [a, b])
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: initial, tool: .selection)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: b.start))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: b.start))
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 5, y: 5), flags: .shift))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 30, y: 35)))
+    #expect(canvas.displayedSelection == [a.id, b.id])
+    #expect(canvas.selection == [b.id])
+    #expect(canvas.document == initial && !canvas.history.canUndo)
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 10, y: 10)))
+    #expect(canvas.displayedSelection == [b.id])
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 30, y: 35)))
+    canvas.escape()
+    #expect(canvas.displayedSelection == [b.id] && canvas.selection == [b.id])
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 30, y: 35)))
+    #expect(canvas.selection == [b.id])
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 5, y: 5)))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 30, y: 35)))
+    #expect(canvas.displayedSelection == [a.id] && canvas.selection.isEmpty)
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 30, y: 35)))
+    #expect(canvas.displayedSelection == [a.id] && canvas.selection == [a.id])
+}
+
+@MainActor @Test func annotationMarqueeDrawsSelectionBorderWithoutSingleItemHandles() throws {
+    _ = NSApplication.shared
+    let a = Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 50, y: 50))
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [a]), tool: .selection)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    let bitmap = try #require(canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds))
+    func color(at point: CGPoint) throws -> NSColor {
+        canvas.cacheDisplay(in: canvas.bounds, to: bitmap)
+        let x = (canvas.imageRect.minX + point.x * canvas.displayScale) * CGFloat(bitmap.pixelsWide) / canvas.bounds.width
+        let y = (canvas.imageRect.minY + point.y * canvas.displayScale) * CGFloat(bitmap.pixelsHigh) / canvas.bounds.height
+        return try #require(bitmap.colorAt(x: Int(x), y: Int(y))?.usingColorSpace(.sRGB))
+    }
+    let style = AnnotationStyle(imageSize: CGSize(width: 160, height: 100))
+    let ink = AnnotationGeometry.inkBounds(of: a, bounds: a.rect, style: style)
+    let borderPoint = CGPoint(x: ink.maxX + 4 / canvas.displayScale, y: 35)
+    let before = try color(at: borderPoint)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 5, y: 5)))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 30, y: 35)))
+    let during = try color(at: borderPoint)
+    #expect(before.redComponent > 0.99 && during.blueComponent > during.redComponent + 0.2)
+    let handlePoint = CGPoint(x: a.end.x + 4 / canvas.displayScale, y: a.end.y)
+    let handleDuring = try color(at: handlePoint)
+    #expect(handleDuring.redComponent > 0.99 && handleDuring.greenComponent > 0.99)
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 30, y: 35)))
+    let handleAfter = try color(at: handlePoint)
+    #expect(handleAfter.blueComponent > handleAfter.redComponent + 0.2)
+}
+
 @MainActor @Test func annotationHighlighterLocksStraightModeAtMouseDownAndRetainsClosedPaths() throws {
     for straight in [false, true] {
         let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .highlighter)

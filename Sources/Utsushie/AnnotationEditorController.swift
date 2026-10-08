@@ -374,6 +374,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         case pan(AnnotationViewport, CGPoint)
     }
     private var marqueeRect: CGRect?
+    private var marqueeSelection: Set<UUID>?
+    var displayedSelection: Set<UUID> { marqueeSelection ?? selection }
     private var toggleOnClick: (id: UUID, previous: Set<UUID>)?
     var document: AnnotationDocument {
         var result = preview ?? history.document
@@ -483,7 +485,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         if case .pan = gesture { cancelGesture() }
         updateCursor()
     }
-    private func cancelGesture() { gesture = nil; preview = nil; frozenImageRect = nil; marqueeRect = nil; toggleOnClick = nil }
+    private func cancelGesture() { gesture = nil; preview = nil; frozenImageRect = nil; marqueeRect = nil; marqueeSelection = nil; toggleOnClick = nil }
     func finishGesture() {
         if let preview { history.commit(preview) }
         cancelGesture(); changed()
@@ -587,8 +589,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         let shift = event.modifierFlags.contains(.shift)
         var annotation: Annotation
         switch gesture {
-        case .marquee(let anchor, _):
-            marqueeRect = Annotation(tool: .rectangle, start: anchor, end: p).rect
+        case .marquee(let anchor, let previous):
+            let rect = Annotation(tool: .rectangle, start: anchor, end: p).rect
+            marqueeRect = rect
+            marqueeSelection = previous.union(history.document.intersecting(rect, style: style))
             needsDisplay = true; return
         case .label(let initial):
             let anchor = initial.start
@@ -813,7 +817,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         let outputRect = viewRect(composed == nil ? CGRect(origin: .zero, size: imageSize) : exportLayout.bounds)
         image.draw(in: outputRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         var selectionBounds: CGRect?
-        for selected in document.annotations where selection.contains(selected.id) && !isEditingText {
+        let displayedSelection = self.displayedSelection
+        for selected in document.annotations where displayedSelection.contains(selected.id) && !isEditingText {
             let bounds = document.bounds(of: selected, style: style)
             var inkBounds = selected.tool == .spotlight
                 ? bounds.insetBy(dx: -style.lineWidth - style.edge * 2, dy: -style.lineWidth - style.edge * 2)
@@ -827,14 +832,14 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             let border = NSBezierPath(rect: rect)
             NSColor.white.setStroke(); border.lineWidth = 3; border.stroke()
             UITheme.indigo.setStroke(); border.lineWidth = 2; border.stroke()
-            for handle in selection.count == 1 ? AnnotationGeometry.handles(for: selected) : [] {
+            for handle in displayedSelection.count == 1 && marqueeRect == nil ? AnnotationGeometry.handles(for: selected) : [] {
                 let p = viewPoint(handle), r = CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)
                 let circle = NSBezierPath(ovalIn: r)
                 NSColor.white.setFill(); circle.fill()
                 UITheme.indigo.setStroke(); circle.lineWidth = 2; circle.stroke()
             }
         }
-        if selection.count > 1, let selectionBounds {
+        if displayedSelection.count > 1, let selectionBounds {
             let border = NSBezierPath(rect: selectionBounds)
             UITheme.indigo.setStroke(); border.lineWidth = 1
             border.setLineDash([4, 3], count: 2, phase: 0); border.stroke()
