@@ -349,8 +349,11 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     let line = Annotation(tool: .line, start: CGPoint(x: 80, y: 40), end: CGPoint(x: 80, y: 80))
     let image = try AnnotationRenderer.compose(annotationFixture(), document: AnnotationDocument(annotations: [line, pen, spot]))
     let yellow = try pixel(image, x: 60, y: 60)
-    // 黄55%を暗幕の灰色128へ合成する。
-    #expect(abs(yellow[0] - 191) <= 2 && abs(yellow[1] - 173) <= 2 && abs(yellow[2] - 84) <= 2)
+    // 黄30%のにじみと黄70%の本線を暗幕の灰色128へ順に合成する。
+    #expect(abs(yellow[0] - 228) <= 2 && abs(yellow[1] - 218) <= 2 && abs(yellow[2] - 27) <= 2)
+    let glow = try pixel(image, x: 60, y: 69)
+    #expect(abs(glow[0] - 166) <= 2 && abs(glow[1] - 162) <= 2 && abs(glow[2] - 90) <= 2)
+    #expect(try pixel(image, x: 60, y: 74) == pixel(image, x: 60, y: 90))
     #expect(try pixel(image, x: 80, y: 60) == [229, 53, 42, 255])
 }
 

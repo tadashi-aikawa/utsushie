@@ -797,9 +797,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         var selectionBounds: CGRect?
         for selected in document.annotations where selection.contains(selected.id) && !isEditingText {
             let bounds = document.bounds(of: selected, style: style)
-            let inkBounds = selected.tool == .spotlight
+            var inkBounds = selected.tool == .spotlight
                 ? bounds.insetBy(dx: -style.lineWidth - style.edge * 2, dy: -style.lineWidth - style.edge * 2)
                 : AnnotationGeometry.inkBounds(of: selected, bounds: bounds, style: style)
+            if selected.tool == .highlighter {
+                inkBounds = bounds.insetBy(dx: -style.highlighterWidth * 0.8, dy: -style.highlighterWidth * 0.8)
+                    .intersection(CGRect(origin: .zero, size: imageSize))
+            }
             let rect = viewRect(inkBounds).insetBy(dx: -4, dy: -4)
             selectionBounds = selectionBounds.map { $0.union(rect) } ?? rect
             let border = NSBezierPath(rect: rect)

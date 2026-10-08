@@ -151,12 +151,14 @@ enum AnnotationRenderer {
         case .highlighter:
             guard let first = annotation.points.first else { return }
             // 太い線の端も元画像内で切る。余白へ蛍光色を描かない。
-            context.setStrokeColor(UITheme.highlighter.cgColor)
-            context.setLineWidth(style.highlighterWidth)
             context.setLineCap(.round); context.setLineJoin(.round)
-            context.move(to: first)
-            for point in annotation.points.dropFirst() { context.addLine(to: point) }
-            context.strokePath()
+            for glow in [true, false] {
+                context.setStrokeColor((glow ? UITheme.highlighter.withAlphaComponent(0.30) : UITheme.highlighter).cgColor)
+                context.setLineWidth(style.highlighterWidth * (glow ? 1.6 : 1))
+                context.move(to: first)
+                for point in annotation.points.dropFirst() { context.addLine(to: point) }
+                context.strokePath()
+            }
         case .line:
             context.setLineCap(.round)
             for outer in [true, false] {

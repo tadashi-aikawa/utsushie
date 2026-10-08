@@ -7,7 +7,7 @@ enum UITheme {
     static let ink = color(0x1C1C1E)
     static let red = color(0xE5352A)
     static let redFace = color(0xD23125)
-    static let highlighter = color(0xF2D130).withAlphaComponent(0.55)
+    static let highlighter = color(0xFFF200).withAlphaComponent(0.70)
     static let muted = color(0xA1A1A6)
     static let text = color(0xE5E5EA)
     static let key = color(0x8E8E93)
