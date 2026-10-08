@@ -794,17 +794,28 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         let image = NSImage(cgImage: raster, size: CGSize(width: raster.width, height: raster.height))
         let outputRect = viewRect(composed == nil ? CGRect(origin: .zero, size: imageSize) : exportLayout.bounds)
         image.draw(in: outputRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        var selectionBounds: CGRect?
         for selected in document.annotations where selection.contains(selected.id) && !isEditingText {
             let bounds = document.bounds(of: selected, style: style)
-            let rect = viewRect(selected.tool == .highlighter ? bounds.insetBy(dx: -style.highlighterWidth / 2, dy: -style.highlighterWidth / 2) : bounds)
-            NSColor.white.withAlphaComponent(0.8).setStroke()
-            let border = NSBezierPath(rect: rect); border.lineWidth = 1
-            border.setLineDash([4, 3], count: 2, phase: 0); border.stroke()
+            let inkBounds = selected.tool == .spotlight
+                ? bounds.insetBy(dx: -style.lineWidth - style.edge * 2, dy: -style.lineWidth - style.edge * 2)
+                : AnnotationGeometry.inkBounds(of: selected, bounds: bounds, style: style)
+            let rect = viewRect(inkBounds).insetBy(dx: -4, dy: -4)
+            selectionBounds = selectionBounds.map { $0.union(rect) } ?? rect
+            let border = NSBezierPath(rect: rect)
+            NSColor.white.setStroke(); border.lineWidth = 3; border.stroke()
+            UITheme.indigo.setStroke(); border.lineWidth = 2; border.stroke()
             for handle in selection.count == 1 ? AnnotationGeometry.handles(for: selected) : [] {
-                let p = viewPoint(handle), r = CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)
-                NSColor.white.setFill(); NSBezierPath(ovalIn: r).fill()
-                AnnotationRenderer.red.setStroke(); NSBezierPath(ovalIn: r).stroke()
+                let p = viewPoint(handle), r = CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)
+                let circle = NSBezierPath(ovalIn: r)
+                NSColor.white.setFill(); circle.fill()
+                UITheme.indigo.setStroke(); circle.lineWidth = 2; circle.stroke()
             }
+        }
+        if selection.count > 1, let selectionBounds {
+            let border = NSBezierPath(rect: selectionBounds)
+            UITheme.indigo.setStroke(); border.lineWidth = 1
+            border.setLineDash([4, 3], count: 2, phase: 0); border.stroke()
         }
         if let marqueeRect {
             let path = NSBezierPath(rect: viewRect(marqueeRect))
