@@ -238,7 +238,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         if flags == .command, event.keyCode == 36 || event.keyCode == 76 { finish(); return true }
         if canvas.handleZoomKey(event) { return true }
         if canvas.isEditingText { return false }
-        if flags == .command, event.keyCode == 8 { finish(); return true }
+        if canvas.handleClipboardKey(event) { return true }
         if flags == .command, event.keyCode == 6 { undoAnnotation(); return true }
         if flags == [.command, .shift], event.keyCode == 6 { redoAnnotation(); return true }
         return false
@@ -373,6 +373,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private var spacePressed = false
     private var scrollZooming = false
     private var highlighterStraight = false
+    private var clipboard = AnnotationClipboard()
     private enum Gesture {
         case create(Annotation)
         case label(Annotation)
@@ -675,6 +676,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         guard isEnabled, !isEditingText, window?.attachedSheet == nil else { return }
         onUserOperation?()
         if handleZoomKey(event) { return }
+        if handleClipboardKey(event) { return }
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if flags.isEmpty, event.keyCode == 49 { spacePressed = true; updateCursor(); return }
         if flags.isEmpty, event.keyCode == 4 {
@@ -715,6 +717,21 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         guard !selection.isEmpty else { return }
         cancelGesture()
         var next = history.document; next.remove(selection); history.commit(next); self.selection = []; changed()
+    }
+    func handleClipboardKey(_ event: NSEvent) -> Bool {
+        guard isEnabled, !isEditingText, gesture == nil, window?.attachedSheet == nil,
+              event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command else { return false }
+        var next = history.document
+        let pasted: Set<UUID>
+        switch event.keyCode {
+        case 8: clipboard.copy(selection, from: next); return true // C
+        case 9: pasted = clipboard.paste(into: &next, imageSize: imageSize) // V
+        case 2: pasted = next.duplicate(selection, imageSize: imageSize) // D
+        default: return false
+        }
+        guard !pasted.isEmpty else { return true }
+        history.commit(next); selection = pasted; changed()
+        return true
     }
     private func beginText(_ annotation: Annotation) {
         spacePressed = false
