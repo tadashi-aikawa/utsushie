@@ -58,13 +58,16 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
 }
 
 public enum InkColor: String, CaseIterable, Sendable {
-    case red, indigo, green, black, white
+    case red, orange, green, indigo, purple, pink, black, white
 
     public var label: String {
         switch self {
         case .red: "朱"
-        case .indigo: "藍"
+        case .orange: "橙"
         case .green: "緑"
+        case .indigo: "藍"
+        case .purple: "紫"
+        case .pink: "桃"
         case .black: "墨"
         case .white: "白"
         }
@@ -72,20 +75,26 @@ public enum InkColor: String, CaseIterable, Sendable {
     public var key: String {
         switch self {
         case .red: "1"
-        case .indigo: "2"
+        case .orange: "2"
         case .green: "3"
-        case .black: "4"
-        case .white: "5"
+        case .indigo: "4"
+        case .purple: "5"
+        case .pink: "6"
+        case .black: "7"
+        case .white: "8"
         }
     }
     public init?(keyCode: UInt16, modified: Bool = false, editingText: Bool = false) {
         guard !modified, !editingText else { return nil }
         switch keyCode {
         case 18: self = .red
-        case 19: self = .indigo
+        case 19: self = .orange
         case 20: self = .green
-        case 21: self = .black
-        case 23: self = .white
+        case 21: self = .indigo
+        case 23: self = .purple
+        case 22: self = .pink
+        case 26: self = .black
+        case 28: self = .white
         default: return nil
         }
     }

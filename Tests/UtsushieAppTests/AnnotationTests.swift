@@ -787,8 +787,11 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     let stroke: [Int]
     switch color {
     case .red: stroke = [229, 53, 42]
-    case .indigo: stroke = [66, 112, 192]
+    case .orange: stroke = [240, 138, 36]
     case .green: stroke = [31, 157, 85]
+    case .indigo: stroke = [66, 112, 192]
+    case .purple: stroke = [138, 79, 200]
+    case .pink: stroke = [232, 72, 155]
     case .black: stroke = [28, 28, 30]
     case .white: stroke = [255, 255, 255]
     }
@@ -834,7 +837,7 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     let defaults = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: .rectangle)
     let oldColor = try #require(defaults.inkColor)
     defer { defaults.applyInkColor(oldColor) }
-    for (code, color): (UInt16, InkColor) in [(18, .red), (19, .indigo), (20, .green), (21, .black), (23, .white)] {
+    for (code, color): (UInt16, InkColor) in [(18, .red), (19, .orange), (20, .green), (21, .indigo), (23, .purple), (22, .pink), (26, .black), (28, .white)] {
         defaults.keyDown(with: try annotationKeyEvent(keyCode: code, characters: "す", flags: .function))
         #expect(defaults.inkColor == color && !defaults.history.canUndo)
     }
@@ -862,10 +865,10 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
         if tool == .text {
             let input = try #require(canvas.subviews.compactMap { $0 as? AnnotationTextView }.first)
             #expect(input.backgroundColor == UITheme.ink(.white) && input.textColor == UITheme.ink)
-            input.string = "12345"
+            input.string = "12345678"
             canvas.keyDown(with: try annotationKeyEvent(keyCode: 18))
             canvas.applyInkColor(.red)
-            #expect(input.string == "12345" && canvas.document.annotations.first?.inkColor == .white)
+            #expect(input.string == "12345678" && canvas.document.annotations.first?.inkColor == .white)
             canvas.commitText()
         }
         #expect(canvas.document.annotations.first?.inkColor == .white)

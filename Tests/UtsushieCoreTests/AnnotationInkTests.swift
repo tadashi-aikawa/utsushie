@@ -26,15 +26,15 @@ import Testing
 }
 
 @Test func inkColorsUsePhysicalUnmodifiedKeysOutsideTextInput() {
-    let mappings: [(UInt16, InkColor)] = [(18, .red), (19, .indigo), (20, .green), (21, .black), (23, .white)]
+    let mappings: [(UInt16, InkColor)] = [(18, .red), (19, .orange), (20, .green), (21, .indigo), (23, .purple), (22, .pink), (26, .black), (28, .white)]
     for (code, color) in mappings {
         #expect(InkColor(keyCode: code) == color)
         #expect(InkColor(keyCode: code, modified: true) == nil)
         #expect(InkColor(keyCode: code, editingText: true) == nil)
     }
-    #expect(InkColor.allCases.map(\.key) == ["1", "2", "3", "4", "5"])
-    #expect(InkColor.allCases.map(\.label) == ["朱", "藍", "緑", "墨", "白"])
-    for code: UInt16 in [0, 2, 22, 35, 53, 83, 84, 85, 86, 87] { #expect(InkColor(keyCode: code) == nil) }
+    #expect(InkColor.allCases.map(\.key) == ["1", "2", "3", "4", "5", "6", "7", "8"])
+    #expect(InkColor.allCases.map(\.label) == ["朱", "橙", "緑", "藍", "紫", "桃", "墨", "白"])
+    for code: UInt16 in [0, 2, 25, 29, 35, 53, 83, 84, 85, 86, 87] { #expect(InkColor(keyCode: code) == nil) }
 }
 
 @Test func inkCopiesAndDuplicatesKeepEveryColorAndLeader() {

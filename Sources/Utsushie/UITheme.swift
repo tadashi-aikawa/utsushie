@@ -11,8 +11,11 @@ enum UITheme {
     static func ink(_ choice: InkColor) -> NSColor {
         switch choice {
         case .red: red
-        case .indigo: indigo
+        case .orange: color(0xF08A24)
         case .green: color(0x1F9D55)
+        case .indigo: indigo
+        case .purple: color(0x8A4FC8)
+        case .pink: color(0xE8489B)
         case .black: ink
         case .white: .white
         }
