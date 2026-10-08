@@ -233,9 +233,10 @@ final class OverlayView: NSView {
         if let last = controller.displayedLast {
             let rect = local(last)
             let outline = NSBezierPath(rect: rect); outline.lineWidth = 1.5
+            UITheme.ink.setStroke(); outline.stroke()
             outline.setLineDash([6, 4], count: 2, phase: 0)
             NSColor.white.withAlphaComponent(0.85).setStroke(); outline.stroke()
-            label("前回 \(controller.dimensions(last)) ⏎", at: CGPoint(x: rect.minX + 8, y: rect.maxY - 30))
+            label("前回 ⏎", at: CGPoint(x: rect.minX + 8, y: rect.maxY - 30))
         }
         if let rect = selected {
             let area = local(rect)
