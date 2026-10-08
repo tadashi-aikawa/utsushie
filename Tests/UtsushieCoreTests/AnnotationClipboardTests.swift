@@ -48,3 +48,17 @@ import Testing
         }
     }
 }
+
+@Test func highlighterCopiesAndDuplicatesKeepBothSettings() {
+    let pen = Annotation(tool: .highlighter, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 60, y: 20), highlighterColor: .pink, darkBackground: true)
+    var document = AnnotationDocument(annotations: [pen])
+    var clipboard = AnnotationClipboard()
+    clipboard.copy([pen.id], from: document)
+    _ = clipboard.paste(into: &document, imageSize: CGSize(width: 160, height: 100))
+    _ = document.duplicate([pen.id], imageSize: CGSize(width: 160, height: 100))
+    #expect(document.annotations.count == 3)
+    for copy in document.annotations.dropFirst() {
+        #expect(copy.id != pen.id && copy.highlighterColor == .pink && copy.darkBackground)
+        #expect(copy.points != pen.points)
+    }
+}

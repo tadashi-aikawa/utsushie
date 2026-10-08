@@ -15,6 +15,10 @@ public enum AnnotationToolbarPresentation {
     public static let minimumWidth: CGFloat = 1040
     public static let aiDisabled = "AIで隠すは、設定ファイルで ai = true にすると使えます"
 
+    public static func showsHighlighterControls(tool: AnnotationTool, selectedTools: [AnnotationTool]) -> Bool {
+        tool == .highlighter || selectedTools.contains(.highlighter)
+    }
+
     public static func hint(tool: AnnotationTool, nextNumber: Int, editingText: Bool = false,
                             findingPrivacy: Bool = false,
                             message: ToolbarHint? = nil, saving: Bool = false) -> ToolbarHint {

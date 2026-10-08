@@ -187,6 +187,63 @@ final class ToolbarHintView: NSView {
 }
 
 @MainActor
+final class HighlighterColorButton: NSButton {
+    let color: HighlighterColor
+    override var needsPanelToBecomeKey: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    init(color: HighlighterColor) {
+        self.color = color
+        super.init(frame: .zero)
+        title = ""; isBordered = false; setButtonType(.momentaryPushIn)
+        toolTip = "\(color.label) \(color.key)"
+        setAccessibilityLabel("蛍光ペン \(color.label)")
+        setAccessibilityHelp("キー \(color.key)")
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func draw(_ dirtyRect: NSRect) {
+        let rect = CGRect(x: bounds.midX - 8, y: bounds.midY - 8, width: 16, height: 16)
+        UITheme.highlighter(color).withAlphaComponent(isEnabled ? 1 : 0.35).setFill()
+        NSBezierPath(ovalIn: rect).fill()
+        if state == .on || isHighlighted {
+            let border = NSBezierPath(ovalIn: rect.insetBy(dx: 1, dy: 1))
+            NSColor.white.setStroke(); border.lineWidth = 2; border.stroke()
+        }
+    }
+}
+
+@MainActor
+final class HighlighterControlsView: NSView {
+    let colorButtons: [HighlighterColor: HighlighterColorButton]
+    let darkButton = ToolbarButton(title: "暗い地", key: "D", face: .outline)
+    var naturalWidth: CGFloat { 4 * 26 + 8 + darkButton.naturalWidth }
+    override var isFlipped: Bool { true }
+    init() {
+        colorButtons = Dictionary(uniqueKeysWithValues: HighlighterColor.allCases.map { ($0, HighlighterColorButton(color: $0)) })
+        super.init(frame: .zero)
+        isHidden = true
+        darkButton.allowsMixedState = true
+        HighlighterColor.allCases.forEach { addSubview(colorButtons[$0]!) }
+        addSubview(darkButton)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func update(color: HighlighterColor?, darkBackground: Bool?, enabled: Bool) {
+        for (choice, button) in colorButtons {
+            button.state = choice == color ? .on : .off
+            button.isEnabled = enabled; button.needsDisplay = true
+        }
+        darkButton.state = darkBackground.map { $0 ? .on : .off } ?? .mixed
+        darkButton.isEnabled = enabled; darkButton.needsDisplay = true
+    }
+    override func layout() {
+        super.layout()
+        for (index, color) in HighlighterColor.allCases.enumerated() {
+            colorButtons[color]?.frame = CGRect(x: CGFloat(index) * 26, y: 0, width: 24, height: 25)
+        }
+        darkButton.frame = CGRect(x: 4 * 26 + 8, y: 0, width: darkButton.naturalWidth, height: 25)
+    }
+}
+
+@MainActor
 final class AnnotationToolbarView: NSView {
     let toolButtons: [AnnotationTool: ToolbarButton]
     let aiButton: ToolbarButton
@@ -195,6 +252,7 @@ final class AnnotationToolbarView: NSView {
     let finishButton = ToolbarButton(title: "完了", key: "↩", face: .primary)
     let zoomButton = ToolbarButton(title: "100%", face: .zoom)
     let hintView = ToolbarHintView()
+    let highlighterControls = HighlighterControlsView()
     let dimensions = NSTextField(labelWithString: "")
     let trays: [ToolbarTray]
     var minimumWidth: CGFloat {
@@ -236,7 +294,7 @@ final class AnnotationToolbarView: NSView {
         dimensions.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
         dimensions.textColor = UITheme.key
         trays.forEach { addSubview($0) }
-        [undoButton, redoButton, finishButton, zoomButton, hintView, dimensions].forEach { addSubview($0) }
+        [undoButton, redoButton, finishButton, zoomButton, hintView, highlighterControls, dimensions].forEach { addSubview($0) }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func draw(_ dirtyRect: NSRect) {
@@ -262,5 +320,7 @@ final class AnnotationToolbarView: NSView {
         let dimensionWidth = ceil(dimensions.intrinsicContentSize.width)
         dimensions.frame = CGRect(x: zoomButton.frame.minX - dimensionWidth - 10, y: 50, width: dimensionWidth, height: 18)
         hintView.frame = CGRect(x: 16, y: 46, width: max(0, dimensions.frame.minX - 28), height: 25)
+        highlighterControls.frame = CGRect(x: 16, y: 46, width: highlighterControls.naturalWidth, height: 25)
+        highlighterControls.needsLayout = true
     }
 }

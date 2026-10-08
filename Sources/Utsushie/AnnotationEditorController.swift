@@ -74,6 +74,11 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         configure(finishButton, title: "完了", action: #selector(finish))
         configure(toolbar.aiButton, title: "AIで隠す", action: #selector(privacyButtonPressed))
         configure(toolbar.zoomButton, title: "100%", action: #selector(showZoomMenu))
+        for button in toolbar.highlighterControls.colorButtons.values {
+            button.target = self; button.action = #selector(selectHighlighterColor(_:))
+        }
+        toolbar.highlighterControls.darkButton.target = self
+        toolbar.highlighterControls.darkButton.action = #selector(toggleHighlighterBackground)
         toolbar.zoomButton.toolTip = "倍率メニュー ・ ピンチでも拡大縮小"
         root.bar = toolbar; root.canvas = canvas
         root.addSubview(canvas)
@@ -136,6 +141,10 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         toolbar.zoomButton.isEnabled = !saving
         toolbar.hintView.hint = AnnotationToolbarPresentation.hint(tool: canvas.tool, nextNumber: canvas.document.nextNumber,
             editingText: canvas.isEditingText, findingPrivacy: isFindingPrivacy, message: privacyMessage, saving: saving)
+        toolbar.highlighterControls.isHidden = !canvas.showsHighlighterControls
+        toolbar.hintView.isHidden = canvas.showsHighlighterControls
+        toolbar.highlighterControls.update(color: canvas.highlighterColor, darkBackground: canvas.highlighterDarkBackground,
+                                          enabled: !saving && canvas.isEnabled && !canvas.isInteracting)
         [undoButton, redoButton, finishButton, toolbar.aiButton, toolbar.zoomButton].forEach { $0.needsDisplay = true }
         toolbar.needsLayout = true
     }
@@ -221,6 +230,16 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         clearPrivacyMessage()
         canvas.commitText(); canvas.tool = tool; Self.lastTool = tool
         update(); window.makeFirstResponder(canvas)
+    }
+    @objc private func selectHighlighterColor(_ sender: HighlighterColorButton) {
+        guard !saving else { return }
+        canvas.applyHighlighterAction(.color(sender.color))
+        window.makeFirstResponder(canvas)
+    }
+    @objc private func toggleHighlighterBackground() {
+        guard !saving else { return }
+        canvas.applyHighlighterAction(.toggleDarkBackground)
+        window.makeFirstResponder(canvas)
     }
     @objc private func undoAnnotation() { guard !saving else { return }; canvas.commitText(); canvas.undoAnnotation() }
     @objc private func redoAnnotation() { guard !saving else { return }; canvas.commitText(); canvas.redoAnnotation() }
@@ -339,6 +358,9 @@ private final class AnnotationEditorLayout: NSView {
 
 @MainActor
 final class AnnotationCanvas: NSView, NSTextViewDelegate {
+    // lastToolと同じく、プロセス内だけで次に描く蛍光ペンの設定を共有する。
+    private static var lastHighlighterColor: HighlighterColor = .yellow
+    private static var lastHighlighterDarkBackground = false
     let original: CGImage
     private(set) var history: AnnotationHistory
     var tool: AnnotationTool { didSet { updateCursor(); needsDisplay = true } }
@@ -384,6 +406,37 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     }
     var isEditingText: Bool { textInput != nil }
     var isInteracting: Bool { gesture != nil || isEditingText }
+    private var selectedHighlighters: [Annotation] {
+        history.document.annotations.filter { selection.contains($0.id) && $0.tool == .highlighter }
+    }
+    var showsHighlighterControls: Bool {
+        AnnotationToolbarPresentation.showsHighlighterControls(tool: tool,
+            selectedTools: history.document.annotations.filter { selection.contains($0.id) }.map(\.tool))
+    }
+    var highlighterColor: HighlighterColor? {
+        let colors = Set(selectedHighlighters.map(\.highlighterColor))
+        return colors.isEmpty ? Self.lastHighlighterColor : colors.count == 1 ? colors.first : nil
+    }
+    var highlighterDarkBackground: Bool? {
+        let backgrounds = Set(selectedHighlighters.map(\.darkBackground))
+        return backgrounds.isEmpty ? Self.lastHighlighterDarkBackground : backgrounds.count == 1 ? backgrounds.first : nil
+    }
+    func applyHighlighterAction(_ action: HighlighterAction) {
+        guard isEnabled, !isInteracting, window?.attachedSheet == nil, showsHighlighterControls else { return }
+        onUserOperation?()
+        let next: AnnotationDocument
+        switch action {
+        case .color(let color):
+            Self.lastHighlighterColor = color
+            next = history.document.settingHighlighter(selection, color: color)
+        case .toggleDarkBackground:
+            let dark = highlighterDarkBackground != true
+            Self.lastHighlighterDarkBackground = dark
+            next = history.document.settingHighlighter(selection, darkBackground: dark)
+        }
+        if !selectedHighlighters.isEmpty { history.commit(next) }
+        changed()
+    }
     func appendPrivacyAnnotations(_ annotations: [Annotation]) {
         guard !annotations.isEmpty else { return }
         var next = history.document
@@ -568,7 +621,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         }
         selection = []
         guard tool.allowsMargin || CGRect(origin: .zero, size: imageSize).contains(p) else { changed(); return }
-        let annotation = Annotation(tool: tool, start: p)
+        let annotation = Annotation(tool: tool, start: p, highlighterColor: Self.lastHighlighterColor,
+                                    darkBackground: Self.lastHighlighterDarkBackground)
         highlighterStraight = event.modifierFlags.contains(.shift)
         frozenImageRect = imageRect
         gesture = [.text, .number].contains(tool) ? .label(annotation) : .create(annotation)
@@ -680,6 +734,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         if handleZoomKey(event) { return }
         if handleClipboardKey(event) { return }
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if showsHighlighterControls, let action = HighlighterAction(keyCode: event.keyCode, modified: !flags.isEmpty, editingText: isEditingText) {
+            if !event.isARepeat { applyHighlighterAction(action) }
+            return
+        }
         if flags.isEmpty, event.keyCode == 49 { spacePressed = true; updateCursor(); return }
         if flags.isEmpty, event.keyCode == 4 {
             if !event.isARepeat { onPrivacy?() }

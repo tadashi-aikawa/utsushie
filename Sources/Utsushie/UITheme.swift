@@ -1,4 +1,5 @@
 import AppKit
+import UtsushieCore
 
 @MainActor
 enum UITheme {
@@ -7,7 +8,16 @@ enum UITheme {
     static let ink = color(0x1C1C1E)
     static let red = color(0xE5352A)
     static let redFace = color(0xD23125)
-    static let highlighter = color(0xFFF200).withAlphaComponent(0.90)
+    static func highlighter(_ choice: HighlighterColor) -> NSColor {
+        let hex: Int
+        switch choice {
+        case .yellow: hex = 0xFFF200
+        case .cyan: hex = 0x00E5FF
+        case .pink: hex = 0xFF4FD8
+        case .green: hex = 0x5CFF5C
+        }
+        return color(hex).withAlphaComponent(0.90)
+    }
     static let muted = color(0xA1A1A6)
     static let text = color(0xE5E5EA)
     static let key = color(0x8E8E93)

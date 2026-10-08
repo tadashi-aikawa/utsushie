@@ -56,6 +56,44 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     public var allowsMargin: Bool { [.text, .number, .arrow, .line, .rectangle].contains(self) }
 }
 
+public enum HighlighterColor: String, CaseIterable, Sendable {
+    case yellow, cyan, pink, green
+
+    public var label: String {
+        switch self {
+        case .yellow: "黄"
+        case .cyan: "水色"
+        case .pink: "桃"
+        case .green: "緑"
+        }
+    }
+    public var key: String {
+        switch self {
+        case .yellow: "1"
+        case .cyan: "2"
+        case .pink: "3"
+        case .green: "4"
+        }
+    }
+}
+
+public enum HighlighterAction: Equatable, Sendable {
+    case color(HighlighterColor)
+    case toggleDarkBackground
+
+    public init?(keyCode: UInt16, modified: Bool = false, editingText: Bool = false) {
+        guard !modified, !editingText else { return nil }
+        switch keyCode {
+        case 18: self = .color(.yellow)
+        case 19: self = .color(.cyan)
+        case 20: self = .color(.pink)
+        case 21: self = .color(.green)
+        case 2: self = .toggleDarkBackground
+        default: return nil
+        }
+    }
+}
+
 /// 注釈だけは画像の左上原点・ピクセル座標。画面座標モデルとは混ぜない。
 public struct Annotation: Equatable, Sendable, Identifiable {
     public let id: UUID
@@ -65,10 +103,15 @@ public struct Annotation: Equatable, Sendable, Identifiable {
     public var text: String
     public var leaderTarget: CGPoint?
     public var points: [CGPoint]
-    public init(id: UUID = UUID(), tool: AnnotationTool, start: CGPoint, end: CGPoint? = nil, text: String = "", leaderTarget: CGPoint? = nil, points: [CGPoint] = []) {
+    public var highlighterColor: HighlighterColor
+    public var darkBackground: Bool
+    public init(id: UUID = UUID(), tool: AnnotationTool, start: CGPoint, end: CGPoint? = nil, text: String = "", leaderTarget: CGPoint? = nil, points: [CGPoint] = [],
+                highlighterColor: HighlighterColor = .yellow, darkBackground: Bool = false) {
         self.id = id; self.tool = tool; self.start = start; self.end = end ?? start; self.text = text
         self.leaderTarget = [.text, .number].contains(tool) ? leaderTarget : nil
         self.points = tool == .highlighter ? (points.isEmpty ? [start, end ?? start] : points) : []
+        self.highlighterColor = tool == .highlighter ? highlighterColor : .yellow
+        self.darkBackground = tool == .highlighter && darkBackground
     }
     public var rect: CGRect {
         let vertices = tool == .highlighter ? points : [start, end]

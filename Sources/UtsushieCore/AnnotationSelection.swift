@@ -4,6 +4,16 @@ import CoreGraphics
 extension AnnotationDocument {
     public mutating func remove(_ ids: Set<UUID>) { annotations.removeAll { ids.contains($0.id) } }
 
+    /// 混在する選択でも、蛍光ペン以外の注釈と指定しない軸は保つ。
+    public func settingHighlighter(_ ids: Set<UUID>, color: HighlighterColor? = nil, darkBackground: Bool? = nil) -> AnnotationDocument {
+        var result = self
+        for index in result.annotations.indices where ids.contains(result.annotations[index].id) && result.annotations[index].tool == .highlighter {
+            if let color { result.annotations[index].highlighterColor = color }
+            if let darkBackground { result.annotations[index].darkBackground = darkBackground }
+        }
+        return result
+    }
+
     /// 選択は包含でなく交差。細い線は外接矩形の空白部分を選ばない。
     public func intersecting(_ rect: CGRect, style: AnnotationStyle) -> Set<UUID> {
         Set(annotations.filter { annotation in

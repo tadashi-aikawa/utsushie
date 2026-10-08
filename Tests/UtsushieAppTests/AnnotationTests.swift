@@ -426,6 +426,119 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     #expect(image.width == original.width && image.height == original.height)
 }
 
+@MainActor @Test(arguments: HighlighterColor.allCases) func annotationHighlighterScreenColorsBlackAndPreservesWhite(color: HighlighterColor) throws {
+    let source = try AnnotationRenderer.bitmap(width: 160, height: 100)
+    source.setFillColor(NSColor.black.cgColor)
+    source.fill(CGRect(x: 0, y: 0, width: 160, height: 100))
+    source.setFillColor(NSColor.white.cgColor)
+    source.fill(CGRect(x: 70, y: 0, width: 20, height: 100))
+    let original = try #require(source.makeImage())
+    let pen = Annotation(tool: .highlighter, start: CGPoint(x: 5, y: 50), end: CGPoint(x: 150, y: 50), highlighterColor: color, darkBackground: true)
+    let image = try AnnotationRenderer.compose(original, document: AnnotationDocument(annotations: [pen]))
+    let expected: [Int]
+    switch color {
+    case .yellow: expected = [230, 218, 0]
+    case .cyan: expected = [0, 206, 230]
+    case .pink: expected = [230, 71, 194]
+    case .green: expected = [83, 230, 83]
+    }
+    let colored = try pixel(image, x: 40, y: 50)
+    for channel in 0..<3 { #expect(abs(colored[channel] - expected[channel]) <= 1) }
+    #expect(colored[3] == 255)
+    #expect(try pixel(image, x: 80, y: 50) == [255, 255, 255, 255])
+    #expect(try pixel(image, x: 40, y: 59) == [0, 0, 0, 255])
+    #expect(image.width == original.width && image.height == original.height)
+}
+
+@MainActor @Test func annotationHighlighterKeysRememberDefaultsAcrossCanvasesWithoutHistory() throws {
+    let image = try annotationFixture()
+    let defaults = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: .highlighter)
+    let oldColor = try #require(defaults.highlighterColor), oldDark = try #require(defaults.highlighterDarkBackground)
+    defer {
+        defaults.applyHighlighterAction(.color(oldColor))
+        if defaults.highlighterDarkBackground != oldDark { defaults.applyHighlighterAction(.toggleDarkBackground) }
+    }
+    let canvas = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: .selection)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 19))
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 2))
+    #expect(canvas.highlighterColor == oldColor && canvas.highlighterDarkBackground == oldDark)
+    canvas.tool = .highlighter
+    for (code, color): (UInt16, HighlighterColor) in [(18, .yellow), (19, .cyan), (20, .pink), (21, .green)] {
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: code, characters: "す", flags: .function))
+        #expect(canvas.highlighterColor == color)
+    }
+    for flags: NSEvent.ModifierFlags in [.shift, .command, .option, .control] {
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: 18, flags: flags))
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: 2, flags: flags))
+        #expect(canvas.highlighterColor == .green && canvas.highlighterDarkBackground == oldDark)
+    }
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 2))
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 2, repeating: true))
+    #expect(canvas.highlighterDarkBackground == !oldDark && !canvas.history.canUndo)
+    let reopened = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: .highlighter)
+    reopened.frame = canvas.frame
+    #expect(reopened.highlighterColor == .green && reopened.highlighterDarkBackground == !oldDark)
+    reopened.mouseDown(with: try annotationMouseEvent(reopened, type: .leftMouseDown, at: CGPoint(x: 20, y: 20)))
+    reopened.mouseDragged(with: try annotationMouseEvent(reopened, type: .leftMouseDragged, at: CGPoint(x: 100, y: 20)))
+    reopened.keyDown(with: try annotationKeyEvent(keyCode: 18))
+    reopened.keyDown(with: try annotationKeyEvent(keyCode: 2))
+    reopened.mouseUp(with: try annotationMouseEvent(reopened, type: .leftMouseUp, at: CGPoint(x: 100, y: 20)))
+    let pen = try #require(reopened.document.annotations.first)
+    #expect(pen.highlighterColor == .green && pen.darkBackground == !oldDark)
+    reopened.undoAnnotation(); #expect(reopened.document.annotations.isEmpty && !reopened.history.canUndo)
+    canvas.tool = .text
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 20)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 20, y: 20)))
+    #expect(canvas.isEditingText)
+    canvas.tool = .highlighter
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 18))
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 2))
+    #expect(canvas.highlighterColor == .green && canvas.highlighterDarkBackground == !oldDark)
+}
+
+@MainActor @Test func annotationHighlighterSelectedSettingsChangeTogetherWithOneUndo() throws {
+    let image = try annotationFixture()
+    let defaults = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: .highlighter)
+    let oldColor = try #require(defaults.highlighterColor), oldDark = try #require(defaults.highlighterDarkBackground)
+    defer {
+        defaults.applyHighlighterAction(.color(oldColor))
+        if defaults.highlighterDarkBackground != oldDark { defaults.applyHighlighterAction(.toggleDarkBackground) }
+    }
+    let a = Annotation(tool: .highlighter, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 60, y: 20), highlighterColor: .cyan)
+    let b = Annotation(tool: .highlighter, start: CGPoint(x: 20, y: 40), end: CGPoint(x: 60, y: 40), highlighterColor: .pink, darkBackground: true)
+    let c = Annotation(tool: .highlighter, start: CGPoint(x: 100, y: 80), end: CGPoint(x: 150, y: 80))
+    let number = Annotation(tool: .number, start: CGPoint(x: 50, y: 60))
+    let initial = AnnotationDocument(annotations: [a, b, c, number])
+    let canvas = AnnotationCanvas(image: image, document: initial, tool: .selection)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    func select() throws {
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 5, y: 5)))
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 75, y: 70)))
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 75, y: 70)))
+    }
+    try select()
+    #expect(canvas.selection == [a.id, b.id, number.id] && canvas.showsHighlighterControls)
+    #expect(canvas.highlighterColor == nil && canvas.highlighterDarkBackground == nil)
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 21))
+    #expect(canvas.document == initial.settingHighlighter([a.id, b.id], color: .green))
+    canvas.undoAnnotation(); #expect(canvas.document == initial && !canvas.history.canUndo)
+    try select()
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 2))
+    #expect(canvas.document == initial.settingHighlighter([a.id, b.id], darkBackground: true))
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 2, repeating: true))
+    #expect(canvas.highlighterDarkBackground == true)
+    canvas.undoAnnotation(); #expect(canvas.document == initial && !canvas.history.canUndo)
+    try select()
+    canvas.applyHighlighterAction(.color(.cyan))
+    let colored = canvas.document
+    canvas.applyHighlighterAction(.toggleDarkBackground)
+    canvas.applyHighlighterAction(.toggleDarkBackground)
+    #expect(canvas.highlighterDarkBackground == false)
+    #expect(canvas.document.annotations[2] == c && canvas.document.annotations[3] == number)
+    canvas.undoAnnotation(); #expect(canvas.document == colored.settingHighlighter([a.id, b.id], darkBackground: true))
+}
+
 @MainActor @Test func annotationClipboardKeysStayInTextViewWhileEditing() throws {
     let editor = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil)
     defer { editor.window.close() }

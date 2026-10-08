@@ -107,6 +107,62 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     #expect(editor.canvas.displayScale == 1)
 }
 
+@MainActor @Test func annotationHighlighterToolbarChangesSelectedPensAndFitsLowerRow() throws {
+    let image = try toolbarImage()
+    let defaults = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: .highlighter)
+    let oldColor = try #require(defaults.highlighterColor), oldDark = try #require(defaults.highlighterDarkBackground)
+    defer {
+        defaults.applyHighlighterAction(.color(oldColor))
+        if defaults.highlighterDarkBackground != oldDark { defaults.applyHighlighterAction(.toggleDarkBackground) }
+    }
+    let a = Annotation(tool: .highlighter, start: CGPoint(x: 100, y: 100), end: CGPoint(x: 250, y: 100), highlighterColor: .cyan)
+    let b = Annotation(tool: .highlighter, start: CGPoint(x: 100, y: 200), end: CGPoint(x: 250, y: 200), highlighterColor: .pink, darkBackground: true)
+    let initial = AnnotationDocument(annotations: [a, b])
+    let editor = AnnotationEditorController(image: image, document: initial, screen: nil)
+    defer { editor.window.close() }
+    let bar = editor.toolbar, canvas = editor.canvas, controls = bar.highlighterControls
+    editor.window.contentView?.layoutSubtreeIfNeeded()
+    bar.toolButtons[.selection]?.performClick(nil)
+    #expect(controls.isHidden && !bar.hintView.isHidden)
+    canvas.mouseDown(with: try toolbarMouse(canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 20)))
+    canvas.mouseDragged(with: try toolbarMouse(canvas, type: .leftMouseDragged, at: CGPoint(x: 300, y: 300)))
+    canvas.mouseUp(with: try toolbarMouse(canvas, type: .leftMouseUp, at: CGPoint(x: 300, y: 300)))
+    #expect(!controls.isHidden && bar.hintView.isHidden)
+    #expect(controls.colorButtons.values.allSatisfy { $0.state == .off })
+    #expect(controls.darkButton.state == .mixed && controls.darkButton.face == .outline)
+    controls.colorButtons[.green]?.performClick(nil)
+    let colored = initial.settingHighlighter([a.id, b.id], color: .green)
+    #expect(canvas.document == colored && controls.colorButtons[.green]?.state == .on)
+    controls.darkButton.performClick(nil)
+    #expect(canvas.document == colored.settingHighlighter([a.id, b.id], darkBackground: true))
+    #expect(controls.darkButton.state == .on && editor.window.firstResponder === canvas)
+    bar.frame = CGRect(x: 0, y: 0, width: bar.minimumWidth, height: 75)
+    bar.layoutSubtreeIfNeeded()
+    #expect(controls.frame.origin == CGPoint(x: 16, y: 46) && controls.frame.height == 25)
+    #expect(controls.frame.maxX < bar.dimensions.frame.minX)
+    for button in controls.colorButtons.values {
+        #expect(controls.bounds.contains(button.frame))
+        #expect(button.needsPanelToBecomeKey && button.acceptsFirstMouse(for: nil))
+    }
+    #expect(controls.bounds.contains(controls.darkButton.frame))
+    if let directory = ProcessInfo.processInfo.environment["UTSUSHIE_UI_PREVIEW_DIR"] {
+        let url = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let bitmap = try #require(bar.bitmapImageRepForCachingDisplay(in: bar.bounds))
+        bar.cacheDisplay(in: bar.bounds, to: bitmap)
+        let image = try #require(bitmap.cgImage)
+        try WebPEncoder.encode(image, quality: 90, lossless: false).write(to: url.appendingPathComponent("annotation-toolbar-highlighter.webp"))
+    }
+    canvas.undoAnnotation(); #expect(canvas.document == colored && controls.isHidden)
+    canvas.undoAnnotation(); #expect(canvas.document == initial && !canvas.history.canUndo)
+    bar.toolButtons[.highlighter]?.performClick(nil)
+    #expect(!controls.isHidden && bar.hintView.isHidden)
+    controls.colorButtons[.yellow]?.performClick(nil)
+    #expect(canvas.document == initial && !canvas.history.canUndo)
+    bar.toolButtons[.number]?.performClick(nil)
+    #expect(controls.isHidden && !bar.hintView.isHidden && !editor.hintText.isEmpty)
+}
+
 @MainActor @Test func annotationToolbarButtonsClearAIMessageAndOnlyOfferUndoRedoFinish() throws {
     let editor = AnnotationEditorController(image: try toolbarImage(), document: AnnotationDocument(), screen: nil)
     defer { editor.window.close() }

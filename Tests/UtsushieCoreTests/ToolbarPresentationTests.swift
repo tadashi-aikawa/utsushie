@@ -12,6 +12,14 @@ import Testing
     #expect(editing.text == "⏎で確定 ・ ⇧⏎で改行" && editing.keys == ["⇧⏎", "⏎"])
 }
 
+@Test func highlighterControlsAppearForToolOrSelectedHighlighters() {
+    for tool in AnnotationTool.allCases {
+        #expect(AnnotationToolbarPresentation.showsHighlighterControls(tool: tool, selectedTools: []) == (tool == .highlighter))
+        #expect(AnnotationToolbarPresentation.showsHighlighterControls(tool: tool, selectedTools: [.line, .highlighter]))
+        #expect(AnnotationToolbarPresentation.showsHighlighterControls(tool: tool, selectedTools: [.text, .number]) == (tool == .highlighter))
+    }
+}
+
 @Test func toolbarStatusTakesPriorityAndSearchLivesInButton() {
     let result = ToolbarHint("3 か所にモザイクを入れました")
     let error = ToolbarHint("隠す箇所を探せませんでした", isError: true)
