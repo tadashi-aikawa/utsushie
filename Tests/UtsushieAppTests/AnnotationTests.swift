@@ -349,12 +349,26 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     let line = Annotation(tool: .line, start: CGPoint(x: 80, y: 40), end: CGPoint(x: 80, y: 80))
     let image = try AnnotationRenderer.compose(annotationFixture(), document: AnnotationDocument(annotations: [line, pen, spot]))
     let yellow = try pixel(image, x: 60, y: 60)
-    // 黄30%のにじみと黄70%の本線を暗幕の灰色128へ順に合成する。
-    #expect(abs(yellow[0] - 228) <= 2 && abs(yellow[1] - 218) <= 2 && abs(yellow[2] - 27) <= 2)
-    let glow = try pixel(image, x: 60, y: 69)
-    #expect(abs(glow[0] - 166) <= 2 && abs(glow[1] - 162) <= 2 && abs(glow[2] - 90) <= 2)
-    #expect(try pixel(image, x: 60, y: 74) == pixel(image, x: 60, y: 90))
+    // 黄90%の本線を暗幕の灰色128へ乗算する。
+    #expect(abs(yellow[0] - 128) <= 2 && abs(yellow[1] - 122) <= 2 && abs(yellow[2] - 13) <= 2)
+    #expect(try pixel(image, x: 60, y: 69) == pixel(image, x: 60, y: 90))
     #expect(try pixel(image, x: 80, y: 60) == [229, 53, 42, 255])
+}
+
+@MainActor @Test func annotationHighlighterMultipliesWhiteAndPreservesBlack() throws {
+    let source = try AnnotationRenderer.bitmap(width: 160, height: 100)
+    source.setFillColor(NSColor.white.cgColor)
+    source.fill(CGRect(x: 0, y: 0, width: 160, height: 100))
+    source.setFillColor(NSColor.black.cgColor)
+    source.fill(CGRect(x: 70, y: 0, width: 20, height: 100))
+    let original = try #require(source.makeImage())
+    let pen = Annotation(tool: .highlighter, start: CGPoint(x: 5, y: 50), end: CGPoint(x: 150, y: 50))
+    let image = try AnnotationRenderer.compose(original, document: AnnotationDocument(annotations: [pen]))
+    let yellow = try pixel(image, x: 40, y: 50)
+    #expect(yellow[0] == 255 && abs(yellow[1] - 243) <= 1 && abs(yellow[2] - 26) <= 1 && yellow[3] == 255)
+    #expect(try pixel(image, x: 80, y: 50) == [0, 0, 0, 255])
+    #expect(try pixel(image, x: 40, y: 59) == [255, 255, 255, 255])
+    #expect(image.width == original.width && image.height == original.height)
 }
 
 @MainActor @Test func annotationClipboardKeysStayInTextViewWhileEditing() throws {
