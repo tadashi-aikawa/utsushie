@@ -96,16 +96,16 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
     ]
     for mode in AnnotationTool.allCases {
         for (point, handle, cursor) in locations {
-            let action = document.interaction(at: point, selected: area.id, tool: mode, style: style, tolerance: 7)
+            let action = document.interaction(at: point, selected: [area.id], tool: mode, style: style, tolerance: 7)
             #expect(action == .resize(area.id, handle))
             #expect(action.cursor(tool: mode) == cursor)
-            let unselected = document.interaction(at: point, selected: nil, tool: mode, style: style, tolerance: 7)
+            let unselected = document.interaction(at: point, selected: [], tool: mode, style: style, tolerance: 7)
             #expect(unselected == .resize(area.id, handle))
             #expect(unselected.cursor(tool: mode) == cursor)
         }
-        let interior = document.interaction(at: CGPoint(x: 100, y: 80), selected: area.id, tool: mode, style: style, tolerance: 7)
+        let interior = document.interaction(at: CGPoint(x: 100, y: 80), selected: [area.id], tool: mode, style: style, tolerance: 7)
         #expect(interior == (mode == .selection ? .move(area.id) : .create))
-        let empty = document.interaction(at: CGPoint(x: 250, y: 200), selected: area.id, tool: mode, style: style, tolerance: 7)
+        let empty = document.interaction(at: CGPoint(x: 250, y: 200), selected: [area.id], tool: mode, style: style, tolerance: 7)
         #expect(empty == (mode == .selection ? .none : .create))
         #expect(empty.cursor(tool: mode) == (mode == .selection ? .arrow : .crosshair))
     }
@@ -127,14 +127,14 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
     let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
     for mode in AnnotationTool.allCases {
         for (point, id) in [(CGPoint(x: 70, y: 30), arrow.id), (CGPoint(x: 70, y: 80), label.id), (CGPoint(x: 160, y: 100), number.id)] {
-            let action = document.interaction(at: point, selected: nil, tool: mode, style: style, tolerance: 7)
+            let action = document.interaction(at: point, selected: [], tool: mode, style: style, tolerance: 7)
             #expect(action == .move(id))
             #expect(action.cursor(tool: mode) == .move)
         }
-        #expect(document.interaction(at: arrow.start, selected: arrow.id, tool: mode, style: style, tolerance: 7) == .resize(arrow.id, .arrowStart))
-        #expect(document.interaction(at: arrow.start, selected: nil, tool: mode, style: style, tolerance: 7) == .resize(arrow.id, .arrowStart))
-        #expect(document.interaction(at: arrow.end, selected: nil, tool: mode, style: style, tolerance: 7) == .resize(arrow.id, .arrowEnd))
-        let end = document.interaction(at: arrow.end, selected: arrow.id, tool: mode, style: style, tolerance: 7)
+        #expect(document.interaction(at: arrow.start, selected: [arrow.id], tool: mode, style: style, tolerance: 7) == .resize(arrow.id, .arrowStart))
+        #expect(document.interaction(at: arrow.start, selected: [], tool: mode, style: style, tolerance: 7) == .resize(arrow.id, .arrowStart))
+        #expect(document.interaction(at: arrow.end, selected: [], tool: mode, style: style, tolerance: 7) == .resize(arrow.id, .arrowEnd))
+        let end = document.interaction(at: arrow.end, selected: [arrow.id], tool: mode, style: style, tolerance: 7)
         #expect(end == .resize(arrow.id, .arrowEnd))
         #expect(end.cursor(tool: mode) == .crosshair)
     }
@@ -242,7 +242,7 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
     #expect(circle.labelEdge.x > capsule.labelEdge.x)
     #expect(document.number(for: last.id) == 9)
     for tool in AnnotationTool.allCases {
-        #expect(document.interaction(at: last.leaderTarget!, selected: nil, tool: tool, style: style, tolerance: 7) == .resize(last.id, .leaderTarget))
+        #expect(document.interaction(at: last.leaderTarget!, selected: [], tool: tool, style: style, tolerance: 7) == .resize(last.id, .leaderTarget))
         #expect(document.hit(at: CGPoint(x: 200, y: 120), style: style, tolerance: 7) == last.id)
     }
     let moved = last.translated(by: CGPoint(x: 30, y: 40))
@@ -250,8 +250,8 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
     let hidden = Annotation(tool: .number, start: last.start, leaderTarget: last.start)
     let hiddenDocument = AnnotationDocument(annotations: [hidden])
     #expect(hiddenDocument.leaderSegment(for: hidden, style: style) == nil)
-    #expect(hiddenDocument.interaction(at: hidden.start, selected: nil, tool: .selection, style: style, tolerance: 7) == .move(hidden.id))
-    #expect(hiddenDocument.interaction(at: hidden.start, selected: hidden.id, tool: .selection, style: style, tolerance: 7) == .resize(hidden.id, .leaderTarget))
+    #expect(hiddenDocument.interaction(at: hidden.start, selected: [], tool: .selection, style: style, tolerance: 7) == .move(hidden.id))
+    #expect(hiddenDocument.interaction(at: hidden.start, selected: [hidden.id], tool: .selection, style: style, tolerance: 7) == .resize(hidden.id, .leaderTarget))
 }
 
 @Test func annotationSpotVisibleOuterFrameResizesAtHighZoomWithoutSelection() {
@@ -259,7 +259,7 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
     let document = AnnotationDocument(annotations: [spot])
     let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
     for tool in AnnotationTool.allCases {
-        let action = document.interaction(at: CGPoint(x: 95, y: 200), selected: nil, tool: tool, style: style, tolerance: 7 / 4)
+        let action = document.interaction(at: CGPoint(x: 95, y: 200), selected: [], tool: tool, style: style, tolerance: 7 / 4)
         #expect(action == .resize(spot.id, .left))
         #expect(action.cursor(tool: tool) == .horizontal)
     }
@@ -278,7 +278,7 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
         }
     }
     let document = AnnotationDocument(annotations: [rect])
-    #expect(document.interaction(at: CGPoint(x: 102, y: 102), selected: nil, tool: .selection, style: style, tolerance: 7 / 4) == .resize(rect.id, .top))
+    #expect(document.interaction(at: CGPoint(x: 102, y: 102), selected: [], tool: .selection, style: style, tolerance: 7 / 4) == .resize(rect.id, .top))
 }
 
 @Test func annotationLeaderIntersectionIncludesRoundedCornerAndHidesInsideTarget() throws {
@@ -305,7 +305,7 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
     let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
     #expect(document.hit(at: CGPoint(x: 100, y: 122), style: style, tolerance: 7) == label.id)
     #expect(document.hit(at: CGPoint(x: 100, y: 135), style: style, tolerance: 7) == nil)
-    #expect(document.interaction(at: label.leaderTarget!, selected: label.id, tool: .selection, style: style, tolerance: 7) == .resize(label.id, .leaderTarget))
+    #expect(document.interaction(at: label.leaderTarget!, selected: [label.id], tool: .selection, style: style, tolerance: 7) == .resize(label.id, .leaderTarget))
     let moved = label.translated(by: CGPoint(x: 10, y: 30))
     #expect(moved.leaderTarget == label.leaderTarget && moved.start == CGPoint(x: 210, y: 130))
     let resized = AnnotationGeometry.resized(label, handle: .leaderTarget, to: CGPoint(x: -10, y: 700))

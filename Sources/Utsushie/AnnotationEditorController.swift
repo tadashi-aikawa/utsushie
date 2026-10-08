@@ -359,7 +359,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     var onPrivacy: (() -> Void)?
     var onCancelPrivacy: (() -> Bool)?
     var isEnabled = true
-    private(set) var selection: UUID?
+    private(set) var selection: Set<UUID> = []
     private var gesture: Gesture?
     private var preview: AnnotationDocument?
     private var composed: CGImage?
@@ -376,10 +376,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private enum Gesture {
         case create(Annotation)
         case label(Annotation)
-        case move(Annotation, CGPoint)
+        case move(Set<UUID>, CGPoint, UUID)
         case resize(Annotation, AnnotationResizeHandle)
+        case marquee(CGPoint, Set<UUID>)
         case pan(AnnotationViewport, CGPoint)
     }
+    private var marqueeRect: CGRect?
+    private var toggleOnClick: (id: UUID, previous: Set<UUID>)?
     var document: AnnotationDocument {
         var result = preview ?? history.document
         if let textAnnotation { result.replace(textAnnotation) }
@@ -488,9 +491,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         if case .pan = gesture { cancelGesture() }
         updateCursor()
     }
-    private func cancelGesture() { gesture = nil; preview = nil; frozenImageRect = nil }
-    func undoAnnotation() { cancelGesture(); history.undo(); selection = nil; changed() }
-    func redoAnnotation() { cancelGesture(); history.redo(); selection = nil; changed() }
+    private func cancelGesture() { gesture = nil; preview = nil; frozenImageRect = nil; marqueeRect = nil; toggleOnClick = nil }
+    func undoAnnotation() { cancelGesture(); history.undo(); selection = []; changed() }
+    func redoAnnotation() { cancelGesture(); history.redo(); selection = []; changed() }
     func hasChanges(comparedTo initial: AnnotationDocument) -> Bool {
         if history.document != initial { return true }
         guard let textInput, let textAnnotation else { return false }
@@ -512,9 +515,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         let interaction: AnnotationInteraction
         switch gesture {
         case .create, .label: interaction = .create
-        case .move(let annotation, _): interaction = .move(annotation.id)
+        case .move(_, _, let id): interaction = .move(id)
         case .resize(let annotation, let handle): interaction = .resize(annotation.id, handle)
-        case .pan: return
+        case .pan, .marquee: return
         case nil: interaction = document.interaction(at: cursorPoint, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
         }
         let cursor: NSCursor
@@ -539,20 +542,30 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         }
         let p = point(event)
         cursorPoint = p
+        toggleOnClick = nil
+        if event.modifierFlags.contains(.shift),
+           let id = document.hit(at: p, style: style, tolerance: 7 / displayScale, includeAreaInterior: tool == .selection) {
+            toggleOnClick = (id, selection)
+        }
         let interaction = document.interaction(at: p, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
         switch interaction {
         case .resize(let id, let handle):
             guard let annotation = document.annotations.first(where: { $0.id == id }) else { return }
-            selection = id; frozenImageRect = imageRect; gesture = .resize(annotation, handle); changed(); return
+            selection = [id]; frozenImageRect = imageRect; gesture = .resize(annotation, handle); changed(); return
         case .move(let id):
             guard let annotation = document.annotations.first(where: { $0.id == id }) else { return }
-            selection = id
-            if event.clickCount == 2, annotation.tool == .text { beginText(annotation); return }
-            frozenImageRect = imageRect; gesture = .move(annotation, p); changed(); return
-        case .none: selection = nil; changed(); return
+            if !selection.contains(id) {
+                if toggleOnClick != nil { selection.insert(id) } else { selection = [id] }
+            }
+            if selection.count == 1, event.clickCount == 2, annotation.tool == .text { beginText(annotation); return }
+            frozenImageRect = imageRect; gesture = .move(selection, p, id); changed(); return
+        case .none:
+            let previous = event.modifierFlags.contains(.shift) ? selection : []
+            selection = previous; frozenImageRect = imageRect; gesture = .marquee(p, previous)
+            changed(); return
         case .create: break
         }
-        selection = nil
+        selection = []
         guard tool.allowsMargin || CGRect(origin: .zero, size: imageSize).contains(p) else { changed(); return }
         let annotation = Annotation(tool: tool, start: p)
         highlighterStraight = event.modifierFlags.contains(.shift)
@@ -572,8 +585,12 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         }
         let p = point(event)
         cursorPoint = p
+        let shift = event.modifierFlags.contains(.shift)
         var annotation: Annotation
         switch gesture {
+        case .marquee(let anchor, _):
+            marqueeRect = Annotation(tool: .rectangle, start: anchor, end: p).rect
+            needsDisplay = true; return
         case .label(let initial):
             let anchor = initial.start
             guard AnnotationGeometry.isValidDrag(tool: initial.tool, from: anchor, to: p, displayScale: displayScale) else { preview = nil; changed(); return }
@@ -587,33 +604,48 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
                                     end: CGPoint(x: rect.maxX, y: rect.maxY), text: "入力", leaderTarget: anchor)
         case .create(let initial):
             annotation = initial.tool == .highlighter ? (preview?.annotations.first { $0.id == initial.id } ?? initial) : initial
-            annotation.end = initial.tool.allowsMargin ? p : AnnotationGeometry.clamped(p, to: imageSize)
+            annotation.end = AnnotationGeometry.creationPoint(p, from: initial.start, tool: initial.tool, shift: shift, imageSize: imageSize)
             if initial.tool == .highlighter {
                 if highlighterStraight { annotation.points = [initial.start, annotation.end] }
                 else { annotation.points.append(annotation.end) }
             }
-        case .move(let initial, let anchor):
-            let delta = CGPoint(x: p.x - anchor.x, y: p.y - anchor.y)
-            annotation = initial.translated(by: delta)
+        case .move(let ids, let anchor, _):
+            var delta = CGPoint(x: p.x - anchor.x, y: p.y - anchor.y)
+            if shift { delta = AnnotationGeometry.axisConstrained(delta) }
+            preview = history.document.moving(ids, by: delta, imageSize: imageSize)
+            changed(); return
         case .resize(let initial, let handle):
-            let endpoint = handle == .leaderTarget || !initial.tool.allowsMargin ? AnnotationGeometry.clamped(p, to: imageSize) : p
-            annotation = AnnotationGeometry.resized(initial, handle: handle, to: endpoint)
+            annotation = AnnotationGeometry.resized(initial, handle: handle, to: p, shift: shift, imageSize: imageSize)
         case .pan: return
         }
         annotation = placed(annotation)
         var next = history.document; next.replace(annotation); preview = next
-        selection = annotation.id; changed()
+        selection = [annotation.id]; changed()
     }
     override func mouseUp(with event: NSEvent) {
         guard let gesture else { return }
         if case .pan = gesture { cancelGesture(); viewChanged(); return }
+        if let toggleOnClick, preview == nil {
+            selection = toggleOnClick.previous
+            if !selection.insert(toggleOnClick.id).inserted { selection.remove(toggleOnClick.id) }
+            cancelGesture(); changed(); return
+        }
+        if case .marquee(let anchor, let previous) = gesture {
+            let rect = Annotation(tool: .rectangle, start: anchor, end: point(event)).rect
+            selection = previous.union(history.document.intersecting(rect, style: style))
+            cancelGesture(); changed(); return
+        }
+        if case .move(_, let anchor, let id) = gesture, preview == nil,
+           hypot(point(event).x - anchor.x, point(event).y - anchor.y) * displayScale <= 4 {
+            selection = [id]
+        }
         if case .label(let initial) = gesture {
             let anchor = initial.start
             let p = point(event)
             let leader = AnnotationGeometry.isValidDrag(tool: initial.tool, from: anchor, to: p, displayScale: displayScale)
             if initial.tool == .number {
                 let annotation = placed(Annotation(id: initial.id, tool: .number, start: leader ? p : anchor, leaderTarget: leader ? anchor : nil))
-                var next = history.document; next.replace(annotation); history.commit(next); selection = annotation.id
+                var next = history.document; next.replace(annotation); history.commit(next); selection = [annotation.id]
                 cancelGesture(); changed(); return
             }
             let size = AnnotationRenderer.textSize("入力", style: style)
@@ -628,13 +660,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         let annotation: Annotation?
         switch gesture {
         case .create(let initial), .resize(let initial, _): annotation = next.annotations.first { $0.id == initial.id }
-        case .move, .label, .pan: annotation = nil
+        case .move, .label, .pan, .marquee: annotation = nil
         }
         if let annotation, ![.text, .number].contains(annotation.tool),
            !(annotation.tool == .highlighter
              ? annotation.points.contains { hypot($0.x - annotation.start.x, $0.y - annotation.start.y) * displayScale > 4 }
              : AnnotationGeometry.isValidDrag(tool: annotation.tool, from: annotation.start, to: annotation.end, displayScale: displayScale)) {
-            if case .create = gesture { selection = nil }
+            if case .create = gesture { selection = [] }
             return
         }
         history.commit(next)
@@ -675,18 +707,18 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         if isEditingText { commitText(); return }
         cancelGesture()
         if tool != .selection { tool = .selection; rememberTool(); changed() }
-        else if selection != nil { selection = nil; changed() }
+        else if !selection.isEmpty { selection = []; changed() }
     }
     override func deleteBackward(_ sender: Any?) { deleteSelected() }
     override func deleteForward(_ sender: Any?) { deleteSelected() }
     private func deleteSelected() {
-        guard let selection else { return }
+        guard !selection.isEmpty else { return }
         cancelGesture()
-        var next = history.document; next.remove(selection); history.commit(next); self.selection = nil; changed()
+        var next = history.document; next.remove(selection); history.commit(next); self.selection = []; changed()
     }
     private func beginText(_ annotation: Annotation) {
         spacePressed = false
-        textAnnotation = annotation; selection = annotation.id
+        textAnnotation = annotation; selection = [annotation.id]
         textAnchor = annotation.leaderTarget == nil ? annotation.start : CGPoint(x: annotation.rect.midX, y: annotation.rect.midY)
         let input = AnnotationTextView(frame: .zero)
         input.isRichText = false; input.allowsUndo = true; input.drawsBackground = true
@@ -728,7 +760,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         guard var annotation = textAnnotation else { return }
         annotation.text = input.string
         var next = history.document
-        if annotation.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { next.remove(annotation.id); selection = nil }
+        if annotation.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { next.remove(annotation.id); selection = [] }
         else {
             next.replace(annotation)
         }
@@ -749,16 +781,22 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         let image = NSImage(cgImage: raster, size: CGSize(width: raster.width, height: raster.height))
         let outputRect = viewRect(composed == nil ? CGRect(origin: .zero, size: imageSize) : exportLayout.bounds)
         image.draw(in: outputRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-        if let selected = document.annotations.first(where: { $0.id == selection }), !isEditingText {
-            let rect = viewRect(document.bounds(of: selected, style: style))
+        for selected in document.annotations where selection.contains(selected.id) && !isEditingText {
+            let bounds = document.bounds(of: selected, style: style)
+            let rect = viewRect(selected.tool == .highlighter ? bounds.insetBy(dx: -style.highlighterWidth / 2, dy: -style.highlighterWidth / 2) : bounds)
             NSColor.white.withAlphaComponent(0.8).setStroke()
             let border = NSBezierPath(rect: rect); border.lineWidth = 1
             border.setLineDash([4, 3], count: 2, phase: 0); border.stroke()
-            for handle in AnnotationGeometry.handles(for: selected) {
+            for handle in selection.count == 1 ? AnnotationGeometry.handles(for: selected) : [] {
                 let p = viewPoint(handle), r = CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)
                 NSColor.white.setFill(); NSBezierPath(ovalIn: r).fill()
                 AnnotationRenderer.red.setStroke(); NSBezierPath(ovalIn: r).stroke()
             }
+        }
+        if let marqueeRect {
+            let path = NSBezierPath(rect: viewRect(marqueeRect))
+            UITheme.indigo.withAlphaComponent(0.12).setFill(); path.fill()
+            UITheme.indigo.setStroke(); path.lineWidth = 1; path.stroke()
         }
         if tool == .number, let cursorPoint, !isEditingText, gesture == nil {
             let string = String(document.nextNumber) as NSString

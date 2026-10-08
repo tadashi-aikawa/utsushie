@@ -169,8 +169,8 @@ public struct AnnotationDocument: Equatable, Sendable {
             return rect.contains(point)
         }?.id
     }
-    public func interaction(at point: CGPoint, selected: UUID?, tool: AnnotationTool, style: AnnotationStyle, tolerance: Double) -> AnnotationInteraction {
-        if let annotation = annotations.first(where: { $0.id == selected }),
+    public func interaction(at point: CGPoint, selected: Set<UUID>, tool: AnnotationTool, style: AnnotationStyle, tolerance: Double) -> AnnotationInteraction {
+        if selected.count == 1, let annotation = annotations.first(where: { selected.contains($0.id) }),
            let handle = AnnotationGeometry.resizeHandle(at: point, annotation: annotation, tolerance: tolerance) {
             return .resize(annotation.id, handle)
         }
@@ -180,9 +180,9 @@ public struct AnnotationDocument: Equatable, Sendable {
             if annotation.tool == .spotlight { band = max(tolerance, style.lineWidth + style.edge * 2) }
             else if [.rectangle, .mosaic].contains(annotation.tool) { band = max(tolerance, style.lineWidth / 2 + style.edge) }
             else { band = tolerance }
-            if let handle = AnnotationGeometry.resizeHandle(at: point, annotation: annotation, tolerance: tolerance, edgeTolerance: band) {
+            if selected.count <= 1, let handle = AnnotationGeometry.resizeHandle(at: point, annotation: annotation, tolerance: tolerance, edgeTolerance: band) {
                 // 札に隠れた指す点は、選択してつまみが見えるまでは札の移動を奪わない。
-                if handle != .leaderTarget || annotation.id == selected || leaderSegment(for: annotation, style: style) != nil {
+                if handle != .leaderTarget || selected.contains(annotation.id) || leaderSegment(for: annotation, style: style) != nil {
                     return .resize(id, handle)
                 }
             }
