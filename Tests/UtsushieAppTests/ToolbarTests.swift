@@ -143,6 +143,7 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     for button in controls.colorButtons.values {
         #expect(controls.bounds.contains(button.frame))
         #expect(button.needsPanelToBecomeKey && button.acceptsFirstMouse(for: nil))
+        #expect(button.toolTip?.contains("C / ⇧C で順送り") == true)
     }
     #expect(controls.bounds.contains(controls.darkButton.frame))
     if let directory = ProcessInfo.processInfo.environment["UTSUSHIE_UI_PREVIEW_DIR"] {
@@ -226,6 +227,7 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     for button in controls.colorButtons.values {
         #expect(controls.bounds.contains(button.frame))
         #expect(button.needsPanelToBecomeKey && button.acceptsFirstMouse(for: nil))
+        #expect(button.toolTip?.contains("C / ⇧C で順送り") == true)
     }
     #expect(!controls.subviews.contains { $0 is ToolbarButton })
     bar.toolButtons[.highlighter]?.performClick(nil)

@@ -195,9 +195,9 @@ final class HighlighterColorButton: NSButton {
         self.color = color
         super.init(frame: .zero)
         title = ""; isBordered = false; setButtonType(.momentaryPushIn)
-        toolTip = "\(color.label) \(color.key)"
+        toolTip = "\(color.label) \(color.key) ・ C / ⇧C で順送り"
         setAccessibilityLabel("蛍光ペン \(color.label)")
-        setAccessibilityHelp("キー \(color.key)")
+        setAccessibilityHelp("キー \(color.key)、C / ⇧C で順送り")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func draw(_ dirtyRect: NSRect) {
@@ -252,9 +252,9 @@ final class InkColorButton: NSButton {
         self.color = color
         super.init(frame: .zero)
         title = ""; isBordered = false; setButtonType(.momentaryPushIn)
-        toolTip = "\(color.label) \(color.key)"
+        toolTip = "\(color.label) \(color.key) ・ C / ⇧C で順送り"
         setAccessibilityLabel("インク \(color.label)")
-        setAccessibilityHelp("キー \(color.key)")
+        setAccessibilityHelp("キー \(color.key)、C / ⇧C で順送り")
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func draw(_ dirtyRect: NSRect) {

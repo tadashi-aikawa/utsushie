@@ -4,6 +4,17 @@ import CoreGraphics
 extension AnnotationDocument {
     public mutating func remove(_ ids: Set<UUID>) { annotations.removeAll { ids.contains($0.id) } }
 
+    /// 色が混在していても、ドキュメント順で最初の対象を基準にする。
+    public func cycledInkColor(_ ids: Set<UUID>, direction: ColorCycleDirection, defaultColor: InkColor) -> InkColor {
+        let first = annotations.first { ids.contains($0.id) && $0.tool.usesInkColor }
+        return (first?.inkColor ?? defaultColor).cycled(direction)
+    }
+
+    public func cycledHighlighterColor(_ ids: Set<UUID>, direction: ColorCycleDirection, defaultColor: HighlighterColor) -> HighlighterColor {
+        let first = annotations.first { ids.contains($0.id) && $0.tool == .highlighter }
+        return (first?.highlighterColor ?? defaultColor).cycled(direction)
+    }
+
     public func settingInk(_ ids: Set<UUID>, color: InkColor) -> AnnotationDocument {
         var result = self
         for index in result.annotations.indices where ids.contains(result.annotations[index].id) && result.annotations[index].tool.usesInkColor {

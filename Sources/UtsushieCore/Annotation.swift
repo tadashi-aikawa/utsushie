@@ -57,6 +57,15 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     public var usesInkColor: Bool { [.rectangle, .spotlight, .arrow, .line, .text, .number].contains(self) }
 }
 
+public enum ColorCycleDirection: Int, Sendable {
+    case next = 1, previous = -1
+
+    public init?(keyCode: UInt16, shift: Bool = false, modified: Bool = false, editingText: Bool = false) {
+        guard keyCode == 8, !modified, !editingText else { return nil }
+        self = shift ? .previous : .next
+    }
+}
+
 public enum InkColor: String, CaseIterable, Sendable {
     case red, orange, green, indigo, purple, pink, black, white
 
@@ -98,6 +107,11 @@ public enum InkColor: String, CaseIterable, Sendable {
         default: return nil
         }
     }
+    public func cycled(_ direction: ColorCycleDirection) -> InkColor {
+        let colors = Self.allCases
+        let index = colors.firstIndex(of: self)!
+        return colors[(index + direction.rawValue + colors.count) % colors.count]
+    }
 }
 
 public enum HighlighterColor: String, CaseIterable, Sendable {
@@ -119,14 +133,24 @@ public enum HighlighterColor: String, CaseIterable, Sendable {
         case .green: "4"
         }
     }
+    public func cycled(_ direction: ColorCycleDirection) -> HighlighterColor {
+        let colors = Self.allCases
+        let index = colors.firstIndex(of: self)!
+        return colors[(index + direction.rawValue + colors.count) % colors.count]
+    }
 }
 
 public enum HighlighterAction: Equatable, Sendable {
     case color(HighlighterColor)
+    case cycleColor(ColorCycleDirection)
     case toggleDarkBackground
 
-    public init?(keyCode: UInt16, modified: Bool = false, editingText: Bool = false) {
-        guard !modified, !editingText else { return nil }
+    public init?(keyCode: UInt16, shift: Bool = false, modified: Bool = false, editingText: Bool = false) {
+        if let direction = ColorCycleDirection(keyCode: keyCode, shift: shift, modified: modified, editingText: editingText) {
+            self = .cycleColor(direction)
+            return
+        }
+        guard !modified, !shift, !editingText else { return nil }
         switch keyCode {
         case 18: self = .color(.yellow)
         case 19: self = .color(.cyan)

@@ -463,6 +463,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         case .color(let color):
             Self.lastHighlighterColor = color
             next = history.document.settingHighlighter(selection, color: color)
+        case .cycleColor(let direction):
+            let color = history.document.cycledHighlighterColor(selection, direction: direction, defaultColor: Self.lastHighlighterColor)
+            Self.lastHighlighterColor = color
+            next = history.document.settingHighlighter(selection, color: color)
         case .toggleDarkBackground:
             let dark = highlighterDarkBackground != true
             Self.lastHighlighterDarkBackground = dark
@@ -772,7 +776,14 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             if !event.isARepeat { applyInkColor(color) }
             return
         }
-        if showsHighlighterControls, let action = HighlighterAction(keyCode: event.keyCode, modified: !flags.isEmpty, editingText: isEditingText) {
+        let colorModified = !flags.subtracting(.shift).isEmpty
+        if showsInkControls, let direction = ColorCycleDirection(keyCode: event.keyCode, shift: flags.contains(.shift), modified: colorModified, editingText: isEditingText) {
+            if !event.isARepeat {
+                applyInkColor(history.document.cycledInkColor(selection, direction: direction, defaultColor: Self.lastInkColor))
+            }
+            return
+        }
+        if showsHighlighterControls, let action = HighlighterAction(keyCode: event.keyCode, shift: flags.contains(.shift), modified: colorModified, editingText: isEditingText) {
             if !event.isARepeat { applyHighlighterAction(action) }
             return
         }

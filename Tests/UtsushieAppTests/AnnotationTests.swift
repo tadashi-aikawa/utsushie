@@ -860,6 +860,8 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
         canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 20)))
         canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 100, y: 60)))
         canvas.keyDown(with: try annotationKeyEvent(keyCode: 18))
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: 8))
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: 8, flags: .shift))
         #expect(canvas.document.annotations.first?.inkColor == .white && canvas.displayedSelection.isEmpty)
         canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 100, y: 60)))
         if tool == .text {
@@ -867,6 +869,8 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
             #expect(input.backgroundColor == UITheme.ink(.white) && input.textColor == UITheme.ink)
             input.string = "12345678"
             canvas.keyDown(with: try annotationKeyEvent(keyCode: 18))
+            canvas.keyDown(with: try annotationKeyEvent(keyCode: 8))
+            canvas.keyDown(with: try annotationKeyEvent(keyCode: 8, flags: .shift))
             canvas.applyInkColor(.red)
             #expect(input.string == "12345678" && canvas.document.annotations.first?.inkColor == .white)
             canvas.commitText()
@@ -874,6 +878,101 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
         #expect(canvas.document.annotations.first?.inkColor == .white)
         canvas.undoAnnotation(); #expect(canvas.document.annotations.isEmpty && !canvas.history.canUndo)
     }
+}
+
+@MainActor @Test(arguments: [AnnotationTool.rectangle, .highlighter])
+func annotationColorCycleKeysRememberDefaultsAndRejectOtherModifiers(tool: AnnotationTool) throws {
+    let image = try annotationFixture()
+    let canvas = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: tool)
+    let oldInk = try #require(canvas.inkColor), oldPen = try #require(canvas.highlighterColor)
+    defer {
+        canvas.tool = .rectangle; canvas.applyInkColor(oldInk)
+        canvas.tool = .highlighter; canvas.applyHighlighterAction(.color(oldPen))
+    }
+    func colorIsFirst() -> Bool { tool == .rectangle ? canvas.inkColor == .red : canvas.highlighterColor == .yellow }
+    func colorIsLast() -> Bool { tool == .rectangle ? canvas.inkColor == .white : canvas.highlighterColor == .green }
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: tool == .rectangle ? 28 : 21))
+    #expect(colorIsLast())
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 8, characters: "す", flags: .function))
+    #expect(colorIsFirst())
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 8, flags: .shift))
+    #expect(colorIsLast())
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 8, repeating: true))
+    for flags: NSEvent.ModifierFlags in [.command, .option, .control, [.command, .shift], [.option, .shift], [.control, .shift]] {
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: 8, flags: flags))
+        #expect(colorIsLast())
+    }
+    #expect(!canvas.history.canUndo)
+    let reopened = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: tool)
+    #expect(tool == .rectangle ? reopened.inkColor == .white : reopened.highlighterColor == .green)
+    canvas.isEnabled = false
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 8))
+    canvas.isEnabled = true
+    for hiddenTool in [AnnotationTool.selection, .mosaic] {
+        canvas.tool = hiddenTool
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: 8))
+        canvas.keyDown(with: try annotationKeyEvent(keyCode: 8, flags: .shift))
+        #expect(colorIsLast())
+    }
+    canvas.tool = .text
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 20)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 20, y: 20)))
+    canvas.tool = tool
+    #expect(canvas.isEditingText)
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 8))
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 8, flags: .shift))
+    #expect(colorIsLast())
+    canvas.commitText()
+}
+
+@MainActor @Test func annotationColorCycleUnifiesMixedSelectionInOneUndoAndKeepsCommandCopy() throws {
+    let image = try annotationFixture()
+    let defaults = AnnotationCanvas(image: image, document: AnnotationDocument(), tool: .rectangle)
+    let oldInk = try #require(defaults.inkColor), oldPen = try #require(defaults.highlighterColor)
+    defer {
+        defaults.applyInkColor(oldInk)
+        defaults.tool = .highlighter; defaults.applyHighlighterAction(.color(oldPen))
+    }
+    let penA = Annotation(tool: .highlighter, start: CGPoint(x: 20, y: 60), end: CGPoint(x: 60, y: 60), highlighterColor: .green, darkBackground: true)
+    let inkA = Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 40, y: 40), inkColor: .white)
+    let inkB = Annotation(tool: .line, start: CGPoint(x: 50, y: 30), end: CGPoint(x: 70, y: 30), inkColor: .purple)
+    let penB = Annotation(tool: .highlighter, start: CGPoint(x: 20, y: 80), end: CGPoint(x: 60, y: 80), highlighterColor: .pink)
+    let unselected = Annotation(tool: .line, start: CGPoint(x: 130, y: 80), end: CGPoint(x: 150, y: 80), inkColor: .indigo)
+    let initial = AnnotationDocument(annotations: [penA, inkA, inkB, penB, unselected])
+    let canvas = AnnotationCanvas(image: image, document: initial, tool: .selection)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    func select() throws {
+        canvas.tool = .selection
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 5, y: 5)))
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 90, y: 95)))
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 90, y: 95)))
+        #expect(canvas.selection == [penA.id, inkA.id, inkB.id, penB.id])
+    }
+    try select()
+    #expect(canvas.showsInkControls && canvas.inkColor == nil)
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 8, flags: .command))
+    #expect(canvas.document == initial && !canvas.history.canUndo)
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 9, flags: .command))
+    #expect(canvas.document.annotations.count == initial.annotations.count + 4)
+    #expect(Array(canvas.document.annotations.suffix(4)).map(\.inkColor) == [penA, inkA, inkB, penB].map(\.inkColor))
+    canvas.undoAnnotation()
+    try select()
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 8))
+    #expect(canvas.document == initial.settingInk([inkA.id, inkB.id], color: .red))
+    canvas.undoAnnotation(); #expect(canvas.document == initial && !canvas.history.canUndo)
+    try select()
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 8, flags: .shift))
+    #expect(canvas.document == initial.settingInk([inkA.id, inkB.id], color: .black))
+    canvas.undoAnnotation(); #expect(canvas.document == initial && !canvas.history.canUndo)
+    try select(); canvas.tool = .highlighter
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 8))
+    #expect(canvas.document == initial.settingHighlighter([penA.id, penB.id], color: .yellow))
+    canvas.undoAnnotation(); #expect(canvas.document == initial && !canvas.history.canUndo)
+    try select(); canvas.tool = .highlighter
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 8, flags: .shift))
+    #expect(canvas.document == initial.settingHighlighter([penA.id, penB.id], color: .pink))
+    canvas.undoAnnotation(); #expect(canvas.document == initial && !canvas.history.canUndo)
 }
 
 @MainActor @Test func annotationExpandedSaveUpdatesDimensionsAndWebPThenShrinksFromOriginal() throws {
