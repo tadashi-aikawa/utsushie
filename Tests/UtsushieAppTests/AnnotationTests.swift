@@ -235,6 +235,30 @@ private func annotationMouseEvent(_ canvas: AnnotationCanvas, type: NSEvent.Even
     }
 }
 
+@MainActor @Test func annotationCreationHidesSelectionUntilMouseUp() throws {
+    for tool in [AnnotationTool.rectangle, .spotlight, .highlighter, .number, .text] {
+        let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: tool)
+        canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+        let start = CGPoint(x: 20, y: 20), end = CGPoint(x: 100, y: 60)
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: start))
+        #expect(canvas.displayedSelection.isEmpty)
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: end))
+        let annotation = try #require(canvas.document.annotations.first)
+        #expect(canvas.selection == [annotation.id])
+        #expect(canvas.displayedSelection.isEmpty)
+        #expect(!canvas.history.canUndo)
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: end))
+        if tool == .text {
+            let input = try #require(canvas.subviews.compactMap { $0 as? AnnotationTextView }.first)
+            input.string = "文字"
+            canvas.commitText()
+        }
+        #expect(canvas.selection == [annotation.id])
+        #expect(canvas.displayedSelection == [annotation.id])
+        #expect(canvas.history.canUndo)
+    }
+}
+
 @MainActor @Test func annotationSelectionDoesNotCreateAndSelectedEdgeResizesWhileHoldingTool() throws {
     let area = Annotation(tool: .spotlight, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 140, y: 80))
     let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [area]), tool: .selection)
@@ -249,6 +273,7 @@ private func annotationMouseEvent(_ canvas: AnnotationCanvas, type: NSEvent.Even
     canvas.tool = .rectangle
     canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 80, y: 20)))
     canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 100, y: 10)))
+    #expect(canvas.displayedSelection == [area.id])
     canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 100, y: 10)))
     #expect(canvas.document.annotations.count == 1)
     #expect(canvas.document.annotations.first?.rect == CGRect(x: 20, y: 10, width: 120, height: 70))
@@ -836,6 +861,7 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     let initialRect = canvas.imageRect
     canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 80, y: 50)))
     canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 320, y: 50)))
+    #expect(canvas.displayedSelection == [label.id])
     #expect(canvas.imageRect == initialRect && canvas.displayScale == 1)
     #expect(canvas.exportLayout.right > 0 && canvas.document.annotations.first?.leaderTarget == label.leaderTarget)
     canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 320, y: 50)))

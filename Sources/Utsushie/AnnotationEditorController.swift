@@ -397,7 +397,12 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     }
     private var marqueeRect: CGRect?
     private var marqueeSelection: Set<UUID>?
-    var displayedSelection: Set<UUID> { marqueeSelection ?? selection }
+    var displayedSelection: Set<UUID> {
+        switch gesture {
+        case .create, .label: return []
+        default: return marqueeSelection ?? selection
+        }
+    }
     private var toggleOnClick: (id: UUID, previous: Set<UUID>)?
     var document: AnnotationDocument {
         var result = preview ?? history.document
