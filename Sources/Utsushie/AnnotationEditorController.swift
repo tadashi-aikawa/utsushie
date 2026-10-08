@@ -372,6 +372,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private var manualViewport: AnnotationViewport?
     private var spacePressed = false
     private var scrollZooming = false
+    private var highlighterStraight = false
     private enum Gesture {
         case create(Annotation)
         case label(Annotation)
@@ -554,6 +555,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         selection = nil
         guard tool.allowsMargin || CGRect(origin: .zero, size: imageSize).contains(p) else { changed(); return }
         let annotation = Annotation(tool: tool, start: p)
+        highlighterStraight = event.modifierFlags.contains(.shift)
         frozenImageRect = imageRect
         gesture = [.text, .number].contains(tool) ? .label(annotation) : .create(annotation)
         changed()
@@ -584,8 +586,12 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             annotation = Annotation(id: initial.id, tool: .text, start: rect.origin,
                                     end: CGPoint(x: rect.maxX, y: rect.maxY), text: "入力", leaderTarget: anchor)
         case .create(let initial):
-            annotation = initial
+            annotation = initial.tool == .highlighter ? (preview?.annotations.first { $0.id == initial.id } ?? initial) : initial
             annotation.end = initial.tool.allowsMargin ? p : AnnotationGeometry.clamped(p, to: imageSize)
+            if initial.tool == .highlighter {
+                if highlighterStraight { annotation.points = [initial.start, annotation.end] }
+                else { annotation.points.append(annotation.end) }
+            }
         case .move(let initial, let anchor):
             let delta = CGPoint(x: p.x - anchor.x, y: p.y - anchor.y)
             annotation = initial.translated(by: delta)
@@ -625,7 +631,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         case .move, .label, .pan: annotation = nil
         }
         if let annotation, ![.text, .number].contains(annotation.tool),
-           !AnnotationGeometry.isValidDrag(tool: annotation.tool, from: annotation.start, to: annotation.end, displayScale: displayScale) {
+           !(annotation.tool == .highlighter
+             ? annotation.points.contains { hypot($0.x - annotation.start.x, $0.y - annotation.start.y) * displayScale > 4 }
+             : AnnotationGeometry.isValidDrag(tool: annotation.tool, from: annotation.start, to: annotation.end, displayScale: displayScale)) {
             if case .create = gesture { selection = nil }
             return
         }

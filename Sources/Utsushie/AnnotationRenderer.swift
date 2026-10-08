@@ -55,8 +55,14 @@ enum AnnotationRenderer {
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
         defer { NSGraphicsContext.restoreGraphicsState() }
         drawMarginBoundary(layout, context: context)
+        context.saveGState()
+        context.clip(to: full)
+        for annotation in document.ordered where annotation.tool == .highlighter {
+            draw(annotation, document: document, style: style, context: context)
+        }
+        context.restoreGState()
         drawSpotFrames(spots, style: style, context: context)
-        for annotation in document.ordered where annotation.tool.layer <= AnnotationTool.arrow.layer {
+        for annotation in document.ordered where annotation.tool.layer <= AnnotationTool.arrow.layer && annotation.tool != .highlighter {
             draw(annotation, document: document, style: style, context: context)
         }
         // すべての線をすべての札より下へ置く。
@@ -142,6 +148,22 @@ enum AnnotationRenderer {
         defer { context.restoreGState() }
         switch annotation.tool {
         case .selection, .mosaic, .spotlight: break
+        case .highlighter:
+            guard let first = annotation.points.first else { return }
+            // 太い線の端も元画像内で切る。余白へ蛍光色を描かない。
+            context.setStrokeColor(UITheme.highlighter.cgColor)
+            context.setLineWidth(style.highlighterWidth)
+            context.setLineCap(.round); context.setLineJoin(.round)
+            context.move(to: first)
+            for point in annotation.points.dropFirst() { context.addLine(to: point) }
+            context.strokePath()
+        case .line:
+            context.setLineCap(.round)
+            for outer in [true, false] {
+                context.setStrokeColor(outer ? NSColor.white.cgColor : red.cgColor)
+                context.setLineWidth(style.lineWidth * 1.5 + (outer ? style.edge * 2 : 0))
+                context.move(to: annotation.start); context.addLine(to: annotation.end); context.strokePath()
+            }
         case .rectangle:
             let path = CGPath(roundedRect: annotation.rect, cornerWidth: style.radius, cornerHeight: style.radius, transform: nil)
             context.addPath(path); context.setStrokeColor(NSColor.white.cgColor)

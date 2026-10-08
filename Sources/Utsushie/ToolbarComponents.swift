@@ -211,6 +211,8 @@ final class AnnotationToolbarView: NSView {
             case .rectangle: symbol = "rectangle"
             case .spotlight: symbol = "light.max"
             case .arrow: symbol = "arrow.up.right"
+            case .line: symbol = "line.diagonal"
+            case .highlighter: symbol = "highlighter"
             case .text: symbol = "textformat"
             case .number: symbol = "1.circle"
             case .mosaic: symbol = "square.grid.3x3.fill"
@@ -219,7 +221,7 @@ final class AnnotationToolbarView: NSView {
             buttons[tool] = button
         }
         toolButtons = buttons
-        trays = [[AnnotationTool.selection], [.rectangle, .spotlight, .arrow], [.text, .number], [.mosaic]].enumerated().map { index, tools in
+        trays = [[AnnotationTool.selection], [.rectangle, .spotlight, .arrow, .line, .highlighter], [.text, .number], [.mosaic]].enumerated().map { index, tools in
             ToolbarTray(tools.compactMap { buttons[$0] } + (index == 3 ? [ai] : []))
         }
         super.init(frame: .zero)

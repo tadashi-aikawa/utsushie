@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 public enum AnnotationTool: String, CaseIterable, Sendable {
-    case selection, rectangle, spotlight, text, number, arrow, mosaic
+    case selection, rectangle, spotlight, text, number, arrow, line, highlighter, mosaic
     public var label: String {
         switch self {
         case .selection: "選択"
@@ -11,6 +11,8 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
         case .text: "文字"
         case .number: "番号"
         case .arrow: "矢印"
+        case .line: "直線"
+        case .highlighter: "蛍光ペン"
         case .mosaic: "モザイク"
         }
     }
@@ -22,6 +24,8 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
         case .text: "t"
         case .number: "n"
         case .arrow: "a"
+        case .line: "l"
+        case .highlighter: "p"
         case .mosaic: "m"
         }
     }
@@ -33,6 +37,8 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
         case .text: 17
         case .number: 45
         case .arrow: 0
+        case .line: 37
+        case .highlighter: 35
         case .mosaic: 46
         }
     }
@@ -41,12 +47,13 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
         case .selection: -1
         case .mosaic: 0
         case .spotlight: 1
-        case .rectangle, .arrow: 2
-        case .text: 3
-        case .number: 4
+        case .highlighter: 2
+        case .rectangle, .arrow, .line: 3
+        case .text: 4
+        case .number: 5
         }
     }
-    public var allowsMargin: Bool { [.text, .number, .arrow, .rectangle].contains(self) }
+    public var allowsMargin: Bool { [.text, .number, .arrow, .line, .rectangle].contains(self) }
 }
 
 /// 注釈だけは画像の左上原点・ピクセル座標。画面座標モデルとは混ぜない。
@@ -57,17 +64,24 @@ public struct Annotation: Equatable, Sendable, Identifiable {
     public var end: CGPoint
     public var text: String
     public var leaderTarget: CGPoint?
-    public init(id: UUID = UUID(), tool: AnnotationTool, start: CGPoint, end: CGPoint? = nil, text: String = "", leaderTarget: CGPoint? = nil) {
+    public var points: [CGPoint]
+    public init(id: UUID = UUID(), tool: AnnotationTool, start: CGPoint, end: CGPoint? = nil, text: String = "", leaderTarget: CGPoint? = nil, points: [CGPoint] = []) {
         self.id = id; self.tool = tool; self.start = start; self.end = end ?? start; self.text = text
         self.leaderTarget = [.text, .number].contains(tool) ? leaderTarget : nil
+        self.points = tool == .highlighter ? (points.isEmpty ? [start, end ?? start] : points) : []
     }
     public var rect: CGRect {
-        CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
+        let vertices = tool == .highlighter ? points : [start, end]
+        let xs = vertices.map(\.x), ys = vertices.map(\.y)
+        return CGRect(x: xs.min() ?? start.x, y: ys.min() ?? start.y,
+                      width: (xs.max() ?? start.x) - (xs.min() ?? start.x),
+                      height: (ys.max() ?? start.y) - (ys.min() ?? start.y))
     }
     public func translated(by delta: CGPoint) -> Annotation {
         var result = self
         result.start.x += delta.x; result.start.y += delta.y
         result.end.x += delta.x; result.end.y += delta.y
+        result.points = points.map { CGPoint(x: $0.x + delta.x, y: $0.y + delta.y) }
         return result
     }
 }
@@ -83,6 +97,7 @@ public struct AnnotationStyle: Equatable, Sendable {
     public let verticalPadding: Double
     public let marginPadding: Double
     public let leaderDotDiameter: Double
+    public var highlighterWidth: Double { lineWidth * 5 }
     public init(imageSize: CGSize) {
         let length = max(imageSize.width, imageSize.height)
         fontSize = max(16, length / 50)
@@ -137,8 +152,13 @@ public struct AnnotationDocument: Equatable, Sendable {
                 || hypot(point.x - segment.target.x, point.y - segment.target.y) <= max(tolerance, style.leaderDotDiameter / 2 + style.edge)
         }) { return leader.id }
         return ordered.reversed().first { annotation in
-            if annotation.tool == .arrow {
+            if [.arrow, .line].contains(annotation.tool) {
                 return AnnotationGeometry.distance(point, toSegmentFrom: annotation.start, to: annotation.end) <= max(tolerance, style.lineWidth * 0.75 + style.edge)
+            }
+            if annotation.tool == .highlighter {
+                return zip(annotation.points, annotation.points.dropFirst()).contains {
+                    AnnotationGeometry.distance(point, toSegmentFrom: $0, to: $1) <= max(tolerance, style.highlighterWidth / 2)
+                }
             }
             let rect = bounds(of: annotation, style: style)
             if [.rectangle, .spotlight, .mosaic].contains(annotation.tool) {
@@ -177,7 +197,7 @@ public struct AnnotationDocument: Equatable, Sendable {
         var minX = image.minX, minY = image.minY, maxX = image.maxX, maxY = image.maxY
         for annotation in annotations where annotation.tool.allowsMargin {
             let rect = bounds(of: annotation, style: style)
-            let isOutside = annotation.tool == .arrow
+            let isOutside = [.arrow, .line].contains(annotation.tool)
                 ? !AnnotationGeometry.contains(annotation.start, in: image) || !AnnotationGeometry.contains(annotation.end, in: image)
                 : !AnnotationGeometry.containsCenter(of: rect, in: image)
             guard isOutside else { continue }
@@ -235,7 +255,7 @@ public enum AnnotationCursor: Equatable, Sendable {
 public enum AnnotationGeometry {
     /// 判定は表示上のpt。縮小時も小さな誤ドラッグを注釈にしない。
     public static func isValidDrag(tool: AnnotationTool, from a: CGPoint, to b: CGPoint, displayScale: Double) -> Bool {
-        if [.arrow, .text, .number].contains(tool) { return hypot(b.x - a.x, b.y - a.y) * displayScale > 4 }
+        if [.arrow, .line, .highlighter, .text, .number].contains(tool) { return hypot(b.x - a.x, b.y - a.y) * displayScale > 4 }
         return abs(b.x - a.x) * displayScale > 4 && abs(b.y - a.y) * displayScale > 4
     }
     public static func handles(for annotation: Annotation) -> [CGPoint] {
@@ -243,16 +263,16 @@ public enum AnnotationGeometry {
         case .rectangle, .spotlight, .mosaic:
             let r = annotation.rect
             return [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
-        case .arrow: return [annotation.start, annotation.end]
+        case .arrow, .line: return [annotation.start, annotation.end]
         case .text, .number: return annotation.leaderTarget.map { [$0] } ?? []
-        case .selection: return []
+        case .selection, .highlighter: return []
         }
     }
     public static func resizeHandle(at point: CGPoint, annotation: Annotation, tolerance: Double, edgeTolerance: Double? = nil) -> AnnotationResizeHandle? {
         let points = handles(for: annotation)
         if [.text, .number].contains(annotation.tool), let target = annotation.leaderTarget,
            hypot(point.x - target.x, point.y - target.y) <= tolerance { return .leaderTarget }
-        if annotation.tool == .arrow {
+        if [.arrow, .line].contains(annotation.tool) {
             if hypot(point.x - annotation.start.x, point.y - annotation.start.y) <= tolerance { return .arrowStart }
             if hypot(point.x - annotation.end.x, point.y - annotation.end.y) <= tolerance { return .arrowEnd }
             return nil
@@ -303,7 +323,7 @@ public enum AnnotationGeometry {
     public static func placed(_ annotation: Annotation, bounds: CGRect, imageSize: CGSize) -> Annotation {
         let image = CGRect(origin: .zero, size: imageSize)
         var result = annotation
-        if annotation.tool != .arrow, !annotation.tool.allowsMargin || containsCenter(of: bounds, in: image) {
+        if ![.arrow, .line].contains(annotation.tool), !annotation.tool.allowsMargin || containsCenter(of: bounds, in: image) {
             let x = max(0, min(max(0, imageSize.width - bounds.width), bounds.minX)) - bounds.minX
             let y = max(0, min(max(0, imageSize.height - bounds.height), bounds.minY)) - bounds.minY
             result = result.translated(by: CGPoint(x: x, y: y))
@@ -311,6 +331,9 @@ public enum AnnotationGeometry {
                 result.start = clamped(result.start, to: imageSize)
                 result.end = clamped(result.end, to: imageSize)
             }
+        }
+        if annotation.tool == .highlighter {
+            result.points = result.points.map { clamped($0, to: imageSize) }
         }
         if let target = result.leaderTarget { result.leaderTarget = clamped(target, to: imageSize) }
         return result
@@ -320,6 +343,8 @@ public enum AnnotationGeometry {
         case .rectangle: return bounds.insetBy(dx: -style.lineWidth / 2 - style.edge, dy: -style.lineWidth / 2 - style.edge)
         case .text: return bounds.insetBy(dx: -style.edge, dy: -style.edge)
         case .number: return bounds.insetBy(dx: -style.edge - 3, dy: -style.edge - 3).offsetBy(dx: 0, dy: 1).union(bounds)
+        case .line: return bounds.insetBy(dx: -style.lineWidth * 0.75 - style.edge, dy: -style.lineWidth * 0.75 - style.edge)
+        case .highlighter: return bounds.insetBy(dx: -style.highlighterWidth / 2, dy: -style.highlighterWidth / 2)
         case .arrow:
             let a = annotation.start, b = annotation.end
             let angle = atan2(b.y - a.y, b.x - a.x)
