@@ -31,8 +31,12 @@ import Testing
     var deleted = doc; deleted.remove(ids); history.commit(deleted)
     #expect(history.document.annotations.isEmpty)
     history.undo(); #expect(history.document == doc)
-    #expect(doc.interaction(at: mosaic.start, selected: ids, tool: .selection,
-                            style: AnnotationStyle(imageSize: CGSize(width: 400, height: 300)), tolerance: 7) == .move(mosaic.id))
+    for tool in AnnotationTool.allCases {
+        let style = AnnotationStyle(imageSize: CGSize(width: 400, height: 300))
+        for point in [mosaic.start, CGPoint(x: 30, y: 30)] {
+            #expect(doc.interaction(at: point, selected: ids, tool: tool, style: style, tolerance: 7) == .move(mosaic.id))
+        }
+    }
 }
 
 @Test func shiftConstrainsMovementAngleAndSquare() {

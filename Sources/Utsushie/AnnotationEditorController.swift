@@ -556,7 +556,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             let previous = event.modifierFlags.contains(.shift) ? selection : []
             selection = previous; frozenImageRect = imageRect; gesture = .marquee(p, previous)
             changed(); return
-        case .create: break
+        case .create:
+            if tool == .text, event.clickCount == 2, selection.count <= 1,
+               let id = document.hit(at: p, style: style, tolerance: 7 / displayScale),
+               let annotation = document.annotations.first(where: { $0.id == id && $0.tool == .text }),
+               annotation.rect.insetBy(dx: -style.edge, dy: -style.edge).contains(p) {
+                beginText(annotation); return
+            }
         }
         selection = []
         guard tool.allowsMargin || CGRect(origin: .zero, size: imageSize).contains(p) else { changed(); return }
@@ -729,6 +735,18 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         history.commit(next); selection = pasted; changed()
         return true
     }
+    func reeditTextOnDoubleClick(with event: NSEvent) -> Bool {
+        // 最初のクリックで開いた空の入力欄が、2回目のクリックを受ける場合も再編集へ渡す。
+        guard isEnabled, tool == .text, event.clickCount == 2,
+              let pending = textAnnotation, let input = textInput, input.string.isEmpty, !input.hasMarkedText(),
+              !history.document.annotations.contains(where: { $0.id == pending.id }) else { return false }
+        let p = point(event)
+        guard let id = history.document.hit(at: p, style: style, tolerance: 7 / displayScale),
+              let annotation = history.document.annotations.first(where: { $0.id == id && $0.tool == .text }),
+              annotation.rect.insetBy(dx: -style.edge, dy: -style.edge).contains(p) else { return false }
+        commitText(); beginText(annotation)
+        return true
+    }
     private func beginText(_ annotation: Annotation) {
         spacePressed = false
         textAnnotation = annotation; selection = [annotation.id]
@@ -851,6 +869,10 @@ final class AnnotationTextView: NSTextView {
     override var undoManager: UndoManager? { textUndoManager }
     override var needsPanelToBecomeKey: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        if navigationCanvas?.reeditTextOnDoubleClick(with: event) == true { return }
+        super.mouseDown(with: event)
+    }
     override func magnify(with event: NSEvent) { navigationCanvas?.magnify(with: event) }
     override func scrollWheel(with event: NSEvent) { navigationCanvas?.scrollWheel(with: event) }
     override func keyUp(with event: NSEvent) {

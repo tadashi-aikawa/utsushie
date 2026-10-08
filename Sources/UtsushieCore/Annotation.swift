@@ -186,7 +186,7 @@ public struct AnnotationDocument: Equatable, Sendable {
                     return .resize(id, handle)
                 }
             }
-            return .move(id)
+            return tool == .selection || selected.count > 1 ? .move(id) : .create
         }
         return tool == .selection ? .none : .create
     }

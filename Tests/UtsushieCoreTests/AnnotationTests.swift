@@ -119,17 +119,22 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
     #expect(AnnotationGeometry.resized(area, handle: .left, to: point).rect == CGRect(x: 5, y: 20, width: 175, height: 120))
     #expect(AnnotationGeometry.resized(area, handle: .right, to: point).rect == CGRect(x: 5, y: 20, width: 15, height: 120))
 }
-@Test func annotationArrowTextAndNumberInteractionsKeepMoveAndEndpointHandles() {
+@Test func annotationCreationToolsPreferCreationOverMovingAndKeepEndpointHandles() {
     let arrow = Annotation(tool: .arrow, start: CGPoint(x: 20, y: 30), end: CGPoint(x: 120, y: 30))
     let label = Annotation(tool: .text, start: CGPoint(x: 20, y: 60), end: CGPoint(x: 120, y: 100), text: "ラベル")
     let number = Annotation(tool: .number, start: CGPoint(x: 160, y: 100))
-    let document = AnnotationDocument(annotations: [arrow, label, number])
+    let line = Annotation(tool: .line, start: CGPoint(x: 20, y: 180), end: CGPoint(x: 120, y: 180))
+    let pen = Annotation(tool: .highlighter, start: CGPoint(x: 20, y: 240), end: CGPoint(x: 120, y: 240))
+    let document = AnnotationDocument(annotations: [arrow, label, number, line, pen])
     let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
     for mode in AnnotationTool.allCases {
-        for (point, id) in [(CGPoint(x: 70, y: 30), arrow.id), (CGPoint(x: 70, y: 80), label.id), (CGPoint(x: 160, y: 100), number.id)] {
-            let action = document.interaction(at: point, selected: [], tool: mode, style: style, tolerance: 7)
-            #expect(action == .move(id))
-            #expect(action.cursor(tool: mode) == .move)
+        for (point, id) in [(CGPoint(x: 70, y: 30), arrow.id), (CGPoint(x: 70, y: 80), label.id), (CGPoint(x: 160, y: 100), number.id),
+                            (CGPoint(x: 70, y: 180), line.id), (CGPoint(x: 70, y: 240), pen.id)] {
+            for selected: Set<UUID> in [[], [id]] {
+                let action = document.interaction(at: point, selected: selected, tool: mode, style: style, tolerance: 7)
+                #expect(action == (mode == .selection ? .move(id) : .create))
+                #expect(action.cursor(tool: mode) == (mode == .selection ? .move : .crosshair))
+            }
         }
         #expect(document.interaction(at: arrow.start, selected: [arrow.id], tool: mode, style: style, tolerance: 7) == .resize(arrow.id, .arrowStart))
         #expect(document.interaction(at: arrow.start, selected: [], tool: mode, style: style, tolerance: 7) == .resize(arrow.id, .arrowStart))
@@ -137,6 +142,8 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
         let end = document.interaction(at: arrow.end, selected: [arrow.id], tool: mode, style: style, tolerance: 7)
         #expect(end == .resize(arrow.id, .arrowEnd))
         #expect(end.cursor(tool: mode) == .crosshair)
+        #expect(document.interaction(at: line.start, selected: [], tool: mode, style: style, tolerance: 7) == .resize(line.id, .arrowStart))
+        #expect(document.interaction(at: line.end, selected: [], tool: mode, style: style, tolerance: 7) == .resize(line.id, .arrowEnd))
     }
 }
 @Test func unchangedAnnotationDoesNotCreateUndoStep() {
@@ -305,7 +312,11 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
     let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
     #expect(document.hit(at: CGPoint(x: 100, y: 122), style: style, tolerance: 7) == label.id)
     #expect(document.hit(at: CGPoint(x: 100, y: 135), style: style, tolerance: 7) == nil)
-    #expect(document.interaction(at: label.leaderTarget!, selected: [label.id], tool: .selection, style: style, tolerance: 7) == .resize(label.id, .leaderTarget))
+    for tool in AnnotationTool.allCases {
+        for selected: Set<UUID> in [[], [label.id]] {
+            #expect(document.interaction(at: label.leaderTarget!, selected: selected, tool: tool, style: style, tolerance: 7) == .resize(label.id, .leaderTarget))
+        }
+    }
     let moved = label.translated(by: CGPoint(x: 10, y: 30))
     #expect(moved.leaderTarget == label.leaderTarget && moved.start == CGPoint(x: 210, y: 130))
     let resized = AnnotationGeometry.resized(label, handle: .leaderTarget, to: CGPoint(x: -10, y: 700))
