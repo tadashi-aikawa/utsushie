@@ -254,13 +254,13 @@ func allCardLifetimesPauseDuringEitherEditorAndResumeIndependently(_ video: Bool
     #expect(library.handleKey(try key(40)) && library.selection.focusedURL == library.files[1].url)
     #expect(library.handleKey(try key(4)) && library.selection.focusedURL == library.files[0].url)
     #expect(!library.handleKey(try key(37, .command)) && library.selection.focusedURL == library.files[0].url)
-    #expect(!library.handleKey(try key(14)) && library.selection.focusedURL == library.files[0].url)
+    #expect(!library.handleKey(try key(14, .command)) && library.selection.focusedURL == library.files[0].url)
     #expect(library.numberOfPreviewItems(in: nil) == 1)
     #expect((library.previewPanel(nil, previewItemAt: 0) as? NSURL) as URL? == library.files[0].url)
 }
 
-@MainActor @Test(arguments: [UInt16(36), 76])
-func libraryEnterIgnoresRepeatModifiersAndMultipleSelection(_ code: UInt16) async throws {
+@MainActor @Test(arguments: [UInt16(36), 76, 14])
+func libraryEditKeysIgnoreRepeatModifiersAndMultipleSelection(_ code: UInt16) async throws {
     let dir = try recentDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
     let image = try recentImage(), controller = recentController()
     defer { controller.closeLibrarySessions() }
@@ -283,8 +283,8 @@ func libraryEnterIgnoresRepeatModifiersAndMultipleSelection(_ code: UInt16) asyn
     #expect(!library.isPerformingAction && library.footerStatus == "この操作は1件ずつ")
 }
 
-@MainActor @Test(arguments: [UInt16(36), 76])
-func libraryPreviewEnterOpensSelectedEditor(_ code: UInt16) async throws {
+@MainActor @Test(arguments: [UInt16(36), 76, 14])
+func libraryPreviewEditKeysOpenSelectedEditor(_ code: UInt16) async throws {
     let dir = try recentDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
     let image = try recentImage(), controller = recentController()
     defer { controller.closeLibrarySessions() }

@@ -242,7 +242,7 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         if let direction { move(direction, extending: modifiers == .shift); return true }
         guard modifiers.isEmpty else { return false }
         switch event.keyCode {
-        case 36, 76: if !event.isARepeat { editSelected() }; return true
+        case 36, 76, 14: if !event.isARepeat { editSelected() }; return true
         case 1: if !event.isARepeat { saveSelected() }; return true
         case 31:
             if !event.isARepeat, requireSingleSelection(), let url = singleSelectedURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }

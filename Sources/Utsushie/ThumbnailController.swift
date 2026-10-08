@@ -305,7 +305,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             guard let self, self.isKeyboardTarget, self.visible, self.panel.isKeyWindow, event.window === self.panel,
                   event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
             switch event.keyCode {
-            case 36, 76: if !event.isARepeat { self.edit() }; return nil // Enter, テンキーEnter
+            case 36, 76, 14: if !event.isARepeat { self.edit() }; return nil // Enter, テンキーEnter, E
             case 1: if !event.isARepeat { self.saveAs() }; return nil // S
             case 31: if !event.isARepeat { self.reveal() }; return nil // O
             case 7, 53: self.onClose?(); return nil // X, Esc
