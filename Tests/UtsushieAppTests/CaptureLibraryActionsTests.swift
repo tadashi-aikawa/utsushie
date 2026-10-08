@@ -85,7 +85,7 @@ func libraryCopiesAllImagesAndVideosInDisplayOrderWithoutGeneralPasteboard(_ mod
     #expect(library.selection.urls == Set(urls[0...1]))
     _ = library.handleKey(try actionsKey(0, flags: .command))
     #expect(library.selection.urls == Set(urls))
-    for code: UInt16 in [14, 1, 31, 49] {
+    for code: UInt16 in [36, 76, 1, 31, 49] {
         #expect(library.handleKey(try actionsKey(code)))
         #expect(!library.isPerformingAction && library.footerStatus?.contains("1件ずつ") == true)
     }

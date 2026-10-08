@@ -242,7 +242,7 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         if let direction { move(direction, extending: modifiers == .shift); return true }
         guard modifiers.isEmpty else { return false }
         switch event.keyCode {
-        case 14: if !event.isARepeat { editSelected() }; return true
+        case 36, 76: if !event.isARepeat { editSelected() }; return true
         case 1: if !event.isARepeat { saveSelected() }; return true
         case 31:
             if !event.isARepeat, requireSingleSelection(), let url = singleSelectedURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
@@ -689,7 +689,7 @@ private final class LibraryFooter: NSView {
         let closeHint = (deleteArmed ? "Esc" : "Q Esc", deleteArmed ? "確認解除" : "閉じる")
         var hints = multiple
             ? [("⇧←↓↑→", "範囲"), ("⌘A", "全選択"), ("X", "ゴミ箱"), ("⌘C", "コピー"), closeHint]
-            : [("←↓↑→ HJKL", "移動"), ("E", "編集"), ("S", "保存"), ("O", "Finder"), ("X", "ゴミ箱"), ("⌘C", "コピー"), ("Space", "プレビュー"), closeHint]
+            : [("←↓↑→ HJKL", "移動"), ("⏎", "編集"), ("S", "保存"), ("O", "Finder"), ("X", "ゴミ箱"), ("⌘C", "コピー"), ("Space", "プレビュー"), closeHint]
         func measure(_ hints: [(String, String)]) -> [(CGFloat, CGFloat)] {
             hints.map { key, label in
                 (max(17, ceil((key as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 10.5, weight: .medium)]).width) + 8),
@@ -702,7 +702,7 @@ private final class LibraryFooter: NSView {
         let reserved = status == nil ? CGFloat(180) : min(bounds.width - 120, max(300, labelWidth + 48))
         var sizes = measure(hints), hintWidth = width(sizes)
         // ファイル名に132ptを残す。閉じる手引きは最後まで落とさず、他はこの順で省く。
-        for key in ["←↓↑→ HJKL", "⇧←↓↑→", "⌘A", "O", "S", "Space", "E", "⌘C", "X"] where hintWidth > bounds.width - reserved {
+        for key in ["←↓↑→ HJKL", "⇧←↓↑→", "⌘A", "O", "S", "Space", "⏎", "⌘C", "X"] where hintWidth > bounds.width - reserved {
             hints.removeAll { $0.0 == key }; sizes = measure(hints); hintWidth = width(sizes)
         }
         UIDrawing.text(label, in: CGRect(x: 16, y: 12, width: max(60, bounds.width - hintWidth - 48), height: 18), size: 11.5,

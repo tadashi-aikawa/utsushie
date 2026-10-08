@@ -305,7 +305,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             guard let self, self.isKeyboardTarget, self.visible, self.panel.isKeyWindow, event.window === self.panel,
                   event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
             switch event.keyCode {
-            case 14: if !event.isARepeat { self.edit() }; return nil // E
+            case 36, 76: if !event.isARepeat { self.edit() }; return nil // Enter, テンキーEnter
             case 1: if !event.isARepeat { self.saveAs() }; return nil // S
             case 31: if !event.isARepeat { self.reveal() }; return nil // O
             case 7, 53: self.onClose?(); return nil // X, Esc
@@ -511,7 +511,7 @@ final class ThumbnailView: NSView, NSDraggingSource {
     func configureButtons() {
         guard let card else { return }
         let definitions: [(CardAction, String, String, String, Selector)] = [
-            (.annotate, card.artifact.kind == .mp4 ? "scissors" : "pencil", "E", card.artifact.kind == .mp4 ? "動画を編集 E" : "注釈 E", #selector(ThumbnailCard.edit)),
+            (.annotate, card.artifact.kind == .mp4 ? "scissors" : "pencil", "⏎", card.artifact.kind == .mp4 ? "動画を編集 ⏎" : "注釈 ⏎", #selector(ThumbnailCard.edit)),
             (.save, "square.and.arrow.down", "S", "別名保存 S", #selector(ThumbnailCard.saveAs)),
             (.reveal, "folder", "O", "Finderで表示 O", #selector(ThumbnailCard.reveal)),
             (.close, "xmark", "×", "閉じる X・Esc", #selector(ThumbnailCard.dismiss))]

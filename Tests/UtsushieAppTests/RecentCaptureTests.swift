@@ -254,9 +254,50 @@ func allCardLifetimesPauseDuringEitherEditorAndResumeIndependently(_ video: Bool
     #expect(library.handleKey(try key(40)) && library.selection.focusedURL == library.files[1].url)
     #expect(library.handleKey(try key(4)) && library.selection.focusedURL == library.files[0].url)
     #expect(!library.handleKey(try key(37, .command)) && library.selection.focusedURL == library.files[0].url)
-    #expect(!library.handleKey(try key(36)) && library.selection.focusedURL == library.files[0].url)
+    #expect(!library.handleKey(try key(14)) && library.selection.focusedURL == library.files[0].url)
     #expect(library.numberOfPreviewItems(in: nil) == 1)
     #expect((library.previewPanel(nil, previewItemAt: 0) as? NSURL) as URL? == library.files[0].url)
+}
+
+@MainActor @Test(arguments: [UInt16(36), 76])
+func libraryEnterIgnoresRepeatModifiersAndMultipleSelection(_ code: UInt16) async throws {
+    let dir = try recentDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
+    let image = try recentImage(), controller = recentController()
+    defer { controller.closeLibrarySessions() }
+    for second in 0..<2 { _ = try recentArtifact(image, in: dir, seconds: Double(second)) }
+    let library = CaptureLibraryController(directory: { dir }, config: { UtsushieConfig() }, thumbnails: controller, remembersFrame: false)
+    await library.reload()
+    func key(_ modifiers: NSEvent.ModifierFlags = [], repeating: Bool = false) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+            windowNumber: library.window!.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: repeating, keyCode: code))
+    }
+    #expect(library.handleKey(try key(repeating: true)))
+    #expect(!library.isPerformingAction)
+    for modifier: NSEvent.ModifierFlags in [.command, .option, .control, .shift] {
+        #expect(!library.handleKey(try key(modifier)))
+        #expect(!library.isPerformingAction)
+    }
+    library.select(library.files[1].url, mode: .toggle)
+    #expect(library.selection.urls.count == 2)
+    #expect(library.handleKey(try key()))
+    #expect(!library.isPerformingAction && library.footerStatus == "この操作は1件ずつ")
+}
+
+@MainActor @Test(arguments: [UInt16(36), 76])
+func libraryPreviewEnterOpensSelectedEditor(_ code: UInt16) async throws {
+    let dir = try recentDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
+    let image = try recentImage(), controller = recentController()
+    defer { controller.closeLibrarySessions() }
+    let artifact = try recentArtifact(image, in: dir)
+    let library = CaptureLibraryController(directory: { dir }, config: { UtsushieConfig() }, thumbnails: controller, remembersFrame: false)
+    await library.reload()
+    let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: library.window!.windowNumber, context: nil, characters: "あ", charactersIgnoringModifiers: "あ", isARepeat: false, keyCode: code))
+    #expect(library.previewPanel(nil, handle: event))
+    for _ in 0..<300 where library.isPerformingAction { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(!library.isPerformingAction)
+    #expect(controller.card(for: artifact.url)?.editor != nil)
+    #expect(controller.cards.isEmpty)
 }
 
 @MainActor @Test(arguments: [UInt16(12), 53, 13])
