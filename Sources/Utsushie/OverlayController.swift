@@ -265,7 +265,7 @@ final class OverlayView: NSView {
         if let rect = selected, !controller.highlightedDisplay || rect == screenFrame {
             let area = local(rect)
             let isDisplay = controller.highlightedDisplay
-            UIDrawing.selection(area, video: controller.state.output == .video && !isDisplay, inside: isDisplay)
+            UIDrawing.selection(area, video: controller.state.output == .video, inside: isDisplay)
             let isHighlighted = controller.selection == nil && controller.highlighted != nil
             let dimensions = controller.dimensions(rect, window: isHighlighted && !isDisplay)
             let title = isHighlighted ? "\(controller.highlightedApp) · \(dimensions)" : dimensions
