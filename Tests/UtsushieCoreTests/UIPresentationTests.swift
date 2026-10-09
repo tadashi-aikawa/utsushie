@@ -3,6 +3,18 @@ import CoreGraphics
 import Testing
 @testable import UtsushieCore
 
+@Test func fullDisplayHighlightFitsItsCornersAndLabelInsideTheDisplay() {
+    let screen = CGRect(x: -1000, y: 900, width: 1000, height: 700)
+    let corners = OverlayPresentation.selectionCornerBounds(selection: screen, inside: true)
+    // 下地は6pt幅。正方形の線端と四隅を含めても画面内へ収める。
+    #expect(screen.contains(corners.insetBy(dx: -3, dy: -3)))
+    let normalCorners = OverlayPresentation.selectionCornerBounds(selection: screen, inside: false)
+    #expect(normalCorners.insetBy(dx: 3, dy: 3).contains(screen))
+    let label = OverlayPresentation.dimensionLabel(selection: screen, screen: screen, size: CGSize(width: 1200, height: 22))
+    #expect(screen.contains(label))
+    #expect(label.maxY < screen.maxY)
+}
+
 @Test func dimensionLabelFallsInsideAtScreenTopAndStaysOnScreen() {
     let screen = CGRect(x: -1000, y: 900, width: 1000, height: 700)
     let size = CGSize(width: 100, height: 22)

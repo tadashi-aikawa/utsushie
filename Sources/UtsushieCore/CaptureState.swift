@@ -9,8 +9,10 @@ public struct CaptureState: Sendable {
     public private(set) var output: CaptureOutput = .image
     public private(set) var target: CaptureTarget = .area
     public private(set) var gesture = SelectionGesture()
+    private var shiftPressed = false
     public var cursor: CaptureCursor { .crosshair }
-    public var highlightsWindow: Bool { !gesture.isDragging }
+    public var highlightsWindow: Bool { !gesture.isDragging && !shiftPressed }
+    public var highlightsDisplay: Bool { !gesture.isDragging && shiftPressed }
     public init() {}
     /// 文字やIMEの変換結果に依存しない物理keyCodeで判断する。
     public mutating func key(_ code: UInt16, hasLast: Bool) -> CaptureAction {
@@ -35,9 +37,12 @@ public struct CaptureState: Sendable {
     }
     public mutating func fallbackToArea() { target = .area }
     public mutating func selectArea() { target = .area }
-    public mutating func pointerDown(at point: CGPoint, last: CGRect?, movingLast: Bool = false, displayFrames: [CGRect] = []) -> PointerAction {
+    public mutating func modifiersChanged(shift: Bool) { shiftPressed = shift }
+    public mutating func pointerDown(at point: CGPoint, last: CGRect?, movingLast: Bool = false,
+                                     displayFrames: [CGRect] = [], selectingDisplay: Bool = false) -> PointerAction {
         selectArea()
-        gesture.begin(at: point, last: last, movingLast: movingLast, displayFrames: output == .video ? displayFrames : [])
+        gesture.begin(at: point, last: last, movingLast: movingLast, displayFrames: displayFrames,
+                      constrainToDisplay: output == .video, selectingDisplay: selectingDisplay)
         return .none
     }
     public mutating func pointerDragged(to point: CGPoint) { gesture.update(to: point) }

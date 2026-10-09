@@ -10,6 +10,10 @@ public struct HUDItem: Equatable, Sendable {
 }
 
 public enum OverlayPresentation {
+    /// 鉤の最大線幅6ptを含め、画面全体の強調だけは内側へ収める。
+    public static func selectionCornerBounds(selection: CGRect, inside: Bool) -> CGRect {
+        selection.insetBy(dx: inside ? 4 : -4, dy: inside ? 4 : -4)
+    }
     public static func items(output: CaptureOutput, target: CaptureTarget, hasLast: Bool) -> [HUDItem] {
         [HUDItem(title: "画像", key: nil, selected: output == .image, recording: false, enabled: true),
          HUDItem(title: "動画", key: nil, selected: output == .video, recording: output == .video, enabled: true),

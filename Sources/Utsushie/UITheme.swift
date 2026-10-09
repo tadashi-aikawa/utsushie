@@ -69,9 +69,9 @@ enum UIDrawing {
         NSColor.white.withAlphaComponent(0.38).setStroke(); path.lineWidth = 0.7; path.stroke()
         text(string, in: rect.insetBy(dx: 1, dy: 1), size: 10.5, centered: true)
     }
-    /// 鉤の6ptの下地まで、範囲の外へ離す。影は使わない。
-    static func selection(_ rect: CGRect, video: Bool) {
-        let outer = rect.insetBy(dx: -4, dy: -4)
+    /// 通常は鉤の下地まで範囲の外へ離す。画面全体の強調では内側へ収める。
+    static func selection(_ rect: CGRect, video: Bool, inside: Bool = false) {
+        let outer = OverlayPresentation.selectionCornerBounds(selection: rect, inside: inside)
         let path = NSBezierPath()
         let length = min(20, min(outer.width, outer.height) / 2)
         for (x, y, sx, sy) in [(outer.minX, outer.minY, CGFloat(1), CGFloat(1)),
@@ -82,7 +82,8 @@ enum UIDrawing {
         path.lineCapStyle = .square; path.lineJoinStyle = .miter
         (video ? NSColor.white : UITheme.paper).setStroke(); path.lineWidth = 6; path.stroke()
         (video ? UITheme.red : UITheme.indigo).setStroke(); path.lineWidth = 3.5; path.stroke()
-        let edge = NSBezierPath(rect: rect.insetBy(dx: -0.75, dy: -0.75))
+        let edgeInset: CGFloat = inside ? 0.75 : -0.75
+        let edge = NSBezierPath(rect: rect.insetBy(dx: edgeInset, dy: edgeInset))
         NSColor.white.withAlphaComponent(0.9).setStroke(); edge.lineWidth = 1; edge.stroke()
     }
     static func recordingBorder(_ rect: CGRect) {

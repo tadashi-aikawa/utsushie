@@ -3,6 +3,106 @@ import CoreGraphics
 import Testing
 @testable import UtsushieCore
 
+@Test func shiftHoverChangesImmediatelyAndNeverAppearsDuringDrag() {
+    var state = CaptureState()
+    #expect(state.highlightsWindow && !state.highlightsDisplay)
+    state.modifiersChanged(shift: true)
+    #expect(!state.highlightsWindow && state.highlightsDisplay)
+    state.modifiersChanged(shift: false)
+    #expect(state.highlightsWindow && !state.highlightsDisplay)
+    _ = state.pointerDown(at: .zero, last: nil)
+    state.pointerDragged(to: CGPoint(x: 10, y: 10))
+    state.modifiersChanged(shift: true)
+    #expect(!state.highlightsWindow && !state.highlightsDisplay)
+    state.modifiersChanged(shift: false)
+    #expect(!state.highlightsWindow && !state.highlightsDisplay)
+}
+
+@Test(arguments: [false, true], [false, true])
+func shiftClickCapturesWholePressedDisplayForEitherOutput(_ video: Bool, _ hasWindow: Bool) {
+    let screen = CGRect(x: -800, y: 900, width: 800, height: 600)
+    let start = CGPoint(x: -400, y: 1200)
+    let end = CGPoint(x: start.x + 4, y: start.y)
+    var state = CaptureState()
+    if video { _ = state.key(48, hasLast: false) }
+    state.modifiersChanged(shift: true)
+    #expect(state.pointerDown(at: start, last: nil, displayFrames: [CGRect(x: 0, y: 0, width: 1000, height: 800), screen],
+                              selectingDisplay: true) == .none)
+    state.pointerDragged(to: end)
+    #expect(state.gesture.areaPreview == nil)
+    #expect(state.highlightsDisplay)
+    #expect(state.pointerUp(at: end, hasWindow: hasWindow) == .captureDisplay(screen))
+    #expect(state.pointerUp(at: end, hasWindow: hasWindow) == .none)
+}
+
+@Test(arguments: [false, true], [false, true])
+func changingShiftAfterPressKeepsOriginalClickTarget(_ video: Bool, _ shiftAtPress: Bool) {
+    let screen = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let point = CGPoint(x: 50, y: 50)
+    var state = CaptureState()
+    if video { _ = state.key(48, hasLast: false) }
+    state.modifiersChanged(shift: shiftAtPress)
+    _ = state.pointerDown(at: point, last: nil, displayFrames: [screen], selectingDisplay: shiftAtPress)
+    state.modifiersChanged(shift: !shiftAtPress)
+    #expect(state.highlightsDisplay == !shiftAtPress)
+    #expect(state.pointerUp(at: point, hasWindow: true) == (shiftAtPress ? .captureDisplay(screen) : .captureWindow))
+}
+
+@Test(arguments: [false, true], [false, true])
+func shiftDragSelectsNewAreaEvenWithOptionAndPreviousFrame(_ video: Bool, _ option: Bool) {
+    let screen = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let last = CGRect(x: 10, y: 10, width: 80, height: 80)
+    let start = CGPoint(x: 50, y: 50)
+    let end = CGPoint(x: 150, y: 150)
+    var state = CaptureState()
+    if video { _ = state.key(48, hasLast: true) }
+    state.modifiersChanged(shift: true)
+    _ = state.pointerDown(at: start, last: last, movingLast: option, displayFrames: [screen], selectingDisplay: true)
+    state.pointerDragged(to: end)
+    let expected = CGRect(x: 50, y: 50, width: video ? 50 : 100, height: video ? 50 : 100)
+    #expect(state.gesture.isSelectingArea)
+    #expect(state.gesture.lastPreview == nil)
+    #expect(state.gesture.areaPreview == expected)
+    #expect(!state.highlightsDisplay && !state.highlightsWindow)
+    state.modifiersChanged(shift: false)
+    #expect(state.pointerUp(at: end, hasWindow: true) == .captureArea(expected))
+}
+
+@Test func shiftClickNeverReturnsAfterCrossingThreshold() {
+    let screen = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let point = CGPoint(x: 50, y: 50)
+    var state = CaptureState()
+    state.modifiersChanged(shift: true)
+    _ = state.pointerDown(at: point, last: nil, displayFrames: [screen], selectingDisplay: true)
+    state.pointerDragged(to: CGPoint(x: 54.01, y: 50))
+    state.pointerDragged(to: point)
+    #expect(!state.highlightsDisplay)
+    #expect(state.pointerUp(at: point, hasWindow: true) == .none)
+}
+
+@Test(arguments: [UInt16(53), 48])
+func keyCancelsPendingDisplayCapture(_ code: UInt16) {
+    var state = CaptureState()
+    let point = CGPoint(x: 50, y: 50)
+    _ = state.pointerDown(at: point, last: nil, displayFrames: [CGRect(x: 0, y: 0, width: 100, height: 100)], selectingDisplay: true)
+    _ = state.key(code, hasLast: false)
+    #expect(state.pointerUp(at: point, hasWindow: true) == .none)
+}
+
+@Test func shiftClickWithoutDisplayNeverFallsBackToWindow() {
+    var state = CaptureState()
+    _ = state.pointerDown(at: .zero, last: nil, selectingDisplay: true)
+    #expect(state.pointerUp(at: .zero, hasWindow: true) == .none)
+}
+
+@Test func smallShiftClickAcrossScreenBoundaryKeepsPressedDisplay() {
+    let left = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let right = CGRect(x: 100, y: 0, width: 100, height: 100)
+    var state = CaptureState()
+    _ = state.pointerDown(at: CGPoint(x: 99, y: 50), last: nil, displayFrames: [left, right], selectingDisplay: true)
+    #expect(state.pointerUp(at: CGPoint(x: 101, y: 50)) == .captureDisplay(left))
+}
+
 @Test(arguments: [false, true], [CGPoint(x: -400, y: -600), CGPoint(x: 700, y: 800)])
 func onlyVideoAreaStopsAtStartingDisplay(_ video: Bool, _ end: CGPoint) {
     let display = CGRect(x: -200, y: -300, width: 600, height: 800)

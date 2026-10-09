@@ -18,6 +18,7 @@ final class OverlayController {
     }
     private(set) var highlighted: CaptureRequest?
     private(set) var highlightedApp = ""
+    private(set) var highlightedDisplay = false
     var config = UtsushieConfig()
     private var windowContent: SCShareableContent?
     private var contentTask: Task<Void, Never>?
@@ -37,6 +38,7 @@ final class OverlayController {
     func show(last: CGRect?) {
         close()
         state = CaptureState()
+        state.modifiersChanged(shift: NSEvent.modifierFlags.contains(.shift))
         self.last = last
         message = ""
         refreshWindowContent()
@@ -76,7 +78,7 @@ final class OverlayController {
         panels.forEach { $0.orderOut(nil) }
         panels.removeAll()
         registeredCursor = nil
-        state.cancelGesture(); highlighted = nil; highlightedApp = ""
+        state.cancelGesture(); highlighted = nil; highlightedApp = ""; highlightedDisplay = false
         NSCursor.arrow.set()
     }
     func repeatCapture() { perform(state.repeatCapture(hasLast: last != nil)) }
@@ -116,13 +118,24 @@ final class OverlayController {
         guard isVisible else { return }
         cursor.set()
     }
-    private func updateWindow() {
-        guard isVisible, state.highlightsWindow else { highlighted = nil; highlightedApp = ""; return }
+    func flagsChanged(shift: Bool) {
+        state.modifiersChanged(shift: shift)
+        updateWindow(); redraw()
+    }
+    private func updateWindow(windowOnly: Bool = false) {
+        highlighted = nil; highlightedApp = ""; highlightedDisplay = false
+        guard isVisible, !state.gesture.isDragging else { return }
         let point = NSEvent.mouseLocation
+        if state.highlightsDisplay && !windowOnly {
+            if let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) {
+                highlighted = .region(screen.frame)
+                highlightedApp = screen.localizedName
+                highlightedDisplay = true
+            }
+            return
+        }
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        highlighted = nil
-        highlightedApp = ""
         for item in list {
             guard item[kCGWindowOwnerPID as String] as? Int32 != ownPID,
                   item[kCGWindowLayer as String] as? Int == 0,
@@ -147,10 +160,11 @@ final class OverlayController {
             self.contentTask = nil; self.windowContent = content; self.redraw()
         }
     }
-    func mouseDown(movingLast: Bool = false) {
+    func mouseDown(movingLast: Bool = false, selectingDisplay: Bool = false) {
         guard isVisible else { return }
+        state.modifiersChanged(shift: selectingDisplay)
         performPointer(state.pointerDown(at: NSEvent.mouseLocation, last: last, movingLast: movingLast,
-                                         displayFrames: ScreenGeometry.displays.map(\.frame)))
+                                         displayFrames: ScreenGeometry.displays.map(\.frame), selectingDisplay: selectingDisplay))
     }
     func mouseDragged() {
         guard isVisible else { return }
@@ -159,7 +173,8 @@ final class OverlayController {
     }
     func mouseUp() {
         guard isVisible else { return }
-        updateWindow()
+        // ⇧の表示状態と、mouseDownで決まったクリック対象を分ける。
+        updateWindow(windowOnly: true)
         performPointer(state.pointerUp(at: NSEvent.mouseLocation, hasWindow: highlighted != nil))
     }
     private func performPointer(_ action: PointerAction) {
@@ -168,6 +183,7 @@ final class OverlayController {
         case .captureWindow:
             if let highlighted { onCapture?(highlighted, false, state.output) }
         case let .captureArea(rect): onCapture?(.region(rect), true, state.output)
+        case let .captureDisplay(rect): onCapture?(.region(rect), false, state.output)
         case let .moveLast(rect):
             if CaptureGeometry.isVisible(rect, displays: ScreenGeometry.displays) {
                 last = rect; onMoveLast?(rect)
@@ -224,7 +240,10 @@ final class OverlayView: NSView {
     }
     override func cursorUpdate(with event: NSEvent) { controller?.updateCursor() }
     override func mouseEntered(with event: NSEvent) { controller?.mouseMoved() }
-    override func mouseDown(with event: NSEvent) { controller?.mouseDown(movingLast: event.modifierFlags.contains(.option)) }
+    override func flagsChanged(with event: NSEvent) { controller?.flagsChanged(shift: event.modifierFlags.contains(.shift)) }
+    override func mouseDown(with event: NSEvent) {
+        controller?.mouseDown(movingLast: event.modifierFlags.contains(.option), selectingDisplay: event.modifierFlags.contains(.shift))
+    }
     override func mouseDragged(with event: NSEvent) { controller?.mouseDragged() }
     override func mouseUp(with event: NSEvent) { controller?.mouseUp() }
     override func mouseMoved(with event: NSEvent) { controller?.mouseMoved() }
@@ -241,12 +260,13 @@ final class OverlayView: NSView {
             NSColor.white.withAlphaComponent(0.85).setStroke(); outline.stroke()
             label("前回 ⏎", at: CGPoint(x: rect.minX + 8, y: rect.maxY - 30))
         }
-        if let rect = selected {
+        if let rect = selected, !controller.highlightedDisplay || rect == screenFrame {
             let area = local(rect)
-            UIDrawing.selection(area, video: controller.state.output == .video)
-            let isWindow = controller.selection == nil && controller.highlighted != nil
-            let dimensions = controller.dimensions(rect, window: isWindow)
-            let title = isWindow ? "\(controller.highlightedApp) · \(dimensions)" : dimensions
+            let isDisplay = controller.highlightedDisplay
+            UIDrawing.selection(area, video: controller.state.output == .video && !isDisplay, inside: isDisplay)
+            let isHighlighted = controller.selection == nil && controller.highlighted != nil
+            let dimensions = controller.dimensions(rect, window: isHighlighted && !isDisplay)
+            let title = isHighlighted ? "\(controller.highlightedApp) · \(dimensions)" : dimensions
             let width = min(bounds.width - 16, ceil((title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .medium)]).width) + 16)
             let placement = OverlayPresentation.dimensionLabel(selection: area, screen: bounds, size: CGSize(width: width, height: 22))
             label(title, in: placement)
