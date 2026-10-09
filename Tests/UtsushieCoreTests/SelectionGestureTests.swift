@@ -3,6 +3,77 @@ import CoreGraphics
 import Testing
 @testable import UtsushieCore
 
+@Test(arguments: [false, true], [CGPoint(x: -400, y: -600), CGPoint(x: 700, y: 800)])
+func onlyVideoAreaStopsAtStartingDisplay(_ video: Bool, _ end: CGPoint) {
+    let display = CGRect(x: -200, y: -300, width: 600, height: 800)
+    let other = CGRect(x: 400, y: -300, width: 600, height: 800)
+    let start = CGPoint(x: 100, y: 100)
+    var state = CaptureState()
+    if video { _ = state.key(48, hasLast: false) }
+    _ = state.pointerDown(at: start, last: nil, displayFrames: [other, display])
+    state.pointerDragged(to: end)
+    let expected = CaptureGeometry.selection(from: start, to: end)
+    let rect = video ? expected.intersection(display) : expected
+    #expect(state.gesture.areaPreview == rect)
+    #expect(state.pointerUp(at: end) == .captureArea(rect))
+}
+
+@Test(arguments: [false, true], [CGPoint(x: -1000, y: -1000), CGPoint(x: 1500, y: 1500)])
+func onlyVideoPreviousAreaStopsAtItsCenterDisplay(_ video: Bool, _ end: CGPoint) {
+    let displays = [CGRect(x: 0, y: -200, width: 600, height: 800), CGRect(x: 600, y: -200, width: 800, height: 800)]
+    // 押した点は左画面、前回枠の中心は右画面。画像の跨ぎ範囲を動画へ切り替えた場合。
+    let last = CGRect(x: 550, y: 100, width: 200, height: 300)
+    let start = CGPoint(x: 560, y: 150)
+    var state = CaptureState()
+    if video { _ = state.key(48, hasLast: true) }
+    _ = state.pointerDown(at: start, last: last, movingLast: true, displayFrames: displays)
+    state.pointerDragged(to: end)
+    let expected: CGRect
+    if video {
+        expected = CGRect(x: end.x < 0 ? 600 : 1200, y: end.y < 0 ? -200 : 300, width: 200, height: 300)
+    } else {
+        expected = last.offsetBy(dx: end.x - start.x, dy: end.y - start.y)
+    }
+    #expect(state.gesture.lastPreview == expected)
+    #expect(state.pointerUp(at: end) == .moveLast(expected))
+}
+
+@Test func videoThresholdUsesUnclampedPointerAndCanReturnFromEdge() {
+    var state = CaptureState()
+    _ = state.key(48, hasLast: false)
+    _ = state.pointerDown(at: CGPoint(x: 98, y: 98), last: nil,
+                          displayFrames: [CGRect(x: 0, y: 0, width: 100, height: 100)])
+    state.pointerDragged(to: CGPoint(x: 120, y: 120))
+    #expect(state.gesture.isDragging)
+    #expect(state.gesture.areaPreview == CGRect(x: 98, y: 98, width: 2, height: 2))
+    state.pointerDragged(to: CGPoint(x: 50, y: 50))
+    #expect(state.gesture.areaPreview == CGRect(x: 50, y: 50, width: 48, height: 48))
+    #expect(state.pointerUp(at: CGPoint(x: 120, y: 120)) == .captureArea(CGRect(x: 98, y: 98, width: 2, height: 2)))
+}
+
+@Test func switchingOutputCancelsVideoDisplayConstraint() {
+    var state = CaptureState()
+    _ = state.key(48, hasLast: false)
+    let display = CGRect(x: 0, y: 0, width: 100, height: 100)
+    _ = state.pointerDown(at: CGPoint(x: 50, y: 50), last: nil, displayFrames: [display])
+    state.pointerDragged(to: CGPoint(x: 150, y: 150))
+    #expect(state.key(48, hasLast: false) == .none)
+    #expect(state.gesture.areaPreview == nil)
+    #expect(state.pointerUp(at: CGPoint(x: 150, y: 150)) == .none)
+    _ = state.pointerDown(at: CGPoint(x: 50, y: 50), last: nil, displayFrames: [display])
+    #expect(state.pointerUp(at: CGPoint(x: 150, y: 150)) == .captureArea(CGRect(x: 50, y: 50, width: 100, height: 100)))
+}
+
+@Test func oversizedPreviousVideoAreaKeepsDimensionsAndPosition() {
+    var state = CaptureState()
+    _ = state.key(48, hasLast: true)
+    let last = CGRect(x: -50, y: 10, width: 200, height: 50)
+    _ = state.pointerDown(at: CGPoint(x: 25, y: 25), last: last, movingLast: true,
+                          displayFrames: [CGRect(x: 0, y: 0, width: 100, height: 100)])
+    #expect(state.pointerUp(at: CGPoint(x: 40, y: 40)) == .moveLast(last))
+    #expect(state.key(36, hasLast: true) == .captureLast)
+}
+
 @Test(arguments: [CGPoint(x: 0, y: 0), CGPoint(x: 0.1, y: 0.1), CGPoint(x: 4, y: 0), CGPoint(x: 0, y: -4)], [false, true])
 func smallMovementCapturesWindowOnlyOnRelease(_ delta: CGPoint, _ hasWindow: Bool) {
     var state = CaptureState()

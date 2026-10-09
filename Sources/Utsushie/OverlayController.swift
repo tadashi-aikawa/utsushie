@@ -149,7 +149,8 @@ final class OverlayController {
     }
     func mouseDown(movingLast: Bool = false) {
         guard isVisible else { return }
-        performPointer(state.pointerDown(at: NSEvent.mouseLocation, last: last, movingLast: movingLast))
+        performPointer(state.pointerDown(at: NSEvent.mouseLocation, last: last, movingLast: movingLast,
+                                         displayFrames: ScreenGeometry.displays.map(\.frame)))
     }
     func mouseDragged() {
         guard isVisible else { return }

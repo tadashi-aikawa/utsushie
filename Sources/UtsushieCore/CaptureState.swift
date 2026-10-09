@@ -35,9 +35,9 @@ public struct CaptureState: Sendable {
     }
     public mutating func fallbackToArea() { target = .area }
     public mutating func selectArea() { target = .area }
-    public mutating func pointerDown(at point: CGPoint, last: CGRect?, movingLast: Bool = false) -> PointerAction {
+    public mutating func pointerDown(at point: CGPoint, last: CGRect?, movingLast: Bool = false, displayFrames: [CGRect] = []) -> PointerAction {
         selectArea()
-        gesture.begin(at: point, last: last, movingLast: movingLast)
+        gesture.begin(at: point, last: last, movingLast: movingLast, displayFrames: output == .video ? displayFrames : [])
         return .none
     }
     public mutating func pointerDragged(to point: CGPoint) { gesture.update(to: point) }
