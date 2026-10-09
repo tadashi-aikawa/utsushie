@@ -16,6 +16,7 @@ final class ThumbnailController {
     var makeVideoSession: (SharedArtifact, Int) -> VideoEditSession = { VideoEditSession(artifact: $0, fps: $1) }
     var onArtifactsChange: (() -> Void)?
     var onLibraryExportStatus: ((URL, String?) -> Void)?
+    var beforeShowingCard: ((NSWindow) async -> Bool)?
 
     @discardableResult
     func add(_ artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, screen: NSScreen?, finalizing: Bool = false,
@@ -54,6 +55,10 @@ final class ThumbnailController {
             self?.onLibraryExportStatus?(card.artifact.url, status)
         }
         card.canShow = { [weak self] in !libraryOnly && self?.suspended == false }
+        card.prepareToShow = { [weak self, weak card] in
+            guard let prepare = self?.beforeShowingCard, let card else { return nil }
+            return Task { await prepare(card.panel) }
+        }
         card.onRequestKeys = { [weak self, weak card] in
             guard let self, let card, self.cards.contains(where: { $0 === card }) else { return }
             self.keyboardTargetID = card.id
@@ -215,6 +220,8 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     private(set) var videoEditor: VideoEditorController?
     private var videoSession: VideoEditSession?
     private var closed = false
+    private var showTask: Task<Void, Never>?
+    var prepareToShow: (() -> Task<Bool, Never>?)?
     var annotationConfig: () -> UtsushieConfig = { UtsushieConfig() }
     var canShow: () -> Bool = { true }
     var editorFocus = AnnotationApplicationFocus()
@@ -258,11 +265,24 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     }
     func show(claimKeyboard: Bool = true) {
         guard editor == nil, videoEditor == nil, !closed else { return }
+        showTask?.cancel()
+        if let preparation = prepareToShow?() {
+            showTask = Task { [weak self] in
+                let ready = await preparation.value
+                guard ready, !Task.isCancelled, let self, self.canShow(),
+                      self.editor == nil, self.videoEditor == nil, !self.closed else { return }
+                self.showPrepared(claimKeyboard: claimKeyboard)
+                self.showTask = nil
+            }
+        } else { showPrepared(claimKeyboard: claimKeyboard) }
+    }
+    private func showPrepared(claimKeyboard: Bool) {
         visible = true; panel.orderFrontRegardless()
         if claimKeyboard { claimKeys() }
         resumeTimer()
     }
     func hide() {
+        showTask?.cancel(); showTask = nil
         visible = false; pauseTimer(); releaseKeys(); hovered = false; panel.orderOut(nil)
     }
     func close() {
@@ -491,7 +511,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
 }
 
 @MainActor
-final class ThumbnailPanel: NSPanel {
+final class ThumbnailPanel: NSPanel, CaptureExcludedWindow {
     var receivesKeyboard = false
     override var canBecomeKey: Bool { receivesKeyboard }
     override var canBecomeMain: Bool { false }

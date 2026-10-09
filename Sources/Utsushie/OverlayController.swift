@@ -3,7 +3,7 @@ import ScreenCaptureKit
 import UtsushieCore
 
 @MainActor
-final class CapturePanel: NSPanel {
+final class CapturePanel: NSPanel, CaptureExcludedWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 }
@@ -136,15 +136,15 @@ final class OverlayController {
             }
             return
         }
-        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let policy = CaptureWindowExclusion.policy(for: CaptureWindowExclusion.windows())
         let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         for item in list {
-            guard item[kCGWindowOwnerPID as String] as? Int32 != ownPID,
-                  item[kCGWindowLayer as String] as? Int == 0,
-                  (item[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+            guard let id = item[kCGWindowNumber as String] as? UInt32,
+                  let layer = item[kCGWindowLayer as String] as? Int,
+                  policy.canSelect(windowID: id, processID: item[kCGWindowOwnerPID as String] as? Int32,
+                                   layer: layer, alpha: item[kCGWindowAlpha as String] as? Double ?? 1),
                   let bounds = item[kCGWindowBounds as String] as? [String: Any],
-                  let cgRect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
-                  let id = item[kCGWindowNumber as String] as? UInt32 else { continue }
+                  let cgRect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
             let rect = ScreenGeometry.appKit(cgRect)
             if rect.contains(point) {
                 highlighted = .window(id, rect)

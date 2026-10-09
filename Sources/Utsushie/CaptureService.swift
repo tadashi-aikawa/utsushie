@@ -18,13 +18,16 @@ enum CaptureRequest {
 @MainActor
 final class CaptureService {
     func content() async throws -> SCShareableContent {
-        try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        // 非表示の共有カードも列挙し、再表示や合成の遅延でもフィルターで外す。
+        try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
     }
-    func image(for request: CaptureRequest, downscale: Bool) async throws -> CGImage {
+    func image(for request: CaptureRequest, downscale: Bool, excluding windows: [NSWindow]) async throws -> CGImage {
         let shareable = try await content()
+        let policy = CaptureWindowExclusion.policy(for: windows)
         switch request {
         case let .window(id, _):
-            guard let window = shareable.windows.first(where: { $0.windowID == id }) else {
+            guard let window = shareable.windows.first(where: { $0.windowID == id }),
+                  !policy.excludes(windowID: id) else {
                 throw CaptureError.unavailable("選んだウィンドウが見つかりません")
             }
             let filter = SCContentFilter(desktopIndependentWindow: window)
@@ -43,13 +46,13 @@ final class CaptureService {
                 bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw WebPError.bitmap }
             canvas.setFillColor(CGColor(gray: 0, alpha: 1))
             canvas.fill(CGRect(x: 0, y: 0, width: size.width, height: size.height))
-            let ownApps = shareable.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
-            // 隠すタイミングだけに頼らず、全自アプリウィンドウをフィルターで除外する。
+            let excluded = try CaptureWindowExclusion.excludedWindows(in: shareable, policy: policy)
+            // 隠すタイミングだけに頼らず、撮影用UIを窓単位のフィルターで除外する。
             for geometry in displays {
                 let part = rect.intersection(geometry.frame)
                 guard !part.isNull, part.width > 0, part.height > 0,
                       let display = shareable.displays.first(where: { $0.displayID == geometry.id }) else { continue }
-                let filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
+                let filter = SCContentFilter(display: display, excludingWindows: excluded)
                 let partSize = CaptureGeometry.outputSize(points: part.size, scale: scale, downscale: false)
                 let config = configuration(width: partSize.width, height: partSize.height)
                 config.sourceRect = CaptureGeometry.localSource(part, display: geometry)

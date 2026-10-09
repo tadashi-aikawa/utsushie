@@ -6,7 +6,7 @@ final class RecordingBorder {
     func show(rect: CGRect) {
         close()
         for screen in NSScreen.screens where screen.frame.intersects(rect.insetBy(dx: -5, dy: -5)) {
-            let panel = NSPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            let panel = RecordingBorderPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.setFrame(screen.frame, display: false)
             panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
             panel.ignoresMouseEvents = true; panel.hidesOnDeactivate = false
@@ -21,6 +21,9 @@ final class RecordingBorder {
     }
     func close() { panels.forEach { $0.orderOut(nil) }; panels.removeAll() }
 }
+
+@MainActor
+final class RecordingBorderPanel: NSPanel, CaptureExcludedWindow {}
 
 @MainActor
 private final class BorderView: NSView {

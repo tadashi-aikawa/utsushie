@@ -177,10 +177,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordingStartTask = Task {
             var prepared: RecordingService?
             do {
-                // オーバーレイを出したままcontentを取得し、除外対象の自アプリを確実に列挙する。
+                // 赤枠とメニューバーの札も開始前に窓番号を確保し、撮影用UIだけを除外する。
+                borderRect = request.rect; recordingBorder.show(rect: request.rect)
+                let excluded = CaptureWindowExclusion.windows(recordingStatusWindow: statusItem.button?.window)
                 // 準備中のEscはTaskを取消し、非同期処理の後から録画が始まることを防ぐ。
                 let session = try await RecordingService.prepare(request: request, config: recordingConfig.video,
-                    directory: recordingConfig.outputURL(), onStop: { [weak self] in
+                    directory: recordingConfig.outputURL(), excluding: excluded,
+                    recordingStatusWindow: statusItem.button?.window, onStop: { [weak self] in
                         // 古いSCStreamの遅延通知で次の録画を止めない。
                         guard let self, self.recordingToken == token else { return }
                         self.streamStopped()
@@ -189,11 +192,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 try Task.checkCancellation()
                 activeRecording = session
                 overlay.close()
-                borderRect = request.rect; recordingBorder.show(rect: request.rect)
                 recordingHostStart = ProcessInfo.processInfo.systemUptime
                 try await session.start()
                 recordingState.didStart()
                 if remember { persistLast(request.rect) }
+                thumbnails.beforeShowingCard = { [weak self, weak session] window in
+                    guard let self, let session else { return true }
+                    guard self.recordingState.phase == .recording else { return false }
+                    do { try await session.excludeBeforeShowing(window); return true }
+                    catch { self.stopRecording(); return false }
+                }
                 thumbnails.setSuspended(false)
                 updateRecordingStatus()
                 recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -264,15 +272,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let stoppedAt = ProcessInfo.processInfo.systemUptime
         let duration = max(0, stoppedAt - recordingHostStart)
         recordingTimer?.invalidate(); recordingTimer = nil
+        thumbnails.setSuspended(true)
         recordingBorder.close(); borderRect = nil; updateRecordingStatus()
         let screen = NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == session.displayID }
         Task {
+            // 停止中の最後のコマへ新しいカードが写らないよう、停止完了を先に待つ。
+            await session.stop()
+            thumbnails.beforeShowingCard = nil
+            thumbnails.setSuspended(false)
             // finalizeが終わるまではファイルを共有させない。寿命も完了後から数える。
             let pending = SharedArtifact(url: recordingConfig.outputURL(), kind: .mp4, width: session.width,
                 height: session.height, byteCount: 0, duration: duration)
             let cardID = thumbnails.add(pending, image: await session.firstFrame(), copied: false,
                 seconds: recordingConfig.thumbnailSeconds, screen: screen, finalizing: true)
-            await session.stop()
             var temporary: URL?
             do {
                 let result = try await session.finish(hostTime: stoppedAt)
@@ -296,12 +308,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func take(_ request: CaptureRequest, remember: Bool) {
         guard !busy else { return }
         busy = true
+        // 閉じたパネルも列挙・合成が終わるまで保持し、窓番号で確実に除外する。
+        let excluded = CaptureWindowExclusion.windows()
         overlay.close()
         let snapshot = config
         let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: request.rect.midX, y: request.rect.midY)) }
         Task {
             do {
-                let image = try await capture.image(for: request, downscale: snapshot.downscale)
+                let image = try await capture.image(for: request, downscale: snapshot.downscale, excluding: excluded)
                 // エンコードとディスク書き込みはメインスレッドを塞がない。
                 let (data, url) = try await Task.detached(priority: .userInitiated) {
                     let data = try WebPEncoder.encode(image, quality: snapshot.quality, lossless: snapshot.lossless)
