@@ -49,16 +49,17 @@ import Testing
     #expect(square == CGPoint(x: 90, y: 10))
     let size = CGSize(width: 100, height: 80)
     for tool in [AnnotationTool.rectangle, .spotlight, .mosaic] {
-        let p = AnnotationGeometry.creationPoint(CGPoint(x: 90, y: 70), from: anchor, tool: tool, shift: true, imageSize: size)
-        #expect(abs(p.x - anchor.x) == abs(p.y - anchor.y))
-        if tool != .rectangle { #expect(p.y <= size.height) }
+        let created = AnnotationGeometry.creating(Annotation(tool: tool, start: anchor), to: CGPoint(x: 90, y: 70), shift: true, imageSize: size)
+        #expect(abs(created.rect.width - created.rect.height) < 0.000001)
+        #expect(created.rect.maxY <= size.height)
         let annotation = Annotation(tool: tool, start: CGPoint(x: 10, y: 10), end: CGPoint(x: 40, y: 30))
         for handle in [AnnotationResizeHandle.topLeft, .topRight, .bottomLeft, .bottomRight] {
             let resized = AnnotationGeometry.resized(annotation, handle: handle, to: CGPoint(x: 95, y: 70), shift: true, imageSize: size)
             #expect(resized.rect.width == resized.rect.height)
         }
         let edge = AnnotationGeometry.resized(annotation, handle: .right, to: CGPoint(x: 95, y: 70), shift: true, imageSize: size)
-        #expect(edge.rect.height == 20 && edge.rect.width == 85)
+        #expect(edge.rect.height == 20)
+        #expect(edge.rect.width == min(95, AnnotationGeometry.areaDrawingRect(tool: tool, imageSize: size).maxX) - 10)
     }
     for tool in [AnnotationTool.line, .arrow] {
         let annotation = Annotation(tool: tool, start: anchor, end: CGPoint(x: 90, y: 70))
@@ -66,9 +67,7 @@ import Testing
         #expect(abs(changed.end.x - changed.end.y) < 0.00001)
     }
     let wideImage = CGSize(width: 160, height: 100)
-    let largeEnd = AnnotationGeometry.creationPoint(CGPoint(x: 120, y: 120), from: .zero,
-                                                    tool: .rectangle, shift: true, imageSize: wideImage)
-    let large = Annotation(tool: .rectangle, start: .zero, end: largeEnd)
+    let large = AnnotationGeometry.creating(Annotation(tool: .rectangle, start: .zero), to: CGPoint(x: 120, y: 120), shift: true, imageSize: wideImage)
     let placed = AnnotationGeometry.placed(large, bounds: large.rect, imageSize: wideImage)
-    #expect(placed.rect.size == CGSize(width: 100, height: 100))
+    #expect(placed.rect.size == CGSize(width: 93, height: 93))
 }

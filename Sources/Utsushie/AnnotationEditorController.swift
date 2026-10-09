@@ -687,8 +687,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             }
         }
         selection = []
-        guard tool.allowsMargin || CGRect(origin: .zero, size: imageSize).contains(p) else { changed(); return }
-        let annotation = Annotation(tool: tool, start: p, highlighterColor: Self.lastHighlighterColor,
+        guard tool.allowsMargin || tool == .spotlight || CGRect(origin: .zero, size: imageSize).contains(p) else { changed(); return }
+        let start = AnnotationGeometry.creationStart(p, tool: tool, imageSize: imageSize, size: Self.lastSize)
+        let annotation = Annotation(tool: tool, start: start, highlighterColor: Self.lastHighlighterColor,
                                     darkBackground: Self.lastHighlighterDarkBackground, inkColor: Self.lastInkColor, size: Self.lastSize)
         highlighterStraight = event.modifierFlags.contains(.shift)
         frozenImageRect = imageRect
@@ -728,7 +729,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
                                     end: CGPoint(x: rect.maxX, y: rect.maxY), text: "入力", leaderTarget: anchor, inkColor: initial.inkColor, size: initial.size)
         case .create(let initial):
             annotation = initial.tool == .highlighter ? (preview?.annotations.first { $0.id == initial.id } ?? initial) : initial
-            annotation.end = AnnotationGeometry.creationPoint(p, from: initial.start, tool: initial.tool, shift: shift, imageSize: imageSize)
+            annotation = AnnotationGeometry.creating(annotation, to: p, shift: shift, imageSize: imageSize)
             if initial.tool == .highlighter {
                 if highlighterStraight { annotation.points = [initial.start, annotation.end] }
                 else { annotation.points.append(annotation.end) }
@@ -977,9 +978,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         for selected in document.annotations where displayedSelection.contains(selected.id) && !isEditingText {
             let style = style(for: selected)
             let bounds = document.bounds(of: selected, style: style)
-            var inkBounds = selected.tool == .spotlight
-                ? bounds.insetBy(dx: -style.lineWidth - style.edge * 2, dy: -style.lineWidth - style.edge * 2)
-                : AnnotationGeometry.inkBounds(of: selected, bounds: bounds, style: style)
+            var inkBounds = AnnotationGeometry.inkBounds(of: selected, bounds: bounds, style: style)
             if selected.tool == .highlighter {
                 inkBounds = bounds.insetBy(dx: -style.highlighterWidth * 0.8, dy: -style.highlighterWidth * 0.8)
                     .intersection(CGRect(origin: .zero, size: imageSize))

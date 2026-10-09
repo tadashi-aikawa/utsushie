@@ -181,14 +181,15 @@ func annotationPlacementUsesCenterAndToolRestriction(_ tool: AnnotationTool) {
     let outside = Annotation(tool: tool, start: CGPoint(x: -100, y: 200), end: CGPoint(x: -20, y: 280))
     let bounds = document.bounds(of: outside, style: style)
     let placed = AnnotationGeometry.placed(outside, bounds: bounds, imageSize: size)
-    #expect(placed == (tool.allowsMargin ? outside : outside.translated(by: CGPoint(x: -bounds.minX, y: 0))))
+    let inset = style.areaInset(for: tool)
+    #expect(placed == (tool.allowsMargin ? outside : outside.translated(by: CGPoint(x: -bounds.minX + inset, y: 0))))
     if !tool.allowsMargin { #expect(AnnotationDocument(annotations: [outside]).exportLayout(imageSize: size).bounds.size == size) }
     let crossing = Annotation(tool: tool, start: CGPoint(x: -10, y: 200), end: CGPoint(x: 70, y: 280))
     let crossingBounds = document.bounds(of: crossing, style: style)
     let inImage = AnnotationGeometry.placed(crossing, bounds: crossingBounds, imageSize: size)
     if [.arrow, .line].contains(tool) { #expect(inImage == crossing) }
     else if AnnotationGeometry.containsCenter(of: crossingBounds, in: CGRect(origin: .zero, size: size)) {
-        #expect(document.bounds(of: inImage, style: style).minX == 0)
+        #expect(abs(document.bounds(of: inImage, style: style).minX - inset) < 0.000001)
     }
 }
 
@@ -214,7 +215,7 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
     let size = CGSize(width: 960, height: 600)
     let annotation = Annotation(tool: tool, start: CGPoint(x: -100, y: -100), end: CGPoint(x: 1060, y: 700))
     let placed = AnnotationGeometry.placed(annotation, bounds: annotation.rect, imageSize: size)
-    #expect(placed.rect == CGRect(origin: .zero, size: size))
+    #expect(placed.rect == AnnotationGeometry.areaDrawingRect(tool: tool, imageSize: size))
     #expect(AnnotationDocument(annotations: [placed]).exportLayout(imageSize: size).bounds.size == size)
 }
 

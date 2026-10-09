@@ -466,7 +466,9 @@ public enum AnnotationGeometry {
     public static func placed(_ annotation: Annotation, bounds: CGRect, imageSize: CGSize) -> Annotation {
         let image = CGRect(origin: .zero, size: imageSize)
         var result = annotation
-        if ![.arrow, .line].contains(annotation.tool), !annotation.tool.allowsMargin || containsCenter(of: bounds, in: image) {
+        if keepsAreaInside(annotation, imageSize: imageSize) {
+            result = placingArea(annotation, imageSize: imageSize)
+        } else if ![.arrow, .line].contains(annotation.tool), !annotation.tool.allowsMargin || containsCenter(of: bounds, in: image) {
             let x = max(0, min(max(0, imageSize.width - bounds.width), bounds.minX)) - bounds.minX
             let y = max(0, min(max(0, imageSize.height - bounds.height), bounds.minY)) - bounds.minY
             result = result.translated(by: CGPoint(x: x, y: y))
@@ -485,6 +487,7 @@ public enum AnnotationGeometry {
         let style = style.forAnnotation(annotation)
         switch annotation.tool {
         case .rectangle: return bounds.insetBy(dx: -style.lineWidth / 2 - style.edge, dy: -style.lineWidth / 2 - style.edge)
+        case .spotlight: return bounds.insetBy(dx: -style.lineWidth - style.edge * 2, dy: -style.lineWidth - style.edge * 2)
         case .text: return bounds.insetBy(dx: -style.edge, dy: -style.edge)
         case .number: return bounds.insetBy(dx: -style.edge - 3, dy: -style.edge - 3).offsetBy(dx: 0, dy: 1).union(bounds)
         case .line: return bounds.insetBy(dx: -style.lineWidth * 0.75 - style.edge, dy: -style.lineWidth * 0.75 - style.edge)
@@ -499,7 +502,7 @@ public enum AnnotationGeometry {
             let q = CGPoint(x: back.x + sin(angle) * length * 0.45, y: back.y - cos(angle) * length * 0.45)
             let head = CGRect(x: min(b.x, p.x, q.x), y: min(b.y, p.y, q.y), width: max(b.x, p.x, q.x) - min(b.x, p.x, q.x), height: max(b.y, p.y, q.y) - min(b.y, p.y, q.y))
             return bounds.insetBy(dx: -line / 2 - style.edge, dy: -line / 2 - style.edge).union(head.insetBy(dx: -style.edge, dy: -style.edge))
-        case .selection, .spotlight, .mosaic: return bounds
+        case .selection, .mosaic: return bounds
         }
     }
     /// 中心に向かう直線と角丸札の交点。札の中に指す点があれば描かない。

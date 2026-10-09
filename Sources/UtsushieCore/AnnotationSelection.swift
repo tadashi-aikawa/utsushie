@@ -71,7 +71,11 @@ extension AnnotationDocument {
             if delta.y > 0 { movement.y = min(movement.y, max(0, allowed.y)) }
             if delta.y < 0 { movement.y = max(movement.y, min(0, allowed.y)) }
         }
-        return AnnotationDocument(annotations: annotations.map { ids.contains($0.id) ? $0.translated(by: movement) : $0 })
+        return AnnotationDocument(annotations: annotations.map { annotation in
+            guard ids.contains(annotation.id) else { return annotation }
+            let moved = annotation.translated(by: movement)
+            return AnnotationGeometry.placed(moved, bounds: bounds(of: moved, style: style), imageSize: imageSize)
+        })
     }
 }
 
@@ -98,7 +102,10 @@ extension AnnotationGeometry {
     }
 
     public static func creationPoint(_ point: CGPoint, from anchor: CGPoint, tool: AnnotationTool,
-                                     shift: Bool, imageSize: CGSize) -> CGPoint {
+                                     shift: Bool, imageSize: CGSize, size: AnnotationSize = .normal) -> CGPoint {
+        if [.rectangle, .spotlight].contains(tool) {
+            return creating(Annotation(tool: tool, start: anchor, size: size), to: point, shift: shift, imageSize: imageSize).end
+        }
         let point = tool.allowsMargin ? point : clamped(point, to: imageSize)
         guard shift else { return point }
         if [.arrow, .line].contains(tool) { return angleConstrained(point, from: anchor) }
@@ -110,6 +117,12 @@ extension AnnotationGeometry {
 
     public static func resized(_ annotation: Annotation, handle: AnnotationResizeHandle, to point: CGPoint,
                                shift: Bool, imageSize: CGSize) -> Annotation {
+        if [.rectangle, .spotlight].contains(annotation.tool) {
+            var result = resized(annotation, handle: handle, to: point)
+            let corner = [.topLeft, .topRight, .bottomRight, .bottomLeft].contains(handle)
+            if shift && corner { result.end = squareConstrained(point, from: result.start) }
+            return clampingAreaPoints(result, square: shift && corner, imageSize: imageSize)
+        }
         var point = handle == .leaderTarget || !annotation.tool.allowsMargin ? clamped(point, to: imageSize) : point
         if shift {
             switch handle {
@@ -126,13 +139,7 @@ extension AnnotationGeometry {
 
     private static func squareEndpoint(_ point: CGPoint, from anchor: CGPoint, tool: AnnotationTool, imageSize: CGSize) -> CGPoint {
         let endpoint = squareConstrained(point, from: anchor, imageSize: tool.allowsMargin ? nil : imageSize)
-        let rect = Annotation(tool: tool, start: anchor, end: endpoint).rect
-        let side = min(imageSize.width, imageSize.height)
-        // 中心が内側の枠は画像内へ収める。片辺だけ切って正方形を崩さない。
-        guard tool == .rectangle, rect.width > side,
-              containsCenter(of: rect, in: CGRect(origin: .zero, size: imageSize)) else { return endpoint }
-        return CGPoint(x: anchor.x + (endpoint.x < anchor.x ? -side : side),
-                       y: anchor.y + (endpoint.y < anchor.y ? -side : side))
+        return endpoint
     }
 
     public static func segmentIntersects(_ rect: CGRect, from a: CGPoint, to b: CGPoint) -> Bool {

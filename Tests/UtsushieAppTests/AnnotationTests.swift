@@ -797,16 +797,69 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     }
 }
 
-@MainActor @Test func annotationSpotAtImageEdgeUsesExistingMarginWithoutGrowingOne() throws {
+@MainActor @Test func annotationSpotAtImageEdgeKeepsWholeFrameInsideEvenWithExistingMargin() throws {
     let original = try annotationFixture(width: 960, height: 600)
-    let spot = Annotation(tool: .spotlight, start: CGPoint(x: 800, y: 100), end: CGPoint(x: 960, y: 200))
+    let originalSpot = Annotation(tool: .spotlight, start: CGPoint(x: 800, y: 100), end: CGPoint(x: 960, y: 200))
+    let spot = AnnotationGeometry.placed(originalSpot, bounds: originalSpot.rect, imageSize: CGSize(width: 960, height: 600))
     let spotOnly = try AnnotationRenderer.compose(original, document: AnnotationDocument(annotations: [spot]))
     #expect(spotOnly.width == 960 && spotOnly.height == 600)
     let label = Annotation(tool: .text, start: CGPoint(x: 1000, y: 300), end: CGPoint(x: 1100, y: 340))
     let expanded = try AnnotationRenderer.compose(original, document: AnnotationDocument(annotations: [spot, label]))
-    #expect(try pixel(expanded, x: 963, y: 150)[0...2] == [229, 53, 42])
+    #expect(try pixel(expanded, x: 956, y: 150)[0...2] == [229, 53, 42])
+    #expect(try pixel(expanded, x: 963, y: 150) == [243, 235, 218, 255])
     #expect(try pixel(expanded, x: 968, y: 150) == [243, 235, 218, 255])
     #expect(try pixel(expanded, x: 959, y: 150) == [255, 255, 255, 255])
+}
+
+@MainActor @Test(arguments: [AnnotationTool.rectangle, .spotlight], AnnotationSize.allCases)
+func annotationAreaCanvasCreationAndResizeKeepFixedCornerAndVisibleInk(tool: AnnotationTool, size: AnnotationSize) throws {
+    let imageSize = CGSize(width: 400, height: 300)
+    let canvas = AnnotationCanvas(image: try annotationFixture(width: 400, height: 300), document: AnnotationDocument(), tool: tool)
+    let previous = try #require(canvas.annotationSize)
+    defer { canvas.escape(); canvas.applySize(previous) }
+    canvas.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+    canvas.applySize(size)
+    let start = tool == .spotlight ? CGPoint(x: -30, y: -20) : .zero
+    let end = CGPoint(x: 410, y: 310)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: start))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: end))
+    let created = try #require(canvas.document.annotations.first)
+    let area = AnnotationGeometry.areaDrawingRect(tool: tool, imageSize: imageSize, size: size)
+    #expect(abs(created.rect.minX - area.minX) < 0.000001 && abs(created.rect.minY - area.minY) < 0.000001)
+    #expect(abs(created.rect.maxX - area.maxX) < 0.000001 && abs(created.rect.maxY - area.maxY) < 0.000001)
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: end))
+    #expect(canvas.document.annotations.count == 1 && canvas.exportLayout.bounds.size == imageSize)
+    let rendered = try AnnotationRenderer.compose(canvas.original, document: canvas.document)
+    #expect(rendered.width == 400 && rendered.height == 300)
+    // 画像端からの赤い帯が左右で同じ長さになり、外半分が欠けない。
+    let inset = AnnotationStyle(imageSize: imageSize, size: size).areaInset(for: tool)
+    let sampleCount = Int(ceil(inset * 2 + 2))
+    var leftRed = 0, rightRed = 0
+    for x in 0..<sampleCount {
+        let left = try pixel(rendered, x: x, y: 150)
+        let right = try pixel(rendered, x: 399 - x, y: 150)
+        if left[0] > 180 && left[1] < 100 && left[2] < 100 { leftRed += 1 }
+        if right[0] > 180 && right[1] < 100 && right[2] < 100 { rightRed += 1 }
+    }
+    #expect(leftRed > 0 && leftRed == rightRed)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: created.start))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 100, y: 80)))
+    let resized = try #require(canvas.document.annotations.first)
+    #expect(abs(resized.rect.maxX - created.rect.maxX) < 0.000001)
+    #expect(abs(resized.rect.maxY - created.rect.maxY) < 0.000001)
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 100, y: 80)))
+    canvas.undoAnnotation()
+    #expect(canvas.document.annotations.first == created)
+}
+
+@MainActor @Test func annotationMixedSizeSpotFramesKeepHolesClear() throws {
+    let original = try annotationFixture(width: 400, height: 300, patterned: true)
+    let first = Annotation(tool: .spotlight, start: CGPoint(x: 50, y: 50), end: CGPoint(x: 220, y: 200), size: .smallest)
+    let second = Annotation(tool: .spotlight, start: CGPoint(x: 150, y: 100), end: CGPoint(x: 320, y: 250), size: .largest)
+    let rendered = try AnnotationRenderer.compose(original, document: AnnotationDocument(annotations: [first, second]))
+    for point in [CGPoint(x: 160, y: 150), CGPoint(x: 200, y: 100), CGPoint(x: 220, y: 160)] {
+        #expect(try pixel(rendered, x: Int(point.x), y: Int(point.y)) == pixel(original, x: Int(point.x), y: Int(point.y)))
+    }
 }
 
 @MainActor @Test func annotationLeaderHasDotThinLineOuterWhiteEdgeAndCorrectLayer() throws {
