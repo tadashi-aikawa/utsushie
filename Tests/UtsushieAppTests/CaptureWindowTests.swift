@@ -22,10 +22,6 @@ import Testing
     for window in windows.prefix(3) {
         #expect(policy.excludes(windowID: try #require(UInt32(exactly: window.windowNumber))))
     }
-    // 同じ窓を録画時だけ追加する。非録画時のアイコンは通常の窓と同じ扱い。
-    let status = try #require(windows.last)
-    #expect(CaptureWindowExclusion.windows(recordingStatusWindow: status).contains { $0 === status })
-    #expect(!CaptureWindowExclusion.windows().contains { $0 === status })
 }
 
 @MainActor @Test func newCardWaitsForExclusionAndHiddenCardNeverReappears() async throws {

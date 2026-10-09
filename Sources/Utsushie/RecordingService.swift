@@ -12,13 +12,11 @@ final class RecordingService {
     private let stream: SCStream
     private let sink: RecordingSink
     private var excludedWindows: [NSWindow]
-    private let recordingStatusWindow: NSWindow?
     private var filteredWindowIDs: Set<UInt32>
     private var exclusionUpdate: Task<Void, Error>?
 
     static func prepare(request: CaptureRequest, config: VideoConfig, directory: URL,
                         excluding windows: [NSWindow],
-                        recordingStatusWindow: NSWindow?,
                         onStop: @escaping @MainActor @Sendable () -> Void) async throws -> RecordingService {
         let displays = ScreenGeometry.displays
         guard let geometry = VideoGeometry.display(containing: request.rect, displays: displays) else {
@@ -36,8 +34,7 @@ final class RecordingService {
                 throw CaptureError.unavailable("選択したディスプレイが見つかりません")
             }
             filter = SCContentFilter(display: display,
-                excludingWindows: try CaptureWindowExclusion.excludedWindows(in: content, policy: policy,
-                                                                            recordingStatusWindow: recordingStatusWindow))
+                excludingWindows: try CaptureWindowExclusion.excludedWindows(in: content, policy: policy))
             points = rect.size; scale = geometry.scale
         case let .window(id, _):
             guard let window = content.windows.first(where: { $0.windowID == id }),
@@ -72,14 +69,13 @@ final class RecordingService {
         do { try stream.addStreamOutput(sink, type: .screen, sampleHandlerQueue: writer.queue) }
         catch { await writer.abort(); throw error }
         return RecordingService(request: request, displayID: geometry.id, width: size.width, height: size.height,
-                                stream: stream, sink: sink, excludedWindows: windows, recordingStatusWindow: recordingStatusWindow)
+                                stream: stream, sink: sink, excludedWindows: windows)
     }
     private init(request: CaptureRequest, displayID: UInt32, width: Int, height: Int, stream: SCStream,
-                 sink: RecordingSink, excludedWindows: [NSWindow], recordingStatusWindow: NSWindow?) {
+                 sink: RecordingSink, excludedWindows: [NSWindow]) {
         self.request = request; self.displayID = displayID; self.width = width; self.height = height
         self.stream = stream; self.sink = sink
         self.excludedWindows = excludedWindows
-        self.recordingStatusWindow = recordingStatusWindow
         self.filteredWindowIDs = CaptureWindowExclusion.policy(for: excludedWindows).excludedWindowIDs
     }
     /// 編集の完了などで録画中に増えるカードは、フィルターへの追加完了後に表示する。
@@ -93,8 +89,7 @@ final class RecordingService {
             try await previous?.value
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
             let policy = CaptureWindowExclusion.policy(for: excludedWindows)
-            let excluded = try CaptureWindowExclusion.excludedWindows(in: content, policy: policy,
-                                                                    recordingStatusWindow: recordingStatusWindow)
+            let excluded = try CaptureWindowExclusion.excludedWindows(in: content, policy: policy)
             guard excluded.contains(where: { $0.windowID == UInt32(exactly: window.windowNumber) }),
                   let display = content.displays.first(where: { $0.displayID == displayID }) else {
                 throw CaptureError.unavailable("共有カードを録画の対象から外せませんでした")

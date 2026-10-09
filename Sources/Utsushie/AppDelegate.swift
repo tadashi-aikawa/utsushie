@@ -177,13 +177,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordingStartTask = Task {
             var prepared: RecordingService?
             do {
-                // 赤枠とメニューバーの札も開始前に窓番号を確保し、撮影用UIだけを除外する。
+                // 赤枠も開始前に窓番号を確保し、撮影用UIだけを除外する。
                 borderRect = request.rect; recordingBorder.show(rect: request.rect)
-                let excluded = CaptureWindowExclusion.windows(recordingStatusWindow: statusItem.button?.window)
+                let excluded = CaptureWindowExclusion.windows()
                 // 準備中のEscはTaskを取消し、非同期処理の後から録画が始まることを防ぐ。
                 let session = try await RecordingService.prepare(request: request, config: recordingConfig.video,
-                    directory: recordingConfig.outputURL(), excluding: excluded,
-                    recordingStatusWindow: statusItem.button?.window, onStop: { [weak self] in
+                    directory: recordingConfig.outputURL(), excluding: excluded, onStop: { [weak self] in
                         // 古いSCStreamの遅延通知で次の録画を止めない。
                         guard let self, self.recordingToken == token else { return }
                         self.streamStopped()

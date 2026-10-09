@@ -1,5 +1,4 @@
 import Testing
-import CoreGraphics
 @testable import UtsushieCore
 
 @Test func captureExcludesOnlyNamedOwnWindows() {
@@ -20,25 +19,6 @@ func ownEditorSheetPopoverAndMenuCanBeSelectedAtAnyLayer(_ layer: Int) {
     #expect(policy.canSelect(windowID: 100, processID: 42, layer: layer, alpha: 1))
     #expect(!policy.canSelect(windowID: 100, processID: 42, layer: layer, alpha: 0))
     #expect(!policy.canSelect(windowID: 10, processID: 42, layer: layer, alpha: 1))
-}
-
-@Test func hostedRecordingStatusMatchesItsOwnFrameOnly() {
-    // macOS 26の使い捨てNSStatusItemとSCShareableContentから得た実枠。
-    let status = CGRect(x: 1056, y: 0, width: 38, height: 39)
-    let hosted = CGRect(x: 1057, y: 1, width: 36, height: 37)
-    func matches(_ frame: CGRect, layer: Int = 25, bundle: String? = "com.apple.controlcenter") -> Bool {
-        CaptureWindowPolicy.matchesHostedStatusWindow(frame: frame, layer: layer, bundleIdentifier: bundle,
-                                                      statusFrame: status, statusBarLayer: 25)
-    }
-    #expect(matches(hosted))
-    #expect(matches(status))
-    #expect(!matches(hosted.offsetBy(dx: 36, dy: 0)))
-    #expect(!matches(CGRect(x: 0, y: 0, width: 1800, height: 39)))
-    #expect(!matches(hosted, layer: 24))
-    #expect(!matches(hosted, bundle: "com.apple.systemuiserver"))
-    #expect(!matches(hosted, bundle: nil))
-    #expect(!CaptureWindowPolicy.matchesHostedStatusWindow(frame: .zero, layer: 25,
-        bundleIdentifier: "com.apple.controlcenter", statusFrame: .zero, statusBarLayer: 25))
 }
 
 @Test func otherApplicationsKeepNormalWindowSelectionRules() {
