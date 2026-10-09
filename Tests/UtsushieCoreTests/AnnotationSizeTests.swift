@@ -65,7 +65,8 @@ func annotationSizeScalesAllInkMetricsOnly(_ size: AnnotationSize) {
     #expect(result.rect == CGRect(x: 80, y: 90, width: 140, height: 60))
 }
 
-@Test func annotationSizeCopiesAndLegacyDecodeRetainDefaultsAndHistory() throws {
+@Test func annotationSizeCopiesKeepSizeAndDefaultIsNormal() {
+    #expect(Annotation(tool: .number, start: .zero).size == .normal)
     let annotation = Annotation(tool: .number, start: CGPoint(x: 100, y: 100), size: .largest)
     var document = AnnotationDocument(annotations: [annotation])
     var clipboard = AnnotationClipboard()
@@ -74,17 +75,6 @@ func annotationSizeScalesAllInkMetricsOnly(_ size: AnnotationSize) {
     #expect(document.annotations.filter { pasted.contains($0.id) }.allSatisfy { $0.size == .largest })
     let duplicated = document.duplicate([annotation.id], imageSize: CGSize(width: 960, height: 600))
     #expect(document.annotations.filter { duplicated.contains($0.id) }.allSatisfy { $0.size == .largest })
-    let decoder = JSONDecoder(), encoder = JSONEncoder()
-    var legacy = try #require(JSONSerialization.jsonObject(with: encoder.encode(annotation)) as? [String: Any])
-    legacy.removeValue(forKey: "size")
-    let decoded = try decoder.decode(Annotation.self, from: JSONSerialization.data(withJSONObject: legacy))
-    #expect(decoded.size == .normal)
-    var history = AnnotationHistory(AnnotationDocument(annotations: [decoded]))
-    history.commit(document)
-    var restored = try decoder.decode(AnnotationHistory.self, from: encoder.encode(history))
-    #expect(restored.document == document)
-    restored.undo(); #expect(restored.document.annotations[0].size == .normal)
-    restored.redo(); #expect(restored.document == document)
 }
 
 @Test func annotationSizeHitSelectionAndExportUseEachAnnotationsStyle() {

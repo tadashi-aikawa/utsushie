@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 
-public enum AnnotationTool: String, CaseIterable, Codable, Sendable {
+public enum AnnotationTool: String, CaseIterable, Sendable {
     case selection, rectangle, spotlight, text, number, arrow, line, highlighter, mosaic
     public var label: String {
         switch self {
@@ -67,7 +67,7 @@ public enum ColorCycleDirection: Int, Sendable {
     }
 }
 
-public enum InkColor: String, CaseIterable, Codable, Sendable {
+public enum InkColor: String, CaseIterable, Sendable {
     case red, orange, green, indigo, purple, pink, black, white
 
     public var label: String {
@@ -115,7 +115,7 @@ public enum InkColor: String, CaseIterable, Codable, Sendable {
     }
 }
 
-public enum HighlighterColor: String, CaseIterable, Codable, Sendable {
+public enum HighlighterColor: String, CaseIterable, Sendable {
     case yellow, cyan, pink, green
 
     public var label: String {
@@ -164,7 +164,7 @@ public enum HighlighterAction: Equatable, Sendable {
 }
 
 /// 注釈だけは画像の左上原点・ピクセル座標。画面座標モデルとは混ぜない。
-public struct Annotation: Equatable, Codable, Sendable, Identifiable {
+public struct Annotation: Equatable, Sendable, Identifiable {
     public let id: UUID
     public var tool: AnnotationTool
     public var start: CGPoint
@@ -185,21 +185,6 @@ public struct Annotation: Equatable, Codable, Sendable, Identifiable {
         self.darkBackground = tool == .highlighter && darkBackground
         self.inkColor = tool.usesInkColor ? inkColor : .red
         self.size = tool.usesSize ? size : .normal
-    }
-    private enum CodingKeys: String, CodingKey {
-        case id, tool, start, end, text, leaderTarget, points, highlighterColor, darkBackground, inkColor, size
-    }
-    public init(from decoder: any Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(id: values.decode(UUID.self, forKey: .id), tool: values.decode(AnnotationTool.self, forKey: .tool),
-                      start: values.decode(CGPoint.self, forKey: .start), end: values.decodeIfPresent(CGPoint.self, forKey: .end),
-                      text: values.decodeIfPresent(String.self, forKey: .text) ?? "",
-                      leaderTarget: values.decodeIfPresent(CGPoint.self, forKey: .leaderTarget),
-                      points: values.decodeIfPresent([CGPoint].self, forKey: .points) ?? [],
-                      highlighterColor: values.decodeIfPresent(HighlighterColor.self, forKey: .highlighterColor) ?? .yellow,
-                      darkBackground: values.decodeIfPresent(Bool.self, forKey: .darkBackground) ?? false,
-                      inkColor: values.decodeIfPresent(InkColor.self, forKey: .inkColor) ?? .red,
-                      size: values.decodeIfPresent(AnnotationSize.self, forKey: .size) ?? .normal)
     }
     public var rect: CGRect {
         let vertices = tool == .highlighter ? points : [start, end]
@@ -253,7 +238,7 @@ public struct AnnotationStyle: Equatable, Sendable {
     }
 }
 
-public struct AnnotationDocument: Equatable, Codable, Sendable {
+public struct AnnotationDocument: Equatable, Sendable {
     public var annotations: [Annotation]
     public init(annotations: [Annotation] = []) { self.annotations = annotations }
     public var nextNumber: Int { annotations.filter { $0.tool == .number }.count + 1 }
@@ -530,7 +515,7 @@ public enum AnnotationGeometry {
     }
 }
 
-public struct AnnotationHistory: Codable, Sendable {
+public struct AnnotationHistory: Sendable {
     public private(set) var document: AnnotationDocument
     private var past: [AnnotationDocument] = []
     private var future: [AnnotationDocument] = []

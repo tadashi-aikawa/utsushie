@@ -1,6 +1,6 @@
 import Foundation
 
-public enum AnnotationSize: Int, CaseIterable, Codable, Sendable {
+public enum AnnotationSize: Int, CaseIterable, Sendable {
     case smallest, small, normal, large, largest
 
     public var multiplier: Double {
