@@ -105,6 +105,8 @@ final class OverlayController {
     }
     func mouseMoved() {
         guard isVisible else { return }
+        // flagsChangedを取りこぼしても、移動・別画面への進入で現在の⇧状態へ戻す。
+        state.modifiersChanged(shift: NSEvent.modifierFlags.contains(.shift))
         // cursorUpdateとカーソル矩形はキーウィンドウで有効になる。
         // 別画面へ移ったら非アクティブのまま受け手を移す。ドラッグの配送先は変えない。
         if NSEvent.pressedMouseButtons & 1 == 0,
