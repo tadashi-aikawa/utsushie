@@ -19,6 +19,10 @@ public enum AnnotationToolbarPresentation {
     public static let minimumWidth: CGFloat = 1040
     public static let aiDisabled = "AIで隠すは、設定ファイルで ai = true にすると使えます"
 
+    public static func showsSizeControls(tool: AnnotationTool, selectedTools: [AnnotationTool]) -> Bool {
+        colorControls(tool: tool, selectedTools: selectedTools) != .none
+    }
+
     public static func colorControls(tool: AnnotationTool, selectedTools: [AnnotationTool]) -> AnnotationColorControls {
         if tool == .highlighter { return .highlighter }
         if tool.usesInkColor { return .ink }

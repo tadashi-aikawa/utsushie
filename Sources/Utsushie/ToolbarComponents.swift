@@ -300,6 +300,68 @@ final class InkControlsView: NSView {
 }
 
 @MainActor
+final class AnnotationSizeButton: NSButton {
+    let size: AnnotationSize
+    override var needsPanelToBecomeKey: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    init(size: AnnotationSize) {
+        self.size = size
+        super.init(frame: .zero)
+        title = ""; isBordered = false; setButtonType(.momentaryPushIn)
+        toolTip = "大きさ ×\(size.multiplier)"
+        setAccessibilityLabel(toolTip)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func draw(_ dirtyRect: NSRect) {
+        let diameter = size.dotDiameter
+        let rect = CGRect(x: bounds.midX - diameter / 2, y: bounds.midY - diameter / 2, width: diameter, height: diameter)
+        (state == .on ? NSColor.white : UITheme.key).withAlphaComponent(isEnabled ? 1 : 0.35).setFill()
+        NSBezierPath(ovalIn: rect).fill()
+        if state == .on || isHighlighted {
+            let ring = NSBezierPath(ovalIn: rect.insetBy(dx: -2.5, dy: -2.5))
+            NSColor.white.setStroke(); ring.lineWidth = 1.5; ring.stroke()
+        }
+    }
+}
+
+@MainActor
+final class AnnotationSizeControlsView: NSView {
+    let sizeButtons: [AnnotationSize: AnnotationSizeButton]
+    let label = NSTextField(labelWithString: "大きさ")
+    let keys = ToolbarHintView()
+    let naturalWidth: CGFloat = 236
+    override var isFlipped: Bool { true }
+    init() {
+        sizeButtons = Dictionary(uniqueKeysWithValues: AnnotationSize.allCases.map { ($0, AnnotationSizeButton(size: $0)) })
+        super.init(frame: .zero)
+        isHidden = true
+        label.font = .systemFont(ofSize: 11.5, weight: .medium); label.textColor = UITheme.key
+        keys.hint = ToolbarHint("[ ]", keys: ["[", "]"])
+        addSubview(label); addSubview(keys)
+        AnnotationSize.allCases.forEach { addSubview(sizeButtons[$0]!) }
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func update(size: AnnotationSize?, enabled: Bool) {
+        for (choice, button) in sizeButtons {
+            button.state = choice == size ? .on : .off
+            button.isEnabled = enabled; button.needsDisplay = true
+        }
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.white.withAlphaComponent(0.2).setFill()
+        CGRect(x: 0, y: 4, width: 1, height: 17).fill()
+    }
+    override func layout() {
+        super.layout()
+        label.frame = CGRect(x: 12, y: 4, width: 42, height: 18)
+        for (index, size) in AnnotationSize.allCases.enumerated() {
+            sizeButtons[size]?.frame = CGRect(x: 56 + CGFloat(index) * 26, y: 0, width: 26, height: 25)
+        }
+        keys.frame = CGRect(x: 192, y: 0, width: 44, height: 25)
+    }
+}
+
+@MainActor
 final class AnnotationToolbarView: NSView {
     let toolButtons: [AnnotationTool: ToolbarButton]
     let aiButton: ToolbarButton
@@ -310,6 +372,7 @@ final class AnnotationToolbarView: NSView {
     let hintView = ToolbarHintView()
     let highlighterControls = HighlighterControlsView()
     let inkControls = InkControlsView()
+    let sizeControls = AnnotationSizeControlsView()
     let dimensions = NSTextField(labelWithString: "")
     let trays: [ToolbarTray]
     var minimumWidth: CGFloat {
@@ -351,7 +414,7 @@ final class AnnotationToolbarView: NSView {
         dimensions.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
         dimensions.textColor = UITheme.key
         trays.forEach { addSubview($0) }
-        [undoButton, redoButton, finishButton, zoomButton, hintView, highlighterControls, inkControls, dimensions].forEach { addSubview($0) }
+        [undoButton, redoButton, finishButton, zoomButton, hintView, highlighterControls, inkControls, sizeControls, dimensions].forEach { addSubview($0) }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func draw(_ dirtyRect: NSRect) {
@@ -381,5 +444,8 @@ final class AnnotationToolbarView: NSView {
         highlighterControls.needsLayout = true
         inkControls.frame = CGRect(x: 16, y: 46, width: inkControls.naturalWidth, height: 25)
         inkControls.needsLayout = true
+        let colorsRight = highlighterControls.isHidden ? inkControls.frame.maxX : highlighterControls.frame.maxX
+        sizeControls.frame = CGRect(x: colorsRight + 10, y: 46, width: sizeControls.naturalWidth, height: 25)
+        sizeControls.needsLayout = true
     }
 }

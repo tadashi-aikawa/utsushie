@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 
-public enum AnnotationTool: String, CaseIterable, Sendable {
+public enum AnnotationTool: String, CaseIterable, Codable, Sendable {
     case selection, rectangle, spotlight, text, number, arrow, line, highlighter, mosaic
     public var label: String {
         switch self {
@@ -55,6 +55,7 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     }
     public var allowsMargin: Bool { [.text, .number, .arrow, .line, .rectangle].contains(self) }
     public var usesInkColor: Bool { [.rectangle, .spotlight, .arrow, .line, .text, .number].contains(self) }
+    public var usesSize: Bool { self != .selection && self != .mosaic }
 }
 
 public enum ColorCycleDirection: Int, Sendable {
@@ -66,7 +67,7 @@ public enum ColorCycleDirection: Int, Sendable {
     }
 }
 
-public enum InkColor: String, CaseIterable, Sendable {
+public enum InkColor: String, CaseIterable, Codable, Sendable {
     case red, orange, green, indigo, purple, pink, black, white
 
     public var label: String {
@@ -114,7 +115,7 @@ public enum InkColor: String, CaseIterable, Sendable {
     }
 }
 
-public enum HighlighterColor: String, CaseIterable, Sendable {
+public enum HighlighterColor: String, CaseIterable, Codable, Sendable {
     case yellow, cyan, pink, green
 
     public var label: String {
@@ -163,7 +164,7 @@ public enum HighlighterAction: Equatable, Sendable {
 }
 
 /// 注釈だけは画像の左上原点・ピクセル座標。画面座標モデルとは混ぜない。
-public struct Annotation: Equatable, Sendable, Identifiable {
+public struct Annotation: Equatable, Codable, Sendable, Identifiable {
     public let id: UUID
     public var tool: AnnotationTool
     public var start: CGPoint
@@ -174,14 +175,31 @@ public struct Annotation: Equatable, Sendable, Identifiable {
     public var highlighterColor: HighlighterColor
     public var darkBackground: Bool
     public var inkColor: InkColor
+    public var size: AnnotationSize
     public init(id: UUID = UUID(), tool: AnnotationTool, start: CGPoint, end: CGPoint? = nil, text: String = "", leaderTarget: CGPoint? = nil, points: [CGPoint] = [],
-                highlighterColor: HighlighterColor = .yellow, darkBackground: Bool = false, inkColor: InkColor = .red) {
+                highlighterColor: HighlighterColor = .yellow, darkBackground: Bool = false, inkColor: InkColor = .red, size: AnnotationSize = .normal) {
         self.id = id; self.tool = tool; self.start = start; self.end = end ?? start; self.text = text
         self.leaderTarget = [.text, .number].contains(tool) ? leaderTarget : nil
         self.points = tool == .highlighter ? (points.isEmpty ? [start, end ?? start] : points) : []
         self.highlighterColor = tool == .highlighter ? highlighterColor : .yellow
         self.darkBackground = tool == .highlighter && darkBackground
         self.inkColor = tool.usesInkColor ? inkColor : .red
+        self.size = tool.usesSize ? size : .normal
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id, tool, start, end, text, leaderTarget, points, highlighterColor, darkBackground, inkColor, size
+    }
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(id: values.decode(UUID.self, forKey: .id), tool: values.decode(AnnotationTool.self, forKey: .tool),
+                      start: values.decode(CGPoint.self, forKey: .start), end: values.decodeIfPresent(CGPoint.self, forKey: .end),
+                      text: values.decodeIfPresent(String.self, forKey: .text) ?? "",
+                      leaderTarget: values.decodeIfPresent(CGPoint.self, forKey: .leaderTarget),
+                      points: values.decodeIfPresent([CGPoint].self, forKey: .points) ?? [],
+                      highlighterColor: values.decodeIfPresent(HighlighterColor.self, forKey: .highlighterColor) ?? .yellow,
+                      darkBackground: values.decodeIfPresent(Bool.self, forKey: .darkBackground) ?? false,
+                      inkColor: values.decodeIfPresent(InkColor.self, forKey: .inkColor) ?? .red,
+                      size: values.decodeIfPresent(AnnotationSize.self, forKey: .size) ?? .normal)
     }
     public var rect: CGRect {
         let vertices = tool == .highlighter ? points : [start, end]
@@ -200,6 +218,7 @@ public struct Annotation: Equatable, Sendable, Identifiable {
 }
 
 public struct AnnotationStyle: Equatable, Sendable {
+    public let imageSize: CGSize
     public let fontSize: Double
     public let lineWidth: Double
     public let numberDiameter: Double
@@ -211,17 +230,22 @@ public struct AnnotationStyle: Equatable, Sendable {
     public let marginPadding: Double
     public let leaderDotDiameter: Double
     public var highlighterWidth: Double { lineWidth * 5 }
-    public init(imageSize: CGSize) {
+    public init(imageSize: CGSize, size: AnnotationSize = .normal) {
+        self.imageSize = imageSize
         let length = max(imageSize.width, imageSize.height)
-        fontSize = max(16, length / 50)
-        lineWidth = max(3, length / 400)
+        fontSize = max(16, length / 50) * size.multiplier
+        lineWidth = max(3, length / 400) * size.multiplier
         numberDiameter = fontSize * 1.5
         blockSize = max(8, Int((length / 60).rounded()))
         let factor = lineWidth / 3
         edge = 2 * factor; radius = 6 * factor
         horizontalPadding = 11 * factor; verticalPadding = 6 * factor
         marginPadding = length / 40
-        leaderDotDiameter = length * 9 / 960
+        leaderDotDiameter = length * 9 / 960 * size.multiplier
+    }
+    /// すでに倍率付きのスタイルを渡しても二重に拡大しない。
+    public func forAnnotation(_ annotation: Annotation) -> AnnotationStyle {
+        AnnotationStyle(imageSize: imageSize, size: annotation.size)
     }
     public func numberRect(at point: CGPoint, number: Int) -> CGRect {
         let width = numberDiameter + Double(max(0, String(number).count - 1)) * fontSize * 0.6
@@ -229,7 +253,7 @@ public struct AnnotationStyle: Equatable, Sendable {
     }
 }
 
-public struct AnnotationDocument: Equatable, Sendable {
+public struct AnnotationDocument: Equatable, Codable, Sendable {
     public var annotations: [Annotation]
     public init(annotations: [Annotation] = []) { self.annotations = annotations }
     public var nextNumber: Int { annotations.filter { $0.tool == .number }.count + 1 }
@@ -248,23 +272,28 @@ public struct AnnotationDocument: Equatable, Sendable {
     }
     public mutating func remove(_ id: UUID) { annotations.removeAll { $0.id == id } }
     public func bounds(of annotation: Annotation, style: AnnotationStyle) -> CGRect {
-        annotation.tool == .number ? style.numberRect(at: annotation.start, number: number(for: annotation.id) ?? nextNumber) : annotation.rect
+        let style = style.forAnnotation(annotation)
+        return annotation.tool == .number ? style.numberRect(at: annotation.start, number: number(for: annotation.id) ?? nextNumber) : annotation.rect
     }
     public func leaderSegment(for annotation: Annotation, style: AnnotationStyle) -> (target: CGPoint, labelEdge: CGPoint)? {
+        let style = style.forAnnotation(annotation)
         let rect = bounds(of: annotation, style: style)
         return AnnotationGeometry.leaderSegment(for: annotation, radius: annotation.tool == .number ? rect.height / 2 : style.radius, bounds: rect)
     }
     public func hit(at point: CGPoint, style: AnnotationStyle, tolerance: Double, includeAreaInterior: Bool = false) -> UUID? {
         // 札を線より先に判定する。別の札の上を通る線が入力を奪わない。
-        if let label = ordered.reversed().first(where: {
-            [.text, .number].contains($0.tool) && bounds(of: $0, style: style).insetBy(dx: -style.edge, dy: -style.edge).contains(point)
+        if let label = ordered.reversed().first(where: { annotation in
+            let style = style.forAnnotation(annotation)
+            return [.text, .number].contains(annotation.tool) && bounds(of: annotation, style: style).insetBy(dx: -style.edge, dy: -style.edge).contains(point)
         }) { return label.id }
         if let leader = ordered.reversed().first(where: { annotation in
+            let style = style.forAnnotation(annotation)
             guard let segment = leaderSegment(for: annotation, style: style) else { return false }
             return AnnotationGeometry.distance(point, toSegmentFrom: segment.target, to: segment.labelEdge) <= max(tolerance, style.lineWidth / 2 + style.edge)
                 || hypot(point.x - segment.target.x, point.y - segment.target.y) <= max(tolerance, style.leaderDotDiameter / 2 + style.edge)
         }) { return leader.id }
         return ordered.reversed().first { annotation in
+            let style = style.forAnnotation(annotation)
             if [.arrow, .line].contains(annotation.tool) {
                 return AnnotationGeometry.distance(point, toSegmentFrom: annotation.start, to: annotation.end) <= max(tolerance, style.lineWidth * 0.75 + style.edge)
             }
@@ -289,6 +318,7 @@ public struct AnnotationDocument: Equatable, Sendable {
         }
         if let id = hit(at: point, style: style, tolerance: tolerance, includeAreaInterior: tool == .selection || selected.count > 1),
            let annotation = annotations.first(where: { $0.id == id }) {
+            let style = style.forAnnotation(annotation)
             let band: Double
             if annotation.tool == .spotlight { band = max(tolerance, style.lineWidth + style.edge * 2) }
             else if [.rectangle, .mosaic].contains(annotation.tool) { band = max(tolerance, style.lineWidth / 2 + style.edge) }
@@ -306,9 +336,9 @@ public struct AnnotationDocument: Equatable, Sendable {
     /// 余白は保存せず、外に中心がある札・枠と、外に端点がある矢印から毎回求める。
     public func exportLayout(imageSize: CGSize) -> AnnotationExportLayout {
         let image = CGRect(origin: .zero, size: imageSize)
-        let style = AnnotationStyle(imageSize: imageSize)
         var minX = image.minX, minY = image.minY, maxX = image.maxX, maxY = image.maxY
         for annotation in annotations where annotation.tool.allowsMargin {
+            let style = AnnotationStyle(imageSize: imageSize, size: annotation.size)
             let rect = bounds(of: annotation, style: style)
             let isOutside = [.arrow, .line].contains(annotation.tool)
                 ? !AnnotationGeometry.contains(annotation.start, in: image) || !AnnotationGeometry.contains(annotation.end, in: image)
@@ -452,6 +482,7 @@ public enum AnnotationGeometry {
         return result
     }
     public static func inkBounds(of annotation: Annotation, bounds: CGRect, style: AnnotationStyle) -> CGRect {
+        let style = style.forAnnotation(annotation)
         switch annotation.tool {
         case .rectangle: return bounds.insetBy(dx: -style.lineWidth / 2 - style.edge, dy: -style.lineWidth / 2 - style.edge)
         case .text: return bounds.insetBy(dx: -style.edge, dy: -style.edge)
@@ -496,7 +527,7 @@ public enum AnnotationGeometry {
     }
 }
 
-public struct AnnotationHistory: Sendable {
+public struct AnnotationHistory: Codable, Sendable {
     public private(set) var document: AnnotationDocument
     private var past: [AnnotationDocument] = []
     private var future: [AnnotationDocument] = []

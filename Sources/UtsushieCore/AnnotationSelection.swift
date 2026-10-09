@@ -36,6 +36,7 @@ extension AnnotationDocument {
     /// 選択は包含でなく交差。細い線は外接矩形の空白部分を選ばない。
     public func intersecting(_ rect: CGRect, style: AnnotationStyle) -> Set<UUID> {
         Set(annotations.filter { annotation in
+            let style = style.forAnnotation(annotation)
             if let leader = leaderSegment(for: annotation, style: style),
                AnnotationGeometry.segmentIntersects(rect.insetBy(dx: -style.lineWidth / 2 - style.edge,
                                                                 dy: -style.lineWidth / 2 - style.edge),
@@ -150,6 +151,7 @@ extension AnnotationGeometry {
     }
 
     static func arrowHead(_ annotation: Annotation, style: AnnotationStyle) -> CGPath {
+        let style = style.forAnnotation(annotation)
         let a = annotation.start, b = annotation.end
         let angle = atan2(b.y - a.y, b.x - a.x)
         let length = max(style.lineWidth * 6, style.fontSize * 0.9)

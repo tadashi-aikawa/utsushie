@@ -42,6 +42,7 @@ enum AnnotationRenderer {
             curtain.setBlendMode(.clear)
             // 個別にclearすることで穴の和集合になる。even-oddでは重なった穴が暗くなる。
             for spot in spots {
+                let style = style.forAnnotation(spot)
                 curtain.addPath(CGPath(roundedRect: spot.rect, cornerWidth: style.radius, cornerHeight: style.radius, transform: nil))
                 curtain.fillPath()
             }
@@ -84,21 +85,23 @@ enum AnnotationRenderer {
     private static func drawSpotFrames(_ spots: [Annotation], style: AnnotationStyle, context: CGContext) {
         guard !spots.isEmpty else { return }
         func path(_ spot: Annotation, expansion: Double) -> CGPath {
+            let style = style.forAnnotation(spot)
             let radius = min(style.radius, min(spot.rect.width, spot.rect.height) / 2) + expansion
             return CGPath(roundedRect: spot.rect.insetBy(dx: -expansion, dy: -expansion), cornerWidth: radius, cornerHeight: radius, transform: nil)
         }
-        func union(expansion: Double) -> CGPath {
+        func union(expansion: (AnnotationStyle) -> Double) -> CGPath {
             spots.reduce(CGMutablePath() as CGPath) { result, spot in
-                result.union(path(spot, expansion: expansion), using: .winding)
+                result.union(path(spot, expansion: expansion(style.forAnnotation(spot))), using: .winding)
             }
         }
         // 縁・インクの帯は全穴の和集合から求める。色が違っても隣の穴や帯へ縁を重ねない。
-        let holes = union(expansion: 0)
-        let inner = union(expansion: style.edge)
-        let middle = union(expansion: style.edge + style.lineWidth)
+        let holes = union { _ in 0 }
+        let inner = union { $0.edge }
+        let middle = union { $0.edge + $0.lineWidth }
         context.saveGState()
         for outer in [true, false] {
             for spot in spots {
+                let style = style.forAnnotation(spot)
                 let band = outer
                     ? path(spot, expansion: style.lineWidth + style.edge * 2).subtracting(middle, using: .winding)
                         .union(path(spot, expansion: style.edge).subtracting(holes, using: .winding), using: .winding)
@@ -110,6 +113,7 @@ enum AnnotationRenderer {
         context.restoreGState()
     }
     private static func drawLeader(_ annotation: Annotation, document: AnnotationDocument, style: AnnotationStyle, context: CGContext) {
+        let style = style.forAnnotation(annotation)
         guard let segment = document.leaderSegment(for: annotation, style: style) else { return }
         context.saveGState()
         defer { context.restoreGState() }
@@ -152,6 +156,7 @@ enum AnnotationRenderer {
         }
     }
     private static func draw(_ annotation: Annotation, document: AnnotationDocument, style: AnnotationStyle, context: CGContext) {
+        let style = style.forAnnotation(annotation)
         context.saveGState()
         defer { context.restoreGState() }
         switch annotation.tool {

@@ -285,6 +285,74 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
         windowNumber: 0, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: repeating, keyCode: keyCode))
 }
 
+@MainActor @Test func annotationSizeKeysRememberDefaultAcrossToolsAndRespectTextInput() throws {
+    let canvas = AnnotationCanvas(image: try annotationFixture(width: 960, height: 600), document: AnnotationDocument(), tool: .number)
+    canvas.frame = CGRect(x: 0, y: 0, width: 1100, height: 800)
+    let previous = try #require(canvas.annotationSize)
+    defer { canvas.commitText(); canvas.escape(); canvas.tool = .number; canvas.applySize(previous) }
+    canvas.applySize(.normal)
+    func sizeKey(_ keyCode: UInt16, keyboardType: Int64) throws -> NSEvent {
+        let cg = try #require(CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true))
+        cg.setIntegerValueField(.keyboardEventKeyboardType, value: keyboardType)
+        return try #require(NSEvent(cgEvent: cg))
+    }
+    #expect(canvas.handleSizeKey(try sizeKey(30, keyboardType: 40))) // ANSI ]
+    #expect(canvas.annotationSize == .large)
+    #expect(canvas.handleSizeKey(try sizeKey(30, keyboardType: 42))) // JIS [
+    #expect(canvas.annotationSize == .normal)
+    #expect(canvas.handleSizeKey(try sizeKey(42, keyboardType: 42))) // JIS ]
+    #expect(canvas.annotationSize == .large)
+    #expect(!canvas.history.canUndo)
+    for flags: NSEvent.ModifierFlags in [.command, .shift, .option, .control] {
+        let event = try sizeKey(30, keyboardType: 40)
+        let cg = try #require(event.cgEvent)
+        cg.flags = CGEventFlags(rawValue: UInt64(flags.rawValue))
+        let modified = try #require(NSEvent(cgEvent: cg))
+        #expect(!canvas.handleSizeKey(modified))
+    }
+    let reopened = AnnotationCanvas(image: canvas.original, document: AnnotationDocument(), tool: .highlighter)
+    #expect(reopened.annotationSize == .large)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 100, y: 100)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 100, y: 100)))
+    #expect(canvas.document.annotations[0].size == .large)
+    canvas.applySize(.largest)
+    #expect(canvas.document.annotations[0].size == .largest)
+    canvas.undoAnnotation(); #expect(canvas.document.annotations[0].size == .large)
+    canvas.tool = .text
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 300, y: 200)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 300, y: 200)))
+    let input = try #require(canvas.subviews.compactMap { $0 as? NSTextView }.first)
+    let font = try #require(input.font)
+    #expect(abs(font.pointSize - AnnotationStyle(imageSize: CGSize(width: 960, height: 600), size: .largest).fontSize * canvas.displayScale) < 0.00001)
+    #expect(!canvas.handleSizeKey(try sizeKey(30, keyboardType: 40)))
+    input.string = "文字"
+    canvas.commitText()
+    let text = try #require(canvas.document.annotations.last)
+    let measured = AnnotationRenderer.textSize(text.text, style: AnnotationStyle(imageSize: CGSize(width: 960, height: 600), size: .largest))
+    #expect(text.rect.size == measured)
+    canvas.applySize(.small)
+    let changed = try #require(canvas.document.annotations.last)
+    let expected = AnnotationRenderer.textSize(text.text, style: AnnotationStyle(imageSize: CGSize(width: 960, height: 600), size: .small))
+    #expect(abs(changed.rect.width - expected.width) < 0.000001)
+    #expect(abs(changed.rect.height - expected.height) < 0.000001)
+}
+
+@MainActor @Test func annotationSizeControlsFitMinimumToolbarAndClickChangesDefault() throws {
+    let editor = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil)
+    let old = try #require(editor.canvas.annotationSize)
+    defer { editor.canvas.tool = .number; editor.canvas.applySize(old) }
+    editor.toolbar.frame.size = CGSize(width: 1040, height: 75)
+    for tool in [AnnotationTool.rectangle, .highlighter] {
+        editor.canvas.tool = tool; editor.canvas.onChange?()
+        editor.toolbar.layout()
+        #expect(!editor.toolbar.sizeControls.isHidden)
+        #expect(editor.toolbar.sizeControls.frame.maxX < editor.toolbar.dimensions.frame.minX)
+        let button = try #require(editor.toolbar.sizeControls.sizeButtons[.smallest])
+        button.performClick(nil)
+        #expect(editor.canvas.annotationSize == .smallest && button.state == .on)
+    }
+}
+
 @MainActor @Test func annotationShiftClickMarqueeGroupMoveDeleteAndClipboard() throws {
     let a = Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 50, y: 50))
     let b = Annotation(tool: .number, start: CGPoint(x: 100, y: 50))
