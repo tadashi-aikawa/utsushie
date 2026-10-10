@@ -166,7 +166,8 @@ enum AnnotationRenderer {
             // 太い線の端も元画像内で切る。余白へ蛍光色を描かない。
             context.setLineCap(.round); context.setLineJoin(.round)
             context.setBlendMode(annotation.darkBackground ? .screen : .multiply)
-            context.setStrokeColor(UITheme.highlighter(annotation.highlighterColor).cgColor)
+            let color = UITheme.highlighter(annotation.highlighterColor)
+            context.setStrokeColor((annotation.darkBackground ? color.withAlphaComponent(0.75) : color).cgColor)
             context.setLineWidth(style.highlighterWidth)
             context.move(to: first)
             for point in annotation.points.dropFirst() { context.addLine(to: point) }

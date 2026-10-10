@@ -503,23 +503,31 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     #expect(try pixel(image, x: 80, y: 60) == [229, 53, 42, 255])
 }
 
-@MainActor @Test func annotationHighlighterMultipliesWhiteAndPreservesBlack() throws {
+@MainActor @Test(arguments: HighlighterColor.allCases) func annotationHighlighterMultipliesWhiteAt90PercentAndPreservesBlack(color: HighlighterColor) throws {
     let source = try AnnotationRenderer.bitmap(width: 160, height: 100)
     source.setFillColor(NSColor.white.cgColor)
     source.fill(CGRect(x: 0, y: 0, width: 160, height: 100))
     source.setFillColor(NSColor.black.cgColor)
     source.fill(CGRect(x: 70, y: 0, width: 20, height: 100))
     let original = try #require(source.makeImage())
-    let pen = Annotation(tool: .highlighter, start: CGPoint(x: 5, y: 50), end: CGPoint(x: 150, y: 50))
+    let pen = Annotation(tool: .highlighter, start: CGPoint(x: 5, y: 50), end: CGPoint(x: 150, y: 50), highlighterColor: color)
     let image = try AnnotationRenderer.compose(original, document: AnnotationDocument(annotations: [pen]))
-    let yellow = try pixel(image, x: 40, y: 50)
-    #expect(yellow[0] == 255 && abs(yellow[1] - 243) <= 1 && abs(yellow[2] - 26) <= 1 && yellow[3] == 255)
+    let expected: [Int]
+    switch color {
+    case .yellow: expected = [255, 243, 26]
+    case .cyan: expected = [26, 232, 255]
+    case .pink: expected = [255, 97, 220]
+    case .green: expected = [108, 255, 108]
+    }
+    let colored = try pixel(image, x: 40, y: 50)
+    for channel in 0..<3 { #expect(abs(colored[channel] - expected[channel]) <= 1) }
+    #expect(colored[3] == 255)
     #expect(try pixel(image, x: 80, y: 50) == [0, 0, 0, 255])
     #expect(try pixel(image, x: 40, y: 59) == [255, 255, 255, 255])
     #expect(image.width == original.width && image.height == original.height)
 }
 
-@MainActor @Test(arguments: HighlighterColor.allCases) func annotationHighlighterScreenColorsBlackAndPreservesWhite(color: HighlighterColor) throws {
+@MainActor @Test(arguments: HighlighterColor.allCases) func annotationHighlighterScreenColorsBlackAt75PercentAndPreservesWhite(color: HighlighterColor) throws {
     let source = try AnnotationRenderer.bitmap(width: 160, height: 100)
     source.setFillColor(NSColor.black.cgColor)
     source.fill(CGRect(x: 0, y: 0, width: 160, height: 100))
@@ -530,10 +538,10 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     let image = try AnnotationRenderer.compose(original, document: AnnotationDocument(annotations: [pen]))
     let expected: [Int]
     switch color {
-    case .yellow: expected = [230, 218, 0]
-    case .cyan: expected = [0, 206, 230]
-    case .pink: expected = [230, 71, 194]
-    case .green: expected = [83, 230, 83]
+    case .yellow: expected = [191, 182, 0]
+    case .cyan: expected = [0, 172, 191]
+    case .pink: expected = [191, 59, 162]
+    case .green: expected = [69, 191, 69]
     }
     let colored = try pixel(image, x: 40, y: 50)
     for channel in 0..<3 { #expect(abs(colored[channel] - expected[channel]) <= 1) }
