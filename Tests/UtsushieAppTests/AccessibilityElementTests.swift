@@ -51,10 +51,23 @@ import UtsushieCore
     var captures: [(CGRect, Bool, CaptureOutput)] = []
     overlay.onCapture = { captures.append(($0.rect, $1, $2)) }
     try key(14)
+    #expect(overlay.state.cursor == .arrow)
+    #expect(overlay.elementReadStatus == "読取中…")
     try key(36) // 取得前に押しても前回範囲は撮らない。
     #expect(captures.isEmpty)
     try await Task.sleep(for: .milliseconds(250))
     let firstHighlight = try #require(overlay.highlighted?.rect)
+    #expect(overlay.elementReadStatus == nil)
+    overlay.mouseDown()
+    CGWarpMouseCursorPosition(CGPoint(x: point.x + 30, y: point.y))
+    overlay.mouseDragged()
+    #expect(overlay.state.target == .element && overlay.selection == nil)
+    overlay.mouseUp()
+    try await Task.sleep(for: .milliseconds(250))
+    #expect(captures.isEmpty)
+    CGWarpMouseCursorPosition(point)
+    overlay.mouseMoved()
+    try await Task.sleep(for: .milliseconds(250))
     // 移動のたびに全画面を暗くせず、次の結果まで前の枠を表示だけ残す。
     let nextPoint = CGPoint(x: bounds.minX + 310, y: point.y)
     CGWarpMouseCursorPosition(nextPoint)

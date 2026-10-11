@@ -10,9 +10,9 @@ public struct CaptureState: Sendable {
     public private(set) var target: CaptureTarget = .area
     public private(set) var gesture = SelectionGesture()
     private var shiftPressed = false
-    public var cursor: CaptureCursor { .crosshair }
+    public var cursor: CaptureCursor { target == .element ? .arrow : .crosshair }
     public var highlightsWindow: Bool { !gesture.isDragging && !shiftPressed }
-    public var highlightsDisplay: Bool { !gesture.isDragging && shiftPressed }
+    public var highlightsDisplay: Bool { target != .element && !gesture.isDragging && shiftPressed }
     public init() {}
     /// 文字やIMEの変換結果に依存しない物理keyCodeで判断する。
     public mutating func key(_ code: UInt16, hasLast: Bool) -> CaptureAction {
@@ -43,17 +43,27 @@ public struct CaptureState: Sendable {
     public mutating func modifiersChanged(shift: Bool) { shiftPressed = shift }
     public mutating func pointerDown(at point: CGPoint, last: CGRect?, movingLast: Bool = false,
                                      displayFrames: [CGRect] = [], selectingDisplay: Bool = false) -> PointerAction {
-        if target != .element || movingLast || selectingDisplay { selectArea() }
+        if target == .element {
+            gesture.begin(at: point, last: nil, constrainToDisplay: false)
+            return .none
+        }
+        selectArea()
         gesture.begin(at: point, last: last, movingLast: movingLast, displayFrames: displayFrames,
                       constrainToDisplay: output == .video, selectingDisplay: selectingDisplay)
         return .none
     }
     public mutating func pointerDragged(to point: CGPoint) {
         gesture.update(to: point)
+        if target == .element {
+            // 一度閾値を超えたら、戻ってもクリックにしない。
+            if gesture.isDragging { gesture.cancel() }
+            return
+        }
         if gesture.isDragging { selectArea() }
     }
     public mutating func pointerUp(at point: CGPoint, hasWindow: Bool = false) -> PointerAction {
         let action = gesture.finish(at: point, hasWindow: hasWindow)
+        if target == .element { return action == .captureWindow ? action : .none }
         if case .captureArea = action { selectArea() }
         return action
     }

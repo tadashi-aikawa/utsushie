@@ -12,7 +12,7 @@ final class CapturePanel: NSPanel, CaptureExcludedWindow {
 final class OverlayController {
     private(set) var state = CaptureState()
     private(set) var last: CGRect?
-    var selection: CGRect? { state.gesture.areaPreview }
+    var selection: CGRect? { state.target == .element ? nil : state.gesture.areaPreview }
     var displayedLast: CGRect? {
         state.gesture.isSelectingArea ? nil : state.gesture.lastPreview ?? last
     }
@@ -34,6 +34,11 @@ final class OverlayController {
     private var elementClick: (element: CaptureElement, query: AccessibilityElementReader.Query)?
     private var confirmingElement = false
     private(set) var elementHint = ""
+    var elementReadStatus: String? {
+        guard state.target == .element else { return nil }
+        if confirmingElement { return "確認中…" }
+        return elementTask == nil ? nil : "読取中…"
+    }
     var cursor: NSCursor { state.cursor == .crosshair ? .crosshair : .arrow }
     var onCapture: ((CaptureRequest, Bool, CaptureOutput) -> Void)?
     var onMoveLast: ((CGRect) -> Void)?
@@ -347,7 +352,7 @@ final class OverlayController {
     func mouseDown(movingLast: Bool = false, selectingDisplay: Bool = false) {
         guard isVisible else { return }
         var click: (element: CaptureElement, query: AccessibilityElementReader.Query)?
-        if state.target == .element, !movingLast, !selectingDisplay,
+        if state.target == .element,
            let selected = elementSelection.selected, let previous = elementQuery,
            let window = windowUnderPointer(), let query = elementQuery(for: window),
            query.windowID == previous.windowID, selected.rect.contains(query.point) {
@@ -478,6 +483,14 @@ final class OverlayView: NSView {
             label(title, in: placement)
         }
         guard screenFrame.contains(NSEvent.mouseLocation) else { return }
+        if let status = controller.elementReadStatus {
+            let pointer = NSEvent.mouseLocation
+            let width = ceil((status as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .medium)]).width) + 16
+            // ポインターを覆わず、右端・下端では画面内へ戻す。
+            let x = min(max(pointer.x - screenFrame.minX + 16, 8), bounds.maxX - width - 8)
+            let y = min(max(pointer.y - screenFrame.minY - 30, 8), bounds.maxY - 30)
+            label(status, in: CGRect(x: x, y: y, width: width, height: 22))
+        }
         // Dockの上に置き、失敗の札を帯の下へ確保する。
         let visible = local(NSScreen.screens.first { $0.frame == screenFrame }?.visibleFrame ?? screenFrame)
         drawHUD(controller, visible: visible)
@@ -517,7 +530,7 @@ final class OverlayView: NSView {
                 style: item.title == "やめる" ? .secondary : .tool, selected: item.selected, recording: item.recording, dimmed: !item.enabled)
         }
         NSGraphicsContext.restoreGraphicsState()
-        if !controller.elementHint.isEmpty {
+        if controller.elementReadStatus == nil, !controller.elementHint.isEmpty {
             label(controller.elementHint, at: CGPoint(x: max(visible.minX + 12, origin.x), y: origin.y + 50))
         }
         if hasError {
