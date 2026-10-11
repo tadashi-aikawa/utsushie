@@ -102,6 +102,14 @@ final class OverlayController {
     private func key(_ code: UInt16) {
         message = ""
         elementClick = nil
+        if state.target == .element, code == 36 || code == 76 {
+            state.cancelGesture()
+            // 取得中や候補なしのEnterで、見えていない前回範囲を撮らない。
+            guard elementTask == nil, highlighted != nil,
+                  let selected = elementSelection.selected, let query = elementQuery else { return }
+            captureElement((selected, query))
+            return
+        }
         if state.target == .element, code == 125 || code == 126 {
             state.cancelGesture()
             if elementTask != nil { clearElements(); updateWindow(); redraw(); return }
@@ -255,7 +263,7 @@ final class OverlayController {
         highlightedApp = "\(appName) · \(elementSelection.selected?.label ?? "要素")"
         elementHint = elementSelection.selected == nil
             ? "この場所の要素は取得できません · Eで戻る"
-            : "クリックで撮影 · ↑ 親へ · ↓ 戻る · Eで要素選択を終了"
+            : "⏎ クリックで撮影 · ↑ 親へ · ↓ 戻る · Eで要素選択を終了"
     }
     private func updateElement(_ query: AccessibilityElementReader.Query) {
         // ↑で広げた後の持ち替えで葉へ戻さない。枠内だけ保持し、撮影時には必ずAXを再確認する。

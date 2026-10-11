@@ -32,4 +32,43 @@ import UtsushieCore
     let mismatch = AccessibilityElementReader.Query(point: point, windowID: query.windowID,
         processID: query.processID, windowBounds: query.windowBounds.offsetBy(dx: 50, dy: 0))
     #expect(await AccessibilityElementReader().selection(for: mismatch).selected == nil)
+
+    let originalPoint = NSEvent.mouseLocation
+    CGWarpMouseCursorPosition(point)
+    let overlay = OverlayController()
+    defer {
+        overlay.close()
+        CGWarpMouseCursorPosition(CGPoint(x: originalPoint.x, y: ScreenGeometry.primaryHeight - originalPoint.y))
+    }
+    let last = CGRect(x: 5, y: 5, width: 20, height: 20)
+    overlay.show(last: last)
+    func key(_ code: UInt16) throws {
+        let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: NSApp.keyWindow?.windowNumber ?? 0,
+            context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code))
+        NSApp.sendEvent(event)
+    }
+    var captures: [(CGRect, Bool, CaptureOutput)] = []
+    overlay.onCapture = { captures.append(($0.rect, $1, $2)) }
+    try key(14)
+    try key(36) // 取得前に押しても前回範囲は撮らない。
+    #expect(captures.isEmpty)
+    try await Task.sleep(for: .milliseconds(250))
+    try key(126)
+    let parent = try #require(overlay.highlighted?.rect)
+    try key(36)
+    try await Task.sleep(for: .milliseconds(250))
+    #expect(captures.count == 1)
+    #expect(captures.last?.0 == parent && captures.last?.1 == false && captures.last?.2 == .image)
+    try key(48)
+    try await Task.sleep(for: .milliseconds(250))
+    try key(126)
+    let videoParent = try #require(overlay.highlighted?.rect)
+    try key(76)
+    try await Task.sleep(for: .milliseconds(250))
+    #expect(captures.count == 2)
+    #expect(captures.last?.0 == videoParent && captures.last?.1 == false && captures.last?.2 == .video)
+    try key(14)
+    try key(36)
+    #expect(captures.last?.0 == last && captures.last?.1 == true)
 }
