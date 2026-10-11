@@ -52,21 +52,25 @@ import UtsushieCore
     overlay.onCapture = { captures.append(($0.rect, $1, $2)) }
     try key(14)
     #expect(overlay.state.cursor == .arrow)
-    #expect(overlay.elementReadStatus == "読取中…")
+    #expect(overlay.cursor === NSCursor.arrow)
+    let help = overlay.elementHint
     try key(36) // 取得前に押しても前回範囲は撮らない。
     #expect(captures.isEmpty)
     try await Task.sleep(for: .milliseconds(250))
     let firstHighlight = try #require(overlay.highlighted?.rect)
-    #expect(overlay.elementReadStatus == nil)
-    // 読み取りを待っている間の連続移動でも、150msのタイマーをやり直さない。
+    #expect(overlay.elementHint == help)
+    // 読み取りを待つ間もカーソルと操作案内は変えない。
     for step in 1...10 {
         CGWarpMouseCursorPosition(CGPoint(x: point.x + CGFloat(step), y: point.y))
         overlay.mouseMoved()
+        #expect(overlay.cursor === NSCursor.arrow)
+        #expect(overlay.elementHint == help)
         try await Task.sleep(for: .milliseconds(20))
     }
-    #expect(overlay.cursor === ElementReadCursor.cursor)
+    #expect(overlay.cursor === NSCursor.arrow)
     try await Task.sleep(for: .milliseconds(250))
     #expect(overlay.cursor === NSCursor.arrow)
+    #expect(overlay.elementHint == help)
     CGWarpMouseCursorPosition(point)
     overlay.mouseMoved()
     try await Task.sleep(for: .milliseconds(250))
@@ -86,6 +90,7 @@ import UtsushieCore
     overlay.mouseMoved()
     #expect(overlay.highlighted?.rect == firstHighlight)
     try key(36)
+    #expect(overlay.elementHint == help)
     #expect(captures.isEmpty)
     overlay.mouseDown(); overlay.mouseUp()
     #expect(captures.isEmpty)
