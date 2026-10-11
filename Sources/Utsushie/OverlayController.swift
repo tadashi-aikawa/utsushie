@@ -25,7 +25,8 @@ final class OverlayController {
     private(set) var message = ""
     private var panels: [CapturePanel] = []
     private var keyMonitor: Any?
-    private var registeredCursor: CaptureCursor?
+    private var registeredCursor: NSCursor?
+    private let elementReadCursor = ElementReadCursor()
     private let elementReader = AccessibilityElementReader()
     private var elementTask: Task<Void, Never>?
     private var elementGeneration = 0
@@ -39,7 +40,10 @@ final class OverlayController {
         if confirmingElement { return "確認中…" }
         return elementTask == nil ? nil : "読取中…"
     }
-    var cursor: NSCursor { state.cursor == .crosshair ? .crosshair : .arrow }
+    var cursor: NSCursor {
+        if state.target == .element, elementReadCursor.isVisible { return ElementReadCursor.cursor }
+        return state.cursor == .crosshair ? .crosshair : .arrow
+    }
     var onCapture: ((CaptureRequest, Bool, CaptureOutput) -> Void)?
     var onMoveLast: ((CGRect) -> Void)?
     var onCancel: (() -> Void)?
@@ -264,7 +268,8 @@ final class OverlayController {
         return .init(point: point, windowID: window.id, processID: window.processID, windowBounds: window.bounds,
                      visibleBounds: window.bounds.intersection(ScreenGeometry.cg(screen.frame)), occludingBounds: window.occludingBounds)
     }
-    private func clearElements() {
+    private func clearElements(preservingReadCursor: Bool = false) {
+        if !preservingReadCursor { elementReadCursor.end() }
         confirmingElement = false
         elementGeneration += 1
         elementTask?.cancel(); elementTask = nil
@@ -291,10 +296,12 @@ final class OverlayController {
             else { elementHint = "要素を取得中… · Eで戻る" }
             return
         }
-        clearElements()
+        let keepReadCursor = elementQuery.map { query.hasSameContext(as: $0) } ?? false
+        clearElements(preservingReadCursor: keepReadCursor)
         elementQuery = query
         let generation = elementGeneration
         elementHint = "要素を取得中… · Eで戻る"
+        elementReadCursor.begin { [weak self] in self?.redraw() }
         elementTask = Task { [weak self, elementReader] in
             // 高頻度のmouseMovedでAX要求を積まない。静止後の最新位置だけを問い合わせる。
             do { try await Task.sleep(for: .milliseconds(35)) } catch { return }
@@ -302,6 +309,7 @@ final class OverlayController {
             guard !Task.isCancelled, let self, self.isVisible, self.state.target == .element,
                   self.elementGeneration == generation, self.elementQuery == query else { return }
             self.elementTask = nil
+            self.elementReadCursor.end()
             self.elementSelection = selection
             self.displayElement(); self.redraw()
         }
@@ -315,6 +323,7 @@ final class OverlayController {
         let generation = elementGeneration
         highlighted = nil
         confirmingElement = true
+        elementReadCursor.begin { [weak self] in self?.redraw() }
         elementHint = "選んだ要素を確認中…"
         redraw()
         elementTask = Task { [weak self, elementReader] in
@@ -330,8 +339,10 @@ final class OverlayController {
             }
             self.elementTask = nil
             self.confirmingElement = false
+            self.elementReadCursor.end()
             // ページ更新・スクロール後の古い枠で撮らない。親へ広げた選択も新しい祖先列と照合する。
             if let current = fresh.candidates.first(where: { ElementSelection.matches($0.rect, click.element.rect) }) {
+                self.redraw()
                 self.onCapture?(.region(ScreenGeometry.appKit(current.rect)), false, self.state.output)
             } else {
                 self.elementSelection = fresh
@@ -420,8 +431,9 @@ final class OverlayController {
         return OverlayPresentation.dimensions(points: points, scale: scale, output: state.output, downscale: downscale)
     }
     private func redraw() {
-        if registeredCursor != state.cursor {
-            registeredCursor = state.cursor
+        let currentCursor = cursor
+        if registeredCursor !== currentCursor {
+            registeredCursor = currentCursor
             for panel in panels {
                 if let view = panel.contentView { panel.invalidateCursorRects(for: view) }
             }
@@ -483,14 +495,6 @@ final class OverlayView: NSView {
             label(title, in: placement)
         }
         guard screenFrame.contains(NSEvent.mouseLocation) else { return }
-        if let status = controller.elementReadStatus {
-            let pointer = NSEvent.mouseLocation
-            let width = ceil((status as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .medium)]).width) + 16
-            // ポインターを覆わず、右端・下端では画面内へ戻す。
-            let x = min(max(pointer.x - screenFrame.minX + 16, 8), bounds.maxX - width - 8)
-            let y = min(max(pointer.y - screenFrame.minY - 30, 8), bounds.maxY - 30)
-            label(status, in: CGRect(x: x, y: y, width: width, height: 22))
-        }
         // Dockの上に置き、失敗の札を帯の下へ確保する。
         let visible = local(NSScreen.screens.first { $0.frame == screenFrame }?.visibleFrame ?? screenFrame)
         drawHUD(controller, visible: visible)

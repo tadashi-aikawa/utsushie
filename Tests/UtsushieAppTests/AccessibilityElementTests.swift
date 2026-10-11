@@ -58,6 +58,18 @@ import UtsushieCore
     try await Task.sleep(for: .milliseconds(250))
     let firstHighlight = try #require(overlay.highlighted?.rect)
     #expect(overlay.elementReadStatus == nil)
+    // 読み取りを待っている間の連続移動でも、150msのタイマーをやり直さない。
+    for step in 1...10 {
+        CGWarpMouseCursorPosition(CGPoint(x: point.x + CGFloat(step), y: point.y))
+        overlay.mouseMoved()
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(overlay.cursor === ElementReadCursor.cursor)
+    try await Task.sleep(for: .milliseconds(250))
+    #expect(overlay.cursor === NSCursor.arrow)
+    CGWarpMouseCursorPosition(point)
+    overlay.mouseMoved()
+    try await Task.sleep(for: .milliseconds(250))
     overlay.mouseDown()
     CGWarpMouseCursorPosition(CGPoint(x: point.x + 30, y: point.y))
     overlay.mouseDragged()
