@@ -26,12 +26,12 @@ final class OverlayController {
     private var panels: [CapturePanel] = []
     private var keyMonitor: Any?
     private var registeredCursor: CaptureCursor?
-    private let elementReader = ChromeElementReader()
+    private let elementReader = AccessibilityElementReader()
     private var elementTask: Task<Void, Never>?
     private var elementGeneration = 0
-    private var elementQuery: ChromeElementReader.Query?
+    private var elementQuery: AccessibilityElementReader.Query?
     private var elementSelection = ElementSelection()
-    private var elementClick: (element: CaptureElement, query: ChromeElementReader.Query)?
+    private var elementClick: (element: CaptureElement, query: AccessibilityElementReader.Query)?
     private var confirmingElement = false
     private(set) var elementHint = ""
     var cursor: NSCursor { state.cursor == .crosshair ? .crosshair : .arrow }
@@ -113,7 +113,7 @@ final class OverlayController {
             return
         }
         if code == 14, state.target != .element, !AXIsProcessTrusted() {
-            message = "Chromeの要素選択にはアクセシビリティの許可が必要です。Escで閉じ、システム設定で許可してください"
+            message = "要素選択にはアクセシビリティの許可が必要です。Escで閉じ、システム設定で許可してください"
             onAccessibilityNeeded?(); redraw()
             return
         }
@@ -178,13 +178,13 @@ final class OverlayController {
         }
         guard let window = windowUnderPointer() else {
             clearElements()
-            if state.target == .element { elementHint = "Chromeのページへカーソルを移動 · Eで戻る" }
+            if state.target == .element { elementHint = "アプリのウィンドウへカーソルを移動 · Eで戻る" }
             return
         }
         if state.target == .element {
             guard let query = elementQuery(for: window) else {
                 clearElements()
-                elementHint = "Chromeのページへカーソルを移動 · Eで戻る"
+                elementHint = "この場所の要素は取得できません · Eで戻る"
                 return
             }
             updateElement(query)
@@ -235,9 +235,8 @@ final class OverlayController {
         return nil
     }
 
-    private func elementQuery(for window: PointerWindow, at cgPoint: CGPoint? = nil) -> ChromeElementReader.Query? {
-        guard NSRunningApplication(processIdentifier: window.processID)?.bundleIdentifier == "com.google.Chrome",
-              AXIsProcessTrusted() else { return nil }
+    private func elementQuery(for window: PointerWindow, at cgPoint: CGPoint? = nil) -> AccessibilityElementReader.Query? {
+        guard AXIsProcessTrusted() else { return nil }
         let point = cgPoint ?? CGPoint(x: NSEvent.mouseLocation.x, y: ScreenGeometry.primaryHeight - NSEvent.mouseLocation.y)
         let appKitPoint = CGPoint(x: point.x, y: ScreenGeometry.primaryHeight - point.y)
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(appKitPoint) }) else { return nil }
@@ -252,12 +251,13 @@ final class OverlayController {
     }
     private func displayElement() {
         highlighted = elementSelection.selected.map { .region(ScreenGeometry.appKit($0.rect)) }
-        highlightedApp = "Chrome · \(elementSelection.selected?.label ?? "要素")"
+        let appName = elementQuery.flatMap { NSRunningApplication(processIdentifier: $0.processID)?.localizedName } ?? "アプリ"
+        highlightedApp = "\(appName) · \(elementSelection.selected?.label ?? "要素")"
         elementHint = elementSelection.selected == nil
             ? "この場所の要素は取得できません · Eで戻る"
             : "クリックで撮影 · ↑ 親へ · ↓ 戻る · Eで要素選択を終了"
     }
-    private func updateElement(_ query: ChromeElementReader.Query) {
+    private func updateElement(_ query: AccessibilityElementReader.Query) {
         // ↑で広げた後の持ち替えで葉へ戻さない。枠内だけ保持し、撮影時には必ずAXを再確認する。
         if elementSelection.canSelectChild, let previous = elementQuery,
            query.hasSameContext(as: previous), let selected = elementSelection.selected, selected.rect.contains(query.point) {
@@ -267,13 +267,13 @@ final class OverlayController {
         }
         if elementQuery == query {
             if elementTask == nil { displayElement() }
-            else { elementHint = "Chromeの要素を取得中… · Eで戻る" }
+            else { elementHint = "要素を取得中… · Eで戻る" }
             return
         }
         clearElements()
         elementQuery = query
         let generation = elementGeneration
-        elementHint = "Chromeの要素を取得中… · Eで戻る"
+        elementHint = "要素を取得中… · Eで戻る"
         elementTask = Task { [weak self, elementReader] in
             // 高頻度のmouseMovedでAX要求を積まない。静止後の最新位置だけを問い合わせる。
             do { try await Task.sleep(for: .milliseconds(35)) } catch { return }
@@ -285,7 +285,7 @@ final class OverlayController {
             self.displayElement(); self.redraw()
         }
     }
-    private func captureElement(_ click: (element: CaptureElement, query: ChromeElementReader.Query)) {
+    private func captureElement(_ click: (element: CaptureElement, query: AccessibilityElementReader.Query)) {
         guard let window = windowUnderPointer(), let query = elementQuery(for: window),
               query.windowID == click.query.windowID, query.processID == click.query.processID,
               click.element.rect.contains(query.point) else { updateWindow(); redraw(); return }
@@ -330,7 +330,7 @@ final class OverlayController {
     }
     func mouseDown(movingLast: Bool = false, selectingDisplay: Bool = false) {
         guard isVisible else { return }
-        var click: (element: CaptureElement, query: ChromeElementReader.Query)?
+        var click: (element: CaptureElement, query: AccessibilityElementReader.Query)?
         if state.target == .element, !movingLast, !selectingDisplay,
            let selected = elementSelection.selected, let previous = elementQuery,
            let window = windowUnderPointer(), let query = elementQuery(for: window),

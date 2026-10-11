@@ -45,8 +45,8 @@ import UtsushieCore
         return ElementSelection.matches(bounds, windowRect, tolerance: 1)
     })
     let id = try #require(cgWindow[kCGWindowNumber as String] as? UInt32)
-    let reader = ChromeElementReader()
-    func query(_ x: CGFloat, _ y: CGFloat) -> ChromeElementReader.Query {
+    let reader = AccessibilityElementReader()
+    func query(_ x: CGFloat, _ y: CGFloat) -> AccessibilityElementReader.Query {
         .init(point: CGPoint(x: viewport.minX + x * zoom, y: viewport.minY + y * zoom), windowID: id, processID: pid, windowBounds: windowRect)
     }
     if ProcessInfo.processInfo.environment["UTSUSHIE_CHROME_PROBE_SCROLLED"] == "1" {
@@ -68,7 +68,7 @@ import UtsushieCore
     #expect(button.candidates.contains { ElementSelection.matches($0.rect, expectedCard) })
     let toolbar = await reader.selection(for: .init(point: CGPoint(x: windowRect.midX, y: windowRect.minY + 55),
         windowID: id, processID: pid, windowBounds: windowRect))
-    #expect(toolbar.selected == nil)
+    #expect(toolbar.selected != nil)
 
     let panel = CapturePanel(contentRect: ScreenGeometry.appKit(windowRect), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     panel.isOpaque = false; panel.backgroundColor = NSColor.black.withAlphaComponent(0.4)

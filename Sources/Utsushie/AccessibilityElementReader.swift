@@ -3,8 +3,8 @@ import Foundation
 import UtsushieCore
 
 /// AX参照はこのactor内で完結させ、画面側へは値だけを渡す。
-/// Chromeへ属性を書かず、公開AXに現れる範囲だけを選ぶ試作。
-actor ChromeElementReader {
+/// アプリへ属性を書かず、公開AXに現れる範囲だけを選ぶ試作。
+actor AccessibilityElementReader {
     struct Query: Equatable, Sendable {
         let point: CGPoint
         let windowID: UInt32
@@ -46,7 +46,7 @@ actor ChromeElementReader {
         let app = AXUIElementCreateApplication(query.processID)
         AXUIElementSetMessagingTimeout(app, 0.08)
         var hit: AXUIElement?
-        // システム全体へ問い合わせると自分の撮影パネルが当たる。Chromeのアプリ参照へ限定する。
+        // システム全体へ問い合わせると自分の撮影パネルが当たる。対象アプリの参照へ限定する。
         guard AXUIElementCopyElementAtPosition(app, Float(query.point.x), Float(query.point.y), &hit) == .success else {
             return ElementSelection()
         }
@@ -61,8 +61,8 @@ actor ChromeElementReader {
             guard let role = attribute(element, kAXRoleAttribute) as? String else { return ElementSelection() }
             let bounds = rect(element)
             if role == kAXWindowRole {
-                // 同じ位置のChrome窓は、呼び出し側のCGWindowListとappのAXヒットの両方のz順で絞る。
-                guard foundWebArea, let bounds, ElementSelection.matches(bounds, query.windowBounds, tolerance: 1) else {
+                // 同じ位置の窓は、呼び出し側のCGWindowListとappのAXヒットの両方のz順で絞る。
+                guard let bounds, ElementSelection.matches(bounds, query.windowBounds, tolerance: 1) else {
                     return ElementSelection()
                 }
                 return ElementSelection(nodes: nodes, point: query.point, visibleBounds: query.visibleBounds,

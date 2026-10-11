@@ -31,7 +31,7 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
   - `OverlayController.swift`: 全画面の選択パネルと物理キー入力。
   - `ScreenGeometry.swift`: NSScreenからCoreの座標モデルを作る境界。
   - `ChromeArea.swift`: Chromeの最前面ウィンドウからAXWebAreaを探索。
-  - `ChromeElementReader.swift`: ChromeのAXヒットと親の枠を、時間を制限して非同期に取得する。
+  - `AccessibilityElementReader.swift`: アプリのAXヒットと親の枠を、時間を制限して非同期に取得する。
   - `CaptureService.swift`: 撮影用UIの除外、画面ごとの撮影と合成、単一ウィンドウ撮影。
   - `CaptureWindowExclusion.swift`: 撮影用UIのNSWindowとSCWindowを窓番号で対応させる境界。
   - `RecordingService.swift`: SCStreamの構成、単一画面の領域録画、移動を追うウィンドウ録画。
@@ -68,10 +68,10 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
 
 ## 変える前に知っておくこと
 
-- Chromeの要素選択はEで切り替える試作です。
-  - 対象: Chromeの公開AXに現れる要素です。DOM一致は保証せず、AXの有効化属性やJavaScriptは書き込みません。
+- 要素選択はEで切り替える試作です。
+  - 対象: 各アプリの公開AXに現れるウィンドウ内の要素です。DOM一致は保証せず、AXの有効化属性やJavaScriptは書き込みません。
   - 操作: ↑で親の範囲へ広げ、↓で辿った子へ戻ります。ドラッグと修飾付きの選択は既存操作へ戻ります。
-  - 取得: カーソル直下の最前面窓を絞り、ChromeアプリのAXへ問い合わせます。古い要求と終了後の結果は破棄します。
+  - 取得: カーソル直下の最前面窓を絞り、そのアプリのAXへ問い合わせます。古い要求と終了後の結果は破棄します。
   - 座標: Reader内はCG/AXの左上原点のptです。画面への表示と撮影依頼の境界でAppKitへ反転します。
   - 可視範囲: WebArea・スクロール領域の祖先・窓・カーソルのある画面で切り詰めます。手前の窓と重なる候補は外します。クリック時に同じ枠がまだ候補にあるか確認します。
   - 動画: 固定領域です。要素の移動には追従しません。
