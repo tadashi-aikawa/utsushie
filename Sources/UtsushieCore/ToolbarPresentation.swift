@@ -70,7 +70,8 @@ public struct OverlayToolbarLayout: Equatable, Sendable {
     public let width: CGFloat
 
     public init(itemWidths: [CGFloat], tabWidth: CGFloat) {
-        precondition(itemWidths.count == 6)
+        precondition(itemWidths.count >= 6)
+        let lastIndex = itemWidths.count - 1
         var frames: [CGRect] = []
         var x: CGFloat = 8
         for index in 0..<2 {
@@ -81,13 +82,13 @@ public struct OverlayToolbarLayout: Equatable, Sendable {
         tab = CGRect(x: outputTray.maxX + 6, y: 11.5, width: tabWidth, height: 17)
         let targetX = tab.maxX + 10
         x = targetX + 2
-        for index in 2..<5 {
+        for index in 2..<lastIndex {
             frames.append(CGRect(x: x, y: 6, width: itemWidths[index], height: 28))
-            x += itemWidths[index] + (index < 4 ? 2 : 0)
+            x += itemWidths[index] + (index < lastIndex - 1 ? 2 : 0)
         }
         targetTray = CGRect(x: targetX, y: 4, width: x + 2 - targetX, height: 32)
-        frames.append(CGRect(x: targetTray.maxX + 10, y: 6, width: itemWidths[5], height: 28))
+        frames.append(CGRect(x: targetTray.maxX + 10, y: 6, width: itemWidths[lastIndex], height: 28))
         items = frames
-        width = frames[5].maxX + 6
+        width = frames[lastIndex].maxX + 6
     }
 }

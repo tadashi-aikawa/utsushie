@@ -26,6 +26,14 @@ final class OverlayController {
     private var panels: [CapturePanel] = []
     private var keyMonitor: Any?
     private var registeredCursor: CaptureCursor?
+    private let elementReader = ChromeElementReader()
+    private var elementTask: Task<Void, Never>?
+    private var elementGeneration = 0
+    private var elementQuery: ChromeElementReader.Query?
+    private var elementSelection = ElementSelection()
+    private var elementClick: (element: CaptureElement, query: ChromeElementReader.Query)?
+    private var confirmingElement = false
+    private(set) var elementHint = ""
     var cursor: NSCursor { state.cursor == .crosshair ? .crosshair : .arrow }
     var onCapture: ((CaptureRequest, Bool, CaptureOutput) -> Void)?
     var onMoveLast: ((CGRect) -> Void)?
@@ -65,13 +73,18 @@ final class OverlayController {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.isVisible else { return event }
             let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-            guard modifiers.isEmpty, [UInt16(53), 48, 8, 36, 76].contains(event.keyCode) else { return event }
+            let keys: [UInt16] = self.state.target == .element ? [53, 48, 8, 14, 36, 76, 125, 126] : [53, 48, 8, 14, 36, 76]
+            guard modifiers.isEmpty, keys.contains(event.keyCode) else {
+                if self.confirmingElement { self.clearElements(); self.updateWindow(); self.redraw() }
+                return event
+            }
             if !event.isARepeat { self.key(event.keyCode) }
             return nil
         }
         updateWindow(); redraw()
     }
     func close() {
+        clearElements(); elementClick = nil; elementHint = ""
         contentTask?.cancel(); contentTask = nil; windowContent = nil
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
@@ -81,9 +94,30 @@ final class OverlayController {
         state.cancelGesture(); highlighted = nil; highlightedApp = ""; highlightedDisplay = false
         NSCursor.arrow.set()
     }
-    func repeatCapture() { perform(state.repeatCapture(hasLast: last != nil)) }
+    func repeatCapture() {
+        elementClick = nil; clearElements()
+        perform(state.repeatCapture(hasLast: last != nil))
+        updateWindow(); redraw()
+    }
     private func key(_ code: UInt16) {
         message = ""
+        elementClick = nil
+        if state.target == .element, code == 125 || code == 126 {
+            state.cancelGesture()
+            if elementTask != nil { clearElements(); updateWindow(); redraw(); return }
+            if code == 126 { elementSelection.selectParent() } else { elementSelection.selectChild() }
+            if let selected = elementSelection.selected, let query = elementQuery, !selected.rect.contains(query.point) {
+                clearElements(); updateWindow(); redraw(); return
+            }
+            displayElement(); redraw()
+            return
+        }
+        if code == 14, state.target != .element, !AXIsProcessTrusted() {
+            message = "Chromeの要素選択にはアクセシビリティの許可が必要です。Escで閉じ、システム設定で許可してください"
+            onAccessibilityNeeded?(); redraw()
+            return
+        }
+        clearElements()
         perform(state.key(code, hasLast: last != nil))
         updateWindow()
         redraw()
@@ -121,14 +155,20 @@ final class OverlayController {
         cursor.set()
     }
     func flagsChanged(shift: Bool) {
+        if confirmingElement { clearElements() }
         state.modifiersChanged(shift: shift)
         updateWindow(); redraw()
     }
     private func updateWindow(windowOnly: Bool = false) {
+        // 離した後の手ぶれでは撮影を取り消さない。確定地点の窓は結果の受領時に検証する。
+        if confirmingElement { return }
         highlighted = nil; highlightedApp = ""; highlightedDisplay = false
+        elementHint = ""
+        if state.target != .element { clearElements() }
         guard isVisible, !state.gesture.isDragging else { return }
         let point = NSEvent.mouseLocation
         if state.highlightsDisplay && !windowOnly {
+            clearElements()
             if let screen = NSScreen.screens.first(where: { $0.frame.contains(point) }) {
                 highlighted = .region(screen.frame)
                 highlightedApp = screen.localizedName
@@ -136,21 +176,147 @@ final class OverlayController {
             }
             return
         }
+        guard let window = windowUnderPointer() else {
+            clearElements()
+            if state.target == .element { elementHint = "Chromeのページへカーソルを移動 · Eで戻る" }
+            return
+        }
+        if state.target == .element {
+            guard let query = elementQuery(for: window) else {
+                clearElements()
+                elementHint = "Chromeのページへカーソルを移動 · Eで戻る"
+                return
+            }
+            updateElement(query)
+            return
+        }
+        highlighted = .window(window.id, ScreenGeometry.appKit(window.bounds))
+        highlightedApp = window.name
+        if windowContent?.windows.first(where: { $0.windowID == window.id })?.frame != window.bounds { refreshWindowContent() }
+    }
+
+    private struct PointerWindow {
+        let id: UInt32
+        let processID: Int32
+        let bounds: CGRect
+        let name: String
+        let occludingBounds: [CGRect]
+    }
+    private func windowUnderPointer(at point: CGPoint? = nil) -> PointerWindow? {
+        let point = point ?? NSEvent.mouseLocation
+        let selectingElement = state.target == .element
         let policy = CaptureWindowExclusion.policy(for: CaptureWindowExclusion.windows())
         let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        var occludingBounds: [CGRect] = []
         for item in list {
             guard let id = item[kCGWindowNumber as String] as? UInt32,
                   let layer = item[kCGWindowLayer as String] as? Int,
-                  policy.canSelect(windowID: id, processID: item[kCGWindowOwnerPID as String] as? Int32,
-                                   layer: layer, alpha: item[kCGWindowAlpha as String] as? Double ?? 1),
+                  !policy.excludes(windowID: id), (item[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                   let bounds = item[kCGWindowBounds as String] as? [String: Any],
                   let cgRect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
+            let selectable = policy.canSelect(windowID: id, processID: item[kCGWindowOwnerPID as String] as? Int32,
+                                              layer: layer, alpha: 1)
             let rect = ScreenGeometry.appKit(cgRect)
-            if rect.contains(point) {
-                highlighted = .window(id, rect)
-                highlightedApp = item[kCGWindowOwnerName as String] as? String ?? "ウィンドウ"
-                if windowContent?.windows.first(where: { $0.windowID == id })?.frame != cgRect { refreshWindowContent() }
-                break
+            if rect.contains(point), selectable || selectingElement {
+                // 通常の窓選択では無視するPiP等も、要素撮影では背後を撮らないため遮蔽物として扱う。
+                guard selectable else { return nil }
+                guard let pid = item[kCGWindowOwnerPID as String] as? Int32 else { return nil }
+                return PointerWindow(id: id, processID: pid, bounds: cgRect,
+                    name: item[kCGWindowOwnerName as String] as? String ?? "ウィンドウ",
+                    occludingBounds: occludingBounds.filter { $0.intersects(cgRect) }.sorted {
+                        if $0.minX != $1.minX { return $0.minX < $1.minX }
+                        if $0.minY != $1.minY { return $0.minY < $1.minY }
+                        if $0.width != $1.width { return $0.width < $1.width }
+                        return $0.height < $1.height
+                    })
+            }
+            if selectingElement { occludingBounds.append(cgRect) }
+        }
+        return nil
+    }
+
+    private func elementQuery(for window: PointerWindow, at cgPoint: CGPoint? = nil) -> ChromeElementReader.Query? {
+        guard NSRunningApplication(processIdentifier: window.processID)?.bundleIdentifier == "com.google.Chrome",
+              AXIsProcessTrusted() else { return nil }
+        let point = cgPoint ?? CGPoint(x: NSEvent.mouseLocation.x, y: ScreenGeometry.primaryHeight - NSEvent.mouseLocation.y)
+        let appKitPoint = CGPoint(x: point.x, y: ScreenGeometry.primaryHeight - point.y)
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(appKitPoint) }) else { return nil }
+        return .init(point: point, windowID: window.id, processID: window.processID, windowBounds: window.bounds,
+                     visibleBounds: window.bounds.intersection(ScreenGeometry.cg(screen.frame)), occludingBounds: window.occludingBounds)
+    }
+    private func clearElements() {
+        confirmingElement = false
+        elementGeneration += 1
+        elementTask?.cancel(); elementTask = nil
+        elementQuery = nil; elementSelection = ElementSelection()
+    }
+    private func displayElement() {
+        highlighted = elementSelection.selected.map { .region(ScreenGeometry.appKit($0.rect)) }
+        highlightedApp = "Chrome · \(elementSelection.selected?.label ?? "要素")"
+        elementHint = elementSelection.selected == nil
+            ? "この場所の要素は取得できません · Eで戻る"
+            : "クリックで撮影 · ↑ 親へ · ↓ 戻る · Eで要素選択を終了"
+    }
+    private func updateElement(_ query: ChromeElementReader.Query) {
+        // ↑で広げた後の持ち替えで葉へ戻さない。枠内だけ保持し、撮影時には必ずAXを再確認する。
+        if elementSelection.canSelectChild, let previous = elementQuery,
+           query.hasSameContext(as: previous), let selected = elementSelection.selected, selected.rect.contains(query.point) {
+            elementQuery = query
+            displayElement()
+            return
+        }
+        if elementQuery == query {
+            if elementTask == nil { displayElement() }
+            else { elementHint = "Chromeの要素を取得中… · Eで戻る" }
+            return
+        }
+        clearElements()
+        elementQuery = query
+        let generation = elementGeneration
+        elementHint = "Chromeの要素を取得中… · Eで戻る"
+        elementTask = Task { [weak self, elementReader] in
+            // 高頻度のmouseMovedでAX要求を積まない。静止後の最新位置だけを問い合わせる。
+            do { try await Task.sleep(for: .milliseconds(35)) } catch { return }
+            let selection = await elementReader.selection(for: query)
+            guard !Task.isCancelled, let self, self.isVisible, self.state.target == .element,
+                  self.elementGeneration == generation, self.elementQuery == query else { return }
+            self.elementTask = nil
+            self.elementSelection = selection
+            self.displayElement(); self.redraw()
+        }
+    }
+    private func captureElement(_ click: (element: CaptureElement, query: ChromeElementReader.Query)) {
+        guard let window = windowUnderPointer(), let query = elementQuery(for: window),
+              query.windowID == click.query.windowID, query.processID == click.query.processID,
+              click.element.rect.contains(query.point) else { updateWindow(); redraw(); return }
+        clearElements()
+        elementQuery = query
+        let generation = elementGeneration
+        highlighted = nil
+        confirmingElement = true
+        elementHint = "選んだ要素を確認中…"
+        redraw()
+        elementTask = Task { [weak self, elementReader] in
+            let fresh = await elementReader.selection(for: query)
+            guard !Task.isCancelled, let self, self.isVisible, self.state.target == .element,
+                  self.elementGeneration == generation,
+                  let currentWindow = self.windowUnderPointer(at: CGPoint(x: query.point.x, y: ScreenGeometry.primaryHeight - query.point.y)),
+                  self.elementQuery(for: currentWindow, at: query.point) == query else {
+                if let self, self.elementGeneration == generation {
+                    self.clearElements(); self.updateWindow(); self.redraw()
+                }
+                return
+            }
+            self.elementTask = nil
+            self.confirmingElement = false
+            // ページ更新・スクロール後の古い枠で撮らない。親へ広げた選択も新しい祖先列と照合する。
+            if let current = fresh.candidates.first(where: { ElementSelection.matches($0.rect, click.element.rect) }) {
+                self.onCapture?(.region(ScreenGeometry.appKit(current.rect)), false, self.state.output)
+            } else {
+                self.elementSelection = fresh
+                self.displayElement()
+                self.elementHint = "要素が変わりました。枠を選び直してください · Eで戻る"
+                self.redraw()
             }
         }
     }
@@ -164,6 +330,17 @@ final class OverlayController {
     }
     func mouseDown(movingLast: Bool = false, selectingDisplay: Bool = false) {
         guard isVisible else { return }
+        var click: (element: CaptureElement, query: ChromeElementReader.Query)?
+        if state.target == .element, !movingLast, !selectingDisplay,
+           let selected = elementSelection.selected, let previous = elementQuery,
+           let window = windowUnderPointer(), let query = elementQuery(for: window),
+           query.windowID == previous.windowID, selected.rect.contains(query.point) {
+            click = (selected, previous)
+        }
+        // 先のクリックの確認中に次の操作が来たら、その撮影を取り消す。
+        if elementTask != nil { clearElements() }
+        updateWindow()
+        elementClick = click
         state.modifiersChanged(shift: selectingDisplay)
         performPointer(state.pointerDown(at: NSEvent.mouseLocation, last: last, movingLast: movingLast,
                                          displayFrames: ScreenGeometry.displays.map(\.frame), selectingDisplay: selectingDisplay))
@@ -171,10 +348,21 @@ final class OverlayController {
     func mouseDragged() {
         guard isVisible else { return }
         state.pointerDragged(to: NSEvent.mouseLocation)
+        if state.target != .element { elementClick = nil }
         updateWindow(); redraw()
     }
     func mouseUp() {
         guard isVisible else { return }
+        if state.target == .element {
+            let click = elementClick; elementClick = nil
+            let action = state.pointerUp(at: NSEvent.mouseLocation, hasWindow: click != nil)
+            if action == .captureWindow, let click { captureElement(click) }
+            else {
+                if action == .none { clearElements() }
+                performPointer(action)
+            }
+            return
+        }
         // ⇧の表示状態と、mouseDownで決まったクリック対象を分ける。
         updateWindow(windowOnly: true)
         performPointer(state.pointerUp(at: NSEvent.mouseLocation, hasWindow: highlighted != nil))
@@ -195,7 +383,7 @@ final class OverlayController {
         updateWindow(); redraw()
     }
     func showError(_ error: Error) {
-        message = error.localizedDescription; state.fallbackToArea(); redraw()
+        message = error.localizedDescription; state.fallbackToArea(); clearElements(); redraw()
     }
     func dimensions(_ rect: CGRect, window: Bool = false) -> String {
         let video = state.output == .video
@@ -313,6 +501,9 @@ final class OverlayView: NSView {
                 style: item.title == "やめる" ? .secondary : .tool, selected: item.selected, recording: item.recording, dimmed: !item.enabled)
         }
         NSGraphicsContext.restoreGraphicsState()
+        if !controller.elementHint.isEmpty {
+            label(controller.elementHint, at: CGPoint(x: max(visible.minX + 12, origin.x), y: origin.y + 50))
+        }
         if hasError {
             let box = CGRect(x: visible.midX - errorWidth / 2, y: visible.minY + 18, width: errorWidth, height: errorHeight)
             UIDrawing.fill(box, color: UITheme.ink.withAlphaComponent(0.94), radius: 10)

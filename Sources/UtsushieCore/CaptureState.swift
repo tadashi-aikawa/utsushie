@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 public enum CaptureOutput: String, Sendable { case image, video }
-public enum CaptureTarget: String, Sendable { case area, last, chrome }
+public enum CaptureTarget: String, Sendable { case area, last, chrome, element }
 public enum CaptureCursor: Equatable, Sendable { case crosshair, arrow }
 public enum CaptureAction: Equatable, Sendable { case none, cancel, captureLast, captureChrome }
 public struct CaptureState: Sendable {
@@ -16,7 +16,7 @@ public struct CaptureState: Sendable {
     public init() {}
     /// 文字やIMEの変換結果に依存しない物理keyCodeで判断する。
     public mutating func key(_ code: UInt16, hasLast: Bool) -> CaptureAction {
-        guard [UInt16(53), 48, 8, 36, 76].contains(code) else { return .none }
+        guard [UInt16(53), 48, 8, 14, 36, 76].contains(code) else { return .none }
         // キー操作で選択ジェスチャーを終える。Esc後のmouseUpは撮影へ遷移しない。
         gesture.cancel()
         switch code {
@@ -26,6 +26,9 @@ public struct CaptureState: Sendable {
             return .none
         case 8:
             target = .chrome; return .captureChrome
+        case 14:
+            target = target == .element ? .area : .element
+            return .none
         case 36, 76: return repeatCapture(hasLast: hasLast)
         default: return .none
         }
@@ -40,14 +43,19 @@ public struct CaptureState: Sendable {
     public mutating func modifiersChanged(shift: Bool) { shiftPressed = shift }
     public mutating func pointerDown(at point: CGPoint, last: CGRect?, movingLast: Bool = false,
                                      displayFrames: [CGRect] = [], selectingDisplay: Bool = false) -> PointerAction {
-        selectArea()
+        if target != .element || movingLast || selectingDisplay { selectArea() }
         gesture.begin(at: point, last: last, movingLast: movingLast, displayFrames: displayFrames,
                       constrainToDisplay: output == .video, selectingDisplay: selectingDisplay)
         return .none
     }
-    public mutating func pointerDragged(to point: CGPoint) { gesture.update(to: point) }
+    public mutating func pointerDragged(to point: CGPoint) {
+        gesture.update(to: point)
+        if gesture.isDragging { selectArea() }
+    }
     public mutating func pointerUp(at point: CGPoint, hasWindow: Bool = false) -> PointerAction {
-        gesture.finish(at: point, hasWindow: hasWindow)
+        let action = gesture.finish(at: point, hasWindow: hasWindow)
+        if case .captureArea = action { selectArea() }
+        return action
     }
     public mutating func cancelGesture() { gesture.cancel() }
 }

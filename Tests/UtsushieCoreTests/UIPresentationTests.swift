@@ -45,7 +45,7 @@ import Testing
     let video = OverlayPresentation.items(output: .video, target: .area, hasLast: true)
     #expect(video.filter(\.selected).map(\.title) == ["動画", "範囲"])
     #expect(video.filter(\.recording).map(\.title) == ["動画"])
-    #expect(video.map(\.title) == ["画像", "動画", "範囲", "前回", "Chrome", "やめる"])
+    #expect(video.map(\.title) == ["画像", "動画", "範囲", "前回", "Chrome", "要素", "やめる"])
     #expect(!video.contains { $0.key == "W" })
     #expect(video.first { $0.title == "前回" }?.enabled == true)
 }
