@@ -9,5 +9,8 @@ window.title = "UTSUSHIE AX fixture"
 let button = NSButton(title: "Capture fixture", target: nil, action: nil)
 button.frame = CGRect(x: 40, y: 100, width: 180, height: 40)
 window.contentView?.addSubview(button)
+let secondButton = NSButton(title: "Next", target: nil, action: nil)
+secondButton.frame = CGRect(x: 250, y: 100, width: 120, height: 40)
+window.contentView?.addSubview(secondButton)
 window.orderFrontRegardless()
 app.run()

@@ -170,6 +170,9 @@ final class OverlayController {
     private func updateWindow(windowOnly: Bool = false) {
         // 離した後の手ぶれでは撮影を取り消さない。確定地点の窓は結果の受領時に検証する。
         if confirmingElement { return }
+        let previousHighlight = highlighted
+        let previousApp = highlightedApp
+        let previousQuery = elementQuery
         highlighted = nil; highlightedApp = ""; highlightedDisplay = false
         elementHint = ""
         if state.target != .element { clearElements() }
@@ -194,6 +197,11 @@ final class OverlayController {
                 clearElements()
                 elementHint = "この場所の要素は取得できません · Eで戻る"
                 return
+            }
+            // 同じ窓・可視範囲の取得待ちだけ、表示を残す。選択候補はupdateElementで別に破棄する。
+            if let previousQuery, query.hasSameContext(as: previousQuery) {
+                highlighted = previousHighlight
+                highlightedApp = previousApp
             }
             updateElement(query)
             return
