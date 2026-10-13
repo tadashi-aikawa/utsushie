@@ -10,6 +10,8 @@ struct AnnotationApplicationFocus {
     var isActive: () -> Bool = { NSApp.isActive }
     var frontmostApplication: () -> NSRunningApplication? = { NSWorkspace.shared.frontmostApplication }
     var activate: () -> Void = { NSApp.activate() }
+    // 編集を開く操作だけで使う。非推奨APIだが、別アプリの協調に依存せず前面化を要求する。
+    var activateEditor: () -> Void = { NSApp.activate(ignoringOtherApps: true) }
     var restore: (NSRunningApplication) -> Void = { application in
         NSApp.yieldActivation(to: application)
         _ = application.activate(options: [])
@@ -105,8 +107,9 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         button.title = title; button.target = self; button.action = action
     }
     func show() {
-        applicationFocus.activate()
-        window.makeKeyAndOrderFront(nil); window.makeFirstResponder(canvas)
+        // アクティベーションの成否を待たず、通常レベルの窓を開いた時点で前面へ出す。
+        window.orderFrontRegardless(); window.makeKey(); window.makeFirstResponder(canvas)
+        applicationFocus.activateEditor()
         AnnotationNavigationDiagnostics.observeFocus("editor shown", isActive: applicationFocus.isActive(),
                                                      frontmostApplication: applicationFocus.frontmostApplication())
     }

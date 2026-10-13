@@ -495,7 +495,11 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
 - 注釈と動画の編集画面は通常レベルのNSWindowで開きます。
   - 構成: `.titled`・`.closable`・`.resizable`と`level = .normal`を使います。キー・メインウィンドウへの昇格はNSWindowの標準動作に任せます。
   - 理由: 他のウィンドウの後ろへ回せるようにし、通常層とAXStandardWindowを対象にするJINRAIの一覧へ載せるためです。
-  - 表示: `NSApp.activate()`の後に`makeKeyAndOrderFront`を呼び、注釈はキャンバス、動画は時間軸へfirst responderを設定します。
+  - 表示: 通常レベルのまま、`orderFrontRegardless`と`makeKey`で開いた時点の窓を前面へ出します。
+    - 入力先: 注釈はキャンバス、動画は時間軸へfirst responderを設定します。
+    - アクティベーション: 表示と入力先を用意してから、編集画面専用の`NSApp.activate(ignoringOtherApps: true)`を要求します。
+    - 理由: 協調アクティベーションが断られても、Enter・Eで開いた編集画面を別アプリの後ろへ隠さないためです。
+    - API: 非推奨ですが、自アプリの前面化に使います。NSRunningApplication側の`.activateIgnoringOtherApps`はmacOS 14以降効果がないため使いません。
   - 再表示: クリックとスクロールによる前面化はAppKitに任せます。前面PIDに基づくアクティベーションの再要求は行いません。
   - 入力: `acceptsFirstMouse`を保ち、IMEと⌘キーはresponder経由で扱います。
     - ピンチ: 注釈ウィンドウのsendEventでキャンバス内のmagnifyを1回だけ渡します。文字入力中も同じ経路を使い、ツールバーとシートのイベントは横取りしません。

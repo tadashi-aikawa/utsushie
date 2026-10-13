@@ -111,8 +111,8 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         updateBoundaries(); update()
     }
     func show() {
-        focus.activate()
-        window.makeKeyAndOrderFront(nil); window.makeFirstResponder(timeline)
+        window.orderFrontRegardless(); window.makeKey(); window.makeFirstResponder(timeline)
+        focus.activateEditor()
         AnnotationNavigationDiagnostics.observeFocus("video editor shown", isActive: focus.isActive(), frontmostApplication: focus.frontmostApplication())
     }
     private func update() {

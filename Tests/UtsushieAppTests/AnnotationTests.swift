@@ -1526,13 +1526,22 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     var front: NSRunningApplication? = previous
     var active = false
     var requests = 0
+    var ordinaryRequests = 0
     var restores = 0
+    weak var openingWindow: NSWindow?
     let focus = AnnotationApplicationFocus(isActive: { active }, frontmostApplication: { front },
-        activate: { requests += 1 }, restore: { _ in restores += 1 })
+        activate: { ordinaryRequests += 1 }, activateEditor: {
+            requests += 1
+            // アクティベーションを拒否されても、窓の表示と入力先を先に用意している。
+            #expect(openingWindow?.isVisible == true)
+            #expect(openingWindow?.firstResponder is AnnotationCanvas)
+        }, restore: { _ in restores += 1 })
     let editor = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil, applicationFocus: focus)
+    openingWindow = editor.window
     defer { editor.window.close() }
     editor.show()
-    #expect(requests == 1 && editor.window.isVisible)
+    #expect(requests == 1 && ordinaryRequests == 0 && editor.window.isVisible)
+    #expect(editor.window.level == .normal && editor.window.accessibilitySubrole() == .standardWindow)
     #expect(editor.window.firstResponder === editor.canvas)
     // 開いた後のクリックとスクロールによる前面化はAppKitに任せる。
     active = true
@@ -1561,7 +1570,7 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     #expect(requests == 1)
     front = previous
     editor.window.close()
-    #expect(restores == 0)
+    #expect(restores == 0 && ordinaryRequests == 0)
 }
 
 @MainActor @Test func annotationWindowCloseLeavesApplicationRestorationToSystem() throws {
@@ -1579,7 +1588,7 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
         var restored: NSRunningApplication?
         var closed = false
         let focus = AnnotationApplicationFocus(isActive: { active }, frontmostApplication: { front },
-            activate: {}, restore: { restored = $0 })
+            activate: {}, activateEditor: {}, restore: { restored = $0 })
         let editor = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil, applicationFocus: focus)
         editor.onClose = { closed = true }
         editor.show()

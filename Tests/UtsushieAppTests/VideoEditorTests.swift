@@ -105,18 +105,27 @@ private final class VideoRunningApplication: NSRunningApplication, @unchecked Se
     let previous = VideoRunningApplication(-2), current = VideoRunningApplication(ProcessInfo.processInfo.processIdentifier)
     var front: NSRunningApplication? = previous
     var requests = 0, restored = false
-    let focus = AnnotationApplicationFocus(isActive: { true }, frontmostApplication: { front }, activate: { requests += 1 }, restore: { restored = $0 === previous })
+    var ordinaryRequests = 0
+    weak var openingWindow: NSWindow?
+    let focus = AnnotationApplicationFocus(isActive: { true }, frontmostApplication: { front },
+        activate: { ordinaryRequests += 1 }, activateEditor: {
+            requests += 1
+            #expect(openingWindow?.isVisible == true)
+            #expect(openingWindow?.firstResponder is VideoEditorTimeline)
+        }, restore: { restored = $0 === previous })
     let editor = VideoEditorController(source: URL(fileURLWithPath: "/tmp/utsushie-test-missing.mp4"),
         document: VideoEditDocument(duration: 12), screen: nil, focus: focus)
     defer { editor.window.close() }
+    openingWindow = editor.window
     editor.show()
-    #expect(requests == 1)
+    #expect(requests == 1 && ordinaryRequests == 0)
+    #expect(editor.window.level == .normal && editor.window.accessibilitySubrole() == .standardWindow)
     #expect(editor.window.firstResponder === editor.timeline)
     // 通常ウィンドウでは、スクロール後のアクティベーションを再要求しない。
     let wheel = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 0, wheel2: 0, wheel3: 0))
     editor.window.sendEvent(try #require(NSEvent(cgEvent: wheel)))
     #expect(requests == 1)
-    front = current; editor.window.close(); #expect(!restored)
+    front = current; editor.window.close(); #expect(!restored && ordinaryRequests == 0)
 }
 
 @MainActor @Test func videoToolbarUsesSharedTraysAndNavigationTargetsWholeRecording() throws {
