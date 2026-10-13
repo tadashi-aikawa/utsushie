@@ -386,7 +386,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private static var lastHighlighterColor: HighlighterColor = .yellow
     private static var lastHighlighterDarkBackground = false
     private static var lastInkColor: InkColor = .red
-    private static var lastSize: AnnotationSize = .normal
+    // 各ツールの大きさを、編集画面を開き直しても同じプロセス内で保つ。
+    private static var lastSizes: [AnnotationTool: AnnotationSize] = [:]
     let original: CGImage
     private(set) var history: AnnotationHistory
     var tool: AnnotationTool { didSet { updateCursor(); needsDisplay = true } }
@@ -450,14 +451,21 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         AnnotationToolbarPresentation.showsSizeControls(tool: tool,
             selectedTools: history.document.annotations.filter { selection.contains($0.id) }.map(\.tool))
     }
+    private var defaultSize: AnnotationSize { Self.lastSizes[tool] ?? .normal }
+    private var selectedSizeAnnotations: [Annotation] {
+        history.document.annotations.filter { selection.contains($0.id) && $0.tool.usesSize }
+    }
     var annotationSize: AnnotationSize? {
-        let sizes = Set(history.document.annotations.filter { selection.contains($0.id) && $0.tool.usesSize }.map(\.size))
-        return sizes.isEmpty ? Self.lastSize : sizes.count == 1 ? sizes.first : nil
+        let sizes = Set(selectedSizeAnnotations.map(\.size))
+        return sizes.isEmpty ? defaultSize : sizes.count == 1 ? sizes.first : nil
     }
     func applySize(_ size: AnnotationSize) {
         guard isEnabled, !isInteracting, window?.attachedSheet == nil, showsSizeControls else { return }
         onUserOperation?()
-        Self.lastSize = size
+        // 選択中の注釈の大きさを変えたときは、その種類だけを記憶する。
+        let selected = selectedSizeAnnotations
+        let tools = selected.isEmpty ? [tool] : selected.map(\.tool)
+        for target in tools where target.usesSize { Self.lastSizes[target] = size }
         history.commit(history.document.settingSize(selection, size: size, imageSize: imageSize, measureText: AnnotationRenderer.textSize))
         changed()
     }
@@ -688,9 +696,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         }
         selection = []
         guard tool.allowsMargin || tool == .spotlight || CGRect(origin: .zero, size: imageSize).contains(p) else { changed(); return }
-        let start = AnnotationGeometry.creationStart(p, tool: tool, imageSize: imageSize, size: Self.lastSize)
+        let start = AnnotationGeometry.creationStart(p, tool: tool, imageSize: imageSize, size: defaultSize)
         let annotation = Annotation(tool: tool, start: start, highlighterColor: Self.lastHighlighterColor,
-                                    darkBackground: Self.lastHighlighterDarkBackground, inkColor: Self.lastInkColor, size: Self.lastSize)
+                                    darkBackground: Self.lastHighlighterDarkBackground, inkColor: Self.lastInkColor, size: defaultSize)
         highlighterStraight = event.modifierFlags.contains(.shift)
         frozenImageRect = imageRect
         gesture = [.text, .number].contains(tool) ? .label(annotation) : .create(annotation)
@@ -807,7 +815,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         let isJIS = KBGetLayoutType(Int16(clamping: physicalType)) == kKeyboardJIS
         if let direction = AnnotationSizeDirection(keyCode: event.keyCode, isJIS: isJIS, modified: !flags.isEmpty, editingText: isEditingText) {
             if !event.isARepeat {
-                applySize(history.document.steppedSize(selection, direction: direction, defaultSize: Self.lastSize))
+                applySize(history.document.steppedSize(selection, direction: direction, defaultSize: defaultSize))
             }
             return true
         }
@@ -1006,7 +1014,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             UITheme.indigo.setStroke(); path.lineWidth = 1; path.stroke()
         }
         if tool == .number, let cursorPoint, !isEditingText, gesture == nil {
-            let style = AnnotationStyle(imageSize: imageSize, size: Self.lastSize)
+            let style = AnnotationStyle(imageSize: imageSize, size: defaultSize)
             let string = String(document.nextNumber) as NSString
             let r = viewRect(style.numberRect(at: cursorPoint, number: document.nextNumber))
             UITheme.inkFace(Self.lastInkColor).withAlphaComponent(0.45).setFill()

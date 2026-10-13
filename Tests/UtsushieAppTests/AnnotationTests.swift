@@ -285,11 +285,19 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
         windowNumber: 0, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: repeating, keyCode: keyCode))
 }
 
-@MainActor @Test func annotationSizeKeysRememberDefaultAcrossToolsAndRespectTextInput() throws {
+@MainActor @Test func annotationSizeKeysRememberEachToolDefaultAndRespectTextInput() throws {
     let canvas = AnnotationCanvas(image: try annotationFixture(width: 960, height: 600), document: AnnotationDocument(), tool: .number)
     canvas.frame = CGRect(x: 0, y: 0, width: 1100, height: 800)
     let previous = try #require(canvas.annotationSize)
-    defer { canvas.commitText(); canvas.escape(); canvas.tool = .number; canvas.applySize(previous) }
+    canvas.tool = .text
+    let previousText = try #require(canvas.annotationSize)
+    canvas.applySize(.normal)
+    canvas.tool = .number
+    defer {
+        canvas.commitText(); canvas.escape()
+        canvas.tool = .number; canvas.applySize(previous)
+        canvas.tool = .text; canvas.applySize(previousText)
+    }
     canvas.applySize(.normal)
     func sizeKey(_ keyCode: UInt16, keyboardType: Int64) throws -> NSEvent {
         let cg = try #require(CGEvent(keyboardEventSource: nil, virtualKey: keyCode, keyDown: true))
@@ -310,7 +318,7 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
         let modified = try #require(NSEvent(cgEvent: cg))
         #expect(!canvas.handleSizeKey(modified))
     }
-    let reopened = AnnotationCanvas(image: canvas.original, document: AnnotationDocument(), tool: .highlighter)
+    let reopened = AnnotationCanvas(image: canvas.original, document: AnnotationDocument(), tool: .number)
     #expect(reopened.annotationSize == .large)
     canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 100, y: 100)))
     canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 100, y: 100)))
@@ -323,12 +331,13 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 300, y: 200)))
     let input = try #require(canvas.subviews.compactMap { $0 as? NSTextView }.first)
     let font = try #require(input.font)
-    #expect(abs(font.pointSize - AnnotationStyle(imageSize: CGSize(width: 960, height: 600), size: .largest).fontSize * canvas.displayScale) < 0.00001)
+    #expect(abs(font.pointSize - AnnotationStyle(imageSize: CGSize(width: 960, height: 600), size: .normal).fontSize * canvas.displayScale) < 0.00001)
     #expect(!canvas.handleSizeKey(try sizeKey(30, keyboardType: 40)))
     input.string = "文字"
     canvas.commitText()
     let text = try #require(canvas.document.annotations.last)
-    let measured = AnnotationRenderer.textSize(text.text, style: AnnotationStyle(imageSize: CGSize(width: 960, height: 600), size: .largest))
+    #expect(text.size == .normal)
+    let measured = AnnotationRenderer.textSize(text.text, style: AnnotationStyle(imageSize: CGSize(width: 960, height: 600), size: .normal))
     #expect(text.rect.size == measured)
     canvas.applySize(.small)
     let changed = try #require(canvas.document.annotations.last)
@@ -339,17 +348,85 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
 
 @MainActor @Test func annotationSizeControlsFitMinimumToolbarAndClickChangesDefault() throws {
     let editor = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil)
-    let old = try #require(editor.canvas.annotationSize)
-    defer { editor.canvas.tool = .number; editor.canvas.applySize(old) }
     editor.toolbar.frame.size = CGSize(width: 1040, height: 75)
     for tool in [AnnotationTool.rectangle, .highlighter] {
         editor.canvas.tool = tool; editor.canvas.onChange?()
+        let old = try #require(editor.canvas.annotationSize)
+        defer { editor.canvas.applySize(old) }
         editor.toolbar.layout()
         #expect(!editor.toolbar.sizeControls.isHidden)
         #expect(editor.toolbar.sizeControls.frame.maxX < editor.toolbar.dimensions.frame.minX)
         let button = try #require(editor.toolbar.sizeControls.sizeButtons[.smallest])
         button.performClick(nil)
         #expect(editor.canvas.annotationSize == .smallest && button.state == .on)
+    }
+}
+
+@MainActor @Test func annotationSizeDefaultsStayIndependentForEveryDrawingTool() throws {
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .number)
+    let tools = AnnotationTool.allCases.filter(\.usesSize)
+    var previous: [AnnotationTool: AnnotationSize] = [:]
+    for tool in tools {
+        canvas.tool = tool
+        previous[tool] = try #require(canvas.annotationSize)
+        canvas.applySize(.normal)
+    }
+    defer {
+        for tool in tools { canvas.tool = tool; canvas.applySize(previous[tool]!) }
+    }
+    for tool in tools {
+        canvas.tool = tool; canvas.applySize(.largest)
+        for other in tools {
+            canvas.tool = other
+            #expect(canvas.annotationSize == (other == tool ? .largest : .normal))
+        }
+        let reopened = AnnotationCanvas(image: canvas.original, document: AnnotationDocument(), tool: tool)
+        #expect(reopened.annotationSize == .largest)
+        canvas.tool = tool; canvas.applySize(.normal)
+    }
+}
+
+@MainActor @Test func annotationTextSizeDoesNotChangeNewArrowAndSelectionRemembersOnlyItsTools() throws {
+    let canvas = AnnotationCanvas(image: try annotationFixture(width: 960, height: 600), document: AnnotationDocument(), tool: .text)
+    canvas.frame = CGRect(x: 0, y: 0, width: 1100, height: 800)
+    let previousText = try #require(canvas.annotationSize)
+    canvas.tool = .arrow
+    let previousArrow = try #require(canvas.annotationSize)
+    canvas.applySize(.small)
+    defer {
+        canvas.commitText(); canvas.escape()
+        canvas.tool = .text; canvas.applySize(previousText)
+        canvas.tool = .arrow; canvas.applySize(previousArrow)
+    }
+    canvas.tool = .text; canvas.applySize(.largest)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 150, y: 150)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 150, y: 150)))
+    let input = try #require(canvas.subviews.compactMap { $0 as? NSTextView }.first)
+    input.string = "文字"; canvas.commitText()
+    #expect(canvas.document.annotations[0].size == .largest)
+    canvas.tool = .arrow
+    // 文字が選択中でも、矢印ツールの既定を上書きしない。
+    canvas.applySize(.large)
+    #expect(canvas.document.annotations[0].size == .large)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 450, y: 350)))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 650, y: 450)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 650, y: 450)))
+    #expect(canvas.document.annotations[1].tool == .arrow && canvas.document.annotations[1].size == .small)
+    canvas.tool = .selection
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: .zero))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 900, y: 550)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 900, y: 550)))
+    #expect(canvas.selection.count == 2 && canvas.annotationSize == nil)
+    canvas.applySize(.smallest)
+    #expect(canvas.document.annotations.allSatisfy { $0.size == .smallest })
+    canvas.undoAnnotation()
+    #expect(canvas.document.annotations.map(\.size) == [.large, .small])
+    canvas.escape()
+    for tool in [AnnotationTool.text, .arrow] {
+        canvas.tool = tool
+        #expect(canvas.annotationSize == .smallest)
+        let reopened = AnnotationCanvas(image: canvas.original, document: AnnotationDocument(), tool: tool)
+        #expect(reopened.annotationSize == .smallest)
     }
 }
 
