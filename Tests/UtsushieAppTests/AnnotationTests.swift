@@ -362,6 +362,55 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     }
 }
 
+@MainActor @Test(arguments: [false, true])
+func annotationSizeToolbarSwitchClearsSelectionAndImmediatelyShowsRememberedSize(clickToolbar: Bool) throws {
+    let editor = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil)
+    editor.window.contentView?.layoutSubtreeIfNeeded()
+    let canvas = editor.canvas
+    let defaults = AnnotationCanvas(image: canvas.original, document: AnnotationDocument(), tool: .text)
+    let oldText = try #require(defaults.annotationSize)
+    defaults.tool = .arrow
+    let oldArrow = try #require(defaults.annotationSize)
+    defer {
+        defaults.tool = .text; defaults.applySize(oldText)
+        defaults.tool = .arrow; defaults.applySize(oldArrow)
+        editor.window.close()
+    }
+    defaults.applySize(.small)
+    defaults.tool = .text; defaults.applySize(.largest)
+    func switchTool(_ tool: AnnotationTool) throws {
+        if clickToolbar {
+            try #require(editor.toolbar.toolButtons[tool]).performClick(nil)
+        } else {
+            canvas.keyDown(with: try annotationKeyEvent(keyCode: tool.keyCode, characters: tool.key))
+        }
+    }
+    func displayedSize() -> AnnotationSize? {
+        editor.toolbar.sizeControls.sizeButtons.first { $0.value.state == .on }?.key
+    }
+    try switchTool(.text)
+    #expect(canvas.selection.isEmpty && displayedSize() == .largest)
+    try switchTool(.arrow)
+    #expect(canvas.selection.isEmpty && displayedSize() == .small)
+    try switchTool(.text)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 30, y: 30)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 30, y: 30)))
+    let input = try #require(canvas.subviews.compactMap { $0 as? NSTextView }.first)
+    input.string = "文字"; canvas.commitText()
+    let text = try #require(canvas.document.annotations.first)
+    #expect(canvas.selection == [text.id] && text.size == .largest)
+    try switchTool(.text)
+    #expect(canvas.selection == [text.id] && displayedSize() == .largest)
+    let beforeSwitch = canvas.document
+    try switchTool(.arrow)
+    #expect(canvas.tool == .arrow && canvas.selection.isEmpty)
+    #expect(canvas.document == beforeSwitch && displayedSize() == .small)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 80, y: 50)))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 130, y: 80)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 130, y: 80)))
+    #expect(canvas.document.annotations.last?.size == .small && displayedSize() == .small)
+}
+
 @MainActor @Test func annotationSizeDefaultsStayIndependentForEveryDrawingTool() throws {
     let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .number)
     let tools = AnnotationTool.allCases.filter(\.usesSize)

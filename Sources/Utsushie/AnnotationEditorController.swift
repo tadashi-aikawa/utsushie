@@ -225,8 +225,8 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     @objc private func selectTool(_ sender: NSButton) {
         guard !saving, let tool = toolButtons.first(where: { $0.value === sender })?.key else { return }
         clearPrivacyMessage()
-        canvas.commitText(); canvas.tool = tool; Self.lastTool = tool
-        update(); window.makeFirstResponder(canvas)
+        canvas.commitText(); canvas.selectTool(tool)
+        window.makeFirstResponder(canvas)
     }
     @objc private func selectHighlighterColor(_ sender: HighlighterColorButton) {
         guard !saving else { return }
@@ -822,7 +822,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         }
         if flags.isEmpty, event.keyCode == 53 { if !event.isARepeat { escape() }; return }
         if flags.isEmpty, let next = AnnotationTool.allCases.first(where: { $0.keyCode == event.keyCode }) {
-            tool = next; rememberTool(); changed(); return
+            selectTool(next); return
         }
         interpretKeyEvents([event])
     }
@@ -830,9 +830,12 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         if event.keyCode == 49 { releaseSpace(); return }
         super.keyUp(with: event)
     }
-    private func rememberTool() {
-        // ボタンとキーの持ち替えを同じ経路へ通す。
+    func selectTool(_ next: AnnotationTool) {
+        // 作成ツールの記憶したサイズを示すため、持ち替え時に前の注釈の選択を外す。
+        if tool != next { selection = [] }
+        tool = next
         onToolChange?(tool)
+        changed()
     }
     var onToolChange: ((AnnotationTool) -> Void)?
     override func cancelOperation(_ sender: Any?) { escape() }
