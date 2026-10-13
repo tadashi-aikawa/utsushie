@@ -24,7 +24,11 @@ private final class VideoRunningApplication: NSRunningApplication, @unchecked Se
     var completed: VideoEditDocument?
     editor.onClose = { order.append("close") }
     editor.onComplete = { completed = $0; order.append("complete") }
-    #expect(editor.window.styleMask.contains(.nonactivatingPanel))
+    editor.window.orderFront(nil)
+    #expect(editor.window.styleMask == [.titled, .closable, .resizable])
+    #expect(editor.window.canBecomeKey && editor.window.canBecomeMain)
+    #expect(editor.window.level == .normal)
+    #expect(editor.window.accessibilitySubrole() == .standardWindow)
     editor.seek(to: 2)
     #expect(editor.handleKey(try videoKey(editor, 34, flags: .function)))
     editor.seek(to: 10)
@@ -96,7 +100,7 @@ private final class VideoRunningApplication: NSRunningApplication, @unchecked Se
     editor.undo()
     #expect(timeline.document.kept == [.init(0, 10)])
 }
-@MainActor @Test func videoPanelRequestsActivationByFrontmostPIDAndRestoresPreviousApp() throws {
+@MainActor @Test func videoWindowActivatesOnShowAndLeavesRestorationToSystem() throws {
     _ = NSApplication.shared
     let previous = VideoRunningApplication(-2), current = VideoRunningApplication(ProcessInfo.processInfo.processIdentifier)
     var front: NSRunningApplication? = previous
@@ -107,10 +111,12 @@ private final class VideoRunningApplication: NSRunningApplication, @unchecked Se
     defer { editor.window.close() }
     editor.show()
     #expect(requests == 1)
-    editor.requestActivation(); #expect(requests == 2)
-    front = current; editor.requestActivation(); #expect(requests == 2)
-    front = nil; editor.requestActivation(); #expect(requests == 3)
-    front = current; editor.window.close(); #expect(restored)
+    #expect(editor.window.firstResponder === editor.timeline)
+    // 通常ウィンドウでは、スクロール後のアクティベーションを再要求しない。
+    let wheel = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 0, wheel2: 0, wheel3: 0))
+    editor.window.sendEvent(try #require(NSEvent(cgEvent: wheel)))
+    #expect(requests == 1)
+    front = current; editor.window.close(); #expect(!restored)
 }
 
 @MainActor @Test func videoToolbarUsesSharedTraysAndNavigationTargetsWholeRecording() throws {

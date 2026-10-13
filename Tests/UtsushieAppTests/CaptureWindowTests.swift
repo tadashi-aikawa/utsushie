@@ -9,8 +9,8 @@ import Testing
         CapturePanel(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false),
         RecordingBorderPanel(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false),
         ThumbnailPanel(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false),
-        AnnotationPanel(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false),
-        VideoEditorPanel(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false),
+        AnnotationEditorWindow(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false),
+        VideoEditorWindow(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false),
         NSWindow(contentRect: rect, styleMask: .titled, backing: .buffered, defer: false)
     ]
     for window in windows { window.isReleasedWhenClosed = false }

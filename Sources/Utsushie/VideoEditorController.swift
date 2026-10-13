@@ -4,13 +4,12 @@ import UtsushieCore
 
 @MainActor
 final class VideoEditorController: NSObject, NSWindowDelegate {
-    let window: VideoEditorPanel
+    let window: VideoEditorWindow
     let timeline: VideoEditorTimeline
     let player: AVPlayer
     private let initial: VideoEditDocument
     private var history: VideoEditHistory
     private let focus: AnnotationApplicationFocus
-    private var previousApplication: NSRunningApplication?
     let toolbar = VideoToolbarView()
     private let source: URL
     private var root: VideoEditorLayout!
@@ -51,13 +50,12 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         timeline = VideoEditorTimeline(document: document)
         let visible = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let size = CGSize(width: min(1040, visible.width - 40), height: min(735, visible.height - 80))
-        window = VideoEditorPanel(contentRect: CGRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
+        window = VideoEditorWindow(contentRect: CGRect(origin: .zero, size: size),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         super.init()
         window.editor = self; window.delegate = self
         window.title = "UTSUSHIE — 動画"; window.appearance = NSAppearance(named: .darkAqua)
-        window.isReleasedWhenClosed = false; window.becomesKeyOnlyIfNeeded = false
-        window.hidesOnDeactivate = false; window.level = .floating
+        window.isReleasedWhenClosed = false; window.level = .normal
         window.acceptsMouseMovedEvents = true; window.minSize = CGSize(width: min(1000, size.width), height: 440)
         root = VideoEditorLayout(frame: CGRect(origin: .zero, size: size))
         for (button, action) in [(toolbar.startButton, #selector(setStart)), (toolbar.endButton, #selector(setEnd)),
@@ -113,17 +111,9 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         updateBoundaries(); update()
     }
     func show() {
-        if let front = focus.frontmostApplication(), front.processIdentifier != ProcessInfo.processInfo.processIdentifier { previousApplication = front }
-        requestActivation()
-        window.orderFrontRegardless(); window.makeKey(); window.makeFirstResponder(timeline)
-        AnnotationNavigationDiagnostics.observeFocus("video editor shown", isActive: focus.isActive(), frontmostApplication: focus.frontmostApplication())
-    }
-    func requestActivation() {
-        let front = focus.frontmostApplication()
-        AnnotationNavigationDiagnostics.observeFocus("video editor activation request", isActive: focus.isActive(), frontmostApplication: front)
-        guard !closing, front?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
         focus.activate()
-        AnnotationNavigationDiagnostics.observeFocus("video editor activation after", isActive: focus.isActive(), frontmostApplication: focus.frontmostApplication())
+        window.makeKeyAndOrderFront(nil); window.makeFirstResponder(timeline)
+        AnnotationNavigationDiagnostics.observeFocus("video editor shown", isActive: focus.isActive(), frontmostApplication: focus.frontmostApplication())
     }
     private func update() {
         toolbar.undoButton.isEnabled = history.canUndo; toolbar.redoButton.isEnabled = history.canRedo
@@ -351,20 +341,14 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         if let observer { player.removeTimeObserver(observer); self.observer = nil }
         if let boundaryObserver { player.removeTimeObserver(boundaryObserver); self.boundaryObserver = nil }
         AnnotationNavigationDiagnostics.observeFocus("video editor close", isActive: focus.isActive(), frontmostApplication: focus.frontmostApplication())
-        if focus.frontmostApplication()?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
-           let previousApplication, !previousApplication.isTerminated,
-           previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier { focus.restore(previousApplication) }
         onClose?(); onClose = nil; onComplete = nil
     }
 }
 
 @MainActor
-final class VideoEditorPanel: NSPanel {
+final class VideoEditorWindow: NSWindow {
     weak var editor: VideoEditorController?
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .leftMouseDown || event.type == .rightMouseDown || event.type == .otherMouseDown || event.type == .scrollWheel { editor?.requestActivation() }
         if event.type == .keyDown, editor?.handleKey(event) == true { return }
         super.sendEvent(event)
     }
@@ -375,7 +359,6 @@ final class VideoEditorPanel: NSPanel {
 
 @MainActor
 final class VideoEditorButton: NSButton {
-    override var needsPanelToBecomeKey: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
@@ -442,7 +425,6 @@ private final class VideoEditorPreview: NSView {
         boundaryLayer.contents = image; boundaryLayer.isHidden = image == nil
         CATransaction.commit()
     }
-    override var needsPanelToBecomeKey: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
@@ -539,7 +521,6 @@ final class VideoEditorTimeline: NSView {
     required init?(coder: NSCoder) { fatalError() }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
-    override var needsPanelToBecomeKey: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     private func x(_ time: Double) -> CGFloat { strip.minX + time / max(document.duration, 0.00001) * strip.width }
     private func time(_ x: CGFloat) -> Double { min(1, max(0, (x - strip.minX) / strip.width)) * document.duration }

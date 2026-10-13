@@ -20,7 +20,7 @@ struct AnnotationApplicationFocus {
 final class AnnotationEditorController: NSObject, NSWindowDelegate {
     // アプリ起動中だけ共有する。設定ファイルへ書き戻さない。
     private static var lastTool: AnnotationTool = .rectangle
-    let window: AnnotationPanel
+    let window: AnnotationEditorWindow
     let canvas: AnnotationCanvas
     let toolbar = AnnotationToolbarView()
     private var toolButtons: [AnnotationTool: ToolbarButton] { toolbar.toolButtons }
@@ -38,7 +38,6 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     private var privacyMessage: ToolbarHint?
     var isFindingPrivacy: Bool { privacyOperation != nil }
     var hintText: String { toolbar.hintView.hint.text }
-    private var previousApplication: NSRunningApplication?
     var onComplete: ((CGImage, AnnotationDocument) async throws -> Void)?
     var onClose: (() -> Void)?
 
@@ -52,14 +51,12 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         let visible = (screen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let size = CGSize(width: min(max(CGFloat(image.width) + 240, 1180), visible.width - 40),
                           height: min(max(CGFloat(image.height) + 292, 420), visible.height - 80) + AnnotationToolbarPresentation.height - 52)
-        window = AnnotationPanel(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled, .closable, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
+        window = AnnotationEditorWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         super.init()
         window.title = "UTSUSHIE — 注釈"
         window.appearance = NSAppearance(named: .darkAqua)
         window.isReleasedWhenClosed = false
-        window.becomesKeyOnlyIfNeeded = false
-        window.hidesOnDeactivate = false
-        window.level = .floating
+        window.level = .normal
         window.acceptsMouseMovedEvents = true
         let toolbarWidth = toolbar.minimumWidth
         window.minSize = CGSize(width: toolbarWidth, height: 383)
@@ -108,25 +105,9 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         button.title = title; button.target = self; button.action = action
     }
     func show() {
-        if let application = applicationFocus.frontmostApplication(),
-           application.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-            previousApplication = application
-        }
-        requestActivation(reason: "editor open")
-        // アクティベーション要求が断られても、キーとクリックの従来の経路は保つ。
-        window.orderFrontRegardless(); window.makeKey(); window.makeFirstResponder(canvas)
-        AnnotationNavigationDiagnostics.observeFocus("editor shown", isActive: applicationFocus.isActive(),
-                                                     frontmostApplication: applicationFocus.frontmostApplication())
-    }
-    func requestActivation(reason: String) {
-        let front = applicationFocus.frontmostApplication()
-        let active = applicationFocus.isActive()
-        AnnotationNavigationDiagnostics.observeFocus(reason, isActive: active, frontmostApplication: front)
-        // isActiveだけで再要求を止めず、前面のPIDが自分になるまではユーザー操作のたびに要求する。
-        guard !closing, front?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
-        AnnotationNavigationDiagnostics.observeFocus("activation before: \(reason)", isActive: active, frontmostApplication: front)
         applicationFocus.activate()
-        AnnotationNavigationDiagnostics.observeFocus("activation after: \(reason)", isActive: applicationFocus.isActive(),
+        window.makeKeyAndOrderFront(nil); window.makeFirstResponder(canvas)
+        AnnotationNavigationDiagnostics.observeFocus("editor shown", isActive: applicationFocus.isActive(),
                                                      frontmostApplication: applicationFocus.frontmostApplication())
     }
     private func update() {
@@ -308,25 +289,17 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
     }
     func windowWillClose(_ notification: Notification) {
         cancelPrivacy()
-        let application = previousApplication
-        previousApplication = nil
-        let front = applicationFocus.frontmostApplication()
-        AnnotationNavigationDiagnostics.observeFocus("editor close", isActive: applicationFocus.isActive(), frontmostApplication: front)
-        if front?.processIdentifier == ProcessInfo.processInfo.processIdentifier, let application, !application.isTerminated,
-           application.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-            applicationFocus.restore(application)
-        }
+        AnnotationNavigationDiagnostics.observeFocus("editor close", isActive: applicationFocus.isActive(),
+                                                     frontmostApplication: applicationFocus.frontmostApplication())
         onClose?(); onClose = nil; onComplete = nil
     }
     func windowDidResignKey(_ notification: Notification) { canvas.releaseSpace() }
 }
 
 @MainActor
-final class AnnotationPanel: NSPanel {
+final class AnnotationEditorWindow: NSWindow {
     weak var editor: AnnotationEditorController?
     private let navigationLog = Logger(subsystem: "com.tadashi-aikawa.utsushie", category: "AnnotationNavigation")
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
         case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel, .magnify:
@@ -336,16 +309,9 @@ final class AnnotationPanel: NSPanel {
         if event.type == .keyDown, editor?.handlePrivacyKey(event) == true { return }
         // IMEへ配送する前に大きさの物理キーを受ける。文字入力中は横取りしない。
         if event.type == .keyDown, editor?.canvas.handleSizeKey(event) == true { return }
-        switch event.type {
-        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            editor?.requestActivation(reason: "panel mouseDown")
-        case .scrollWheel:
-            editor?.requestActivation(reason: "panel scrollWheel")
-        default: break
-        }
         if event.type == .magnify, let canvas = editor?.canvas {
             let location = canvas.convert(event.locationInWindow, from: nil)
-            // 非アクティブパネルでも、first responderによらずキャンバス内のピンチを1回だけ処理する。
+            // first responderによらずキャンバス内のピンチを1回だけ処理する。
             // 文字入力ビューの上でも同じ経路にし、ツールバー・シートのイベントは横取りしない。
             let inCanvas = canvas.bounds.contains(location) && attachedSheet == nil
             let hitPoint = canvas.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow
@@ -532,7 +498,6 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     var zoomPercentage: String { viewport.percentage }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
-    override var needsPanelToBecomeKey: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     init(image: CGImage, document: AnnotationDocument, tool: AnnotationTool, history: AnnotationHistory? = nil) {
         original = image; self.history = history ?? AnnotationHistory(document); self.tool = tool
@@ -1037,7 +1002,6 @@ final class AnnotationTextView: NSTextView {
     // 確定済みの文字編集を、次に開いた文字の⌘Zへ持ち越さない。
     private let textUndoManager = UndoManager()
     override var undoManager: UndoManager? { textUndoManager }
-    override var needsPanelToBecomeKey: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {
         if navigationCanvas?.reeditTextOnDoubleClick(with: event) == true { return }

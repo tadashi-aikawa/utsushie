@@ -731,21 +731,23 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     }
 }
 
-@MainActor @Test func annotationEditorUsesNonactivatingPanelAndInputViewsRequestKeys() throws {
+@MainActor @Test func annotationEditorUsesStandardWindowAndPreservesTextInput() throws {
     _ = NSApplication.shared
     let editor = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil)
     defer { editor.window.close() }
-    #expect(editor.window.styleMask.contains(.nonactivatingPanel))
-    #expect(editor.window.canBecomeKey && !editor.window.canBecomeMain)
-    #expect(!editor.window.becomesKeyOnlyIfNeeded && !editor.window.hidesOnDeactivate)
-    #expect(editor.window.level == .floating && editor.window.acceptsMouseMovedEvents)
-    #expect(editor.canvas.needsPanelToBecomeKey && editor.canvas.acceptsFirstMouse(for: nil))
+    // NSWindowのメイン化とAX subroleは表示中の状態で確かめる。
+    editor.window.orderFront(nil)
+    #expect(editor.window.styleMask == [.titled, .closable, .resizable])
+    #expect(editor.window.canBecomeKey && editor.window.canBecomeMain)
+    #expect(editor.window.accessibilitySubrole() == .standardWindow)
+    #expect(editor.window.level == .normal && editor.window.acceptsMouseMovedEvents)
+    #expect(editor.canvas.acceptsFirstMouse(for: nil))
     editor.canvas.tool = .text
     editor.canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
     editor.canvas.mouseDown(with: try annotationMouseEvent(editor.canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 20)))
     editor.canvas.mouseUp(with: try annotationMouseEvent(editor.canvas, type: .leftMouseUp, at: CGPoint(x: 20, y: 20)))
     let input = try #require(editor.canvas.subviews.compactMap { $0 as? AnnotationTextView }.first)
-    #expect(input.needsPanelToBecomeKey && input.acceptsFirstMouse(for: nil))
+    #expect(input.acceptsFirstMouse(for: nil))
     #expect(editor.window.firstResponder === input)
     input.setMarkedText("へんかん", selectedRange: NSRange(location: 4, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
     input.insertNewline(nil)
@@ -1517,7 +1519,7 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     override var bundleIdentifier: String? { identifier == ProcessInfo.processInfo.processIdentifier ? "com.tadashi-aikawa.utsushie" : "com.test.previous" }
 }
 
-@MainActor @Test func annotationActivationUsesFrontmostPIDEvenWhenIsActiveDisagrees() throws {
+@MainActor @Test func annotationWindowActivatesOnShowWithoutReactivationOnInput() throws {
     _ = NSApplication.shared
     let previous = AnnotationRunningApplication(identifier: -2)
     let current = AnnotationRunningApplication(identifier: ProcessInfo.processInfo.processIdentifier)
@@ -1532,39 +1534,37 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     editor.show()
     #expect(requests == 1 && editor.window.isVisible)
     #expect(editor.window.firstResponder === editor.canvas)
-    // 開いた後にisActiveだけがtrueになっても、前面が別アプリなら再要求する。
+    // 開いた後のクリックとスクロールによる前面化はAppKitに任せる。
     active = true
     let root = try #require(editor.window.contentView)
     root.layoutSubtreeIfNeeded()
-    // ツールバーの空き領域でもユーザー操作による要求を出す。
+    // キャンバス以外の操作でも追加のアクティベーション要求を出さない。
     let mouse = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: root.convert(CGPoint(x: 5, y: 20), to: nil),
         modifierFlags: [], timestamp: 0, windowNumber: editor.window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
     editor.window.sendEvent(mouse)
-    #expect(requests == 2)
+    #expect(requests == 1)
     let wheel = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 0, wheel2: 0, wheel3: 0))
     let scroll = try #require(NSEvent(cgEvent: wheel))
     editor.window.sendEvent(scroll)
-    #expect(requests == 3)
+    #expect(requests == 1)
     editor.window.sendEvent(mouse)
-    #expect(requests == 4)
-    // 逆のずれでも、前面が自分なら追加の要求は出さない。
+    #expect(requests == 1)
     front = current; active = false
     editor.window.sendEvent(scroll)
     editor.window.sendEvent(mouse)
-    #expect(requests == 4)
+    #expect(requests == 1)
     front = previous; active = true
     editor.window.sendEvent(scroll)
-    #expect(requests == 5)
-    // 前面アプリが取得できない場合も自分が前面とは扱わない。
+    #expect(requests == 1)
     front = nil
     editor.window.sendEvent(mouse)
-    #expect(requests == 6)
+    #expect(requests == 1)
     front = previous
     editor.window.close()
     #expect(restores == 0)
 }
 
-@MainActor @Test func annotationCloseRestoresOpeningApplicationOnlyWhileFrontmost() throws {
+@MainActor @Test func annotationWindowCloseLeavesApplicationRestorationToSystem() throws {
     _ = NSApplication.shared
     for (activeAtClose, frontmostAtClose, terminated, isSelf) in [
         (true, true, false, false), (false, true, false, false),
@@ -1583,12 +1583,11 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
         let editor = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil, applicationFocus: focus)
         editor.onClose = { closed = true }
         editor.show()
-        // 編集中に前面アプリが変わっても、復帰先は開く直前のアプリを保つ。
+        // 前面アプリや起動状態によらず、閉じた後の前面化はOSに任せる。
         front = frontmostAtClose ? current : other; active = activeAtClose; previous.mockTerminated = terminated
         editor.window.close()
         #expect(closed)
-        if frontmostAtClose && !terminated && !isSelf { #expect(restored === previous) }
-        else { #expect(restored == nil) }
+        #expect(restored == nil)
     }
 }
 
@@ -1610,9 +1609,9 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     #expect(AnnotationNavigationDiagnostics.observeMagnify(event) === event)
 }
 
-@MainActor @Test func annotationPanelDeliversPinchToCanvasAndTextInput() throws {
+@MainActor @Test func annotationWindowDeliversPinchToCanvasAndTextInput() throws {
     _ = NSApplication.shared
-    // 合成イベントでパネル以降の配送を検証する。OSからの実ピンチ到達は受入試験で確かめる。
+    // 合成イベントでウィンドウ以降の配送を検証する。OSからの実ピンチ到達は受入試験で確かめる。
     let wasActive = NSApp.isActive
     let editor = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil)
     defer { editor.window.close() }
