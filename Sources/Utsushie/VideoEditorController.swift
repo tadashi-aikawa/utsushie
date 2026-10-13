@@ -25,6 +25,14 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
     private var seekTask: Task<Void, Never>?
     private var seekID = UUID()
     private var frameTimes: [Double] = []
+    private(set) var boundaryPreviewTime: Double?
+    private lazy var boundaryPreview = VideoBoundaryPreview(source: source, show: { [weak self] image, _ in
+        guard let self, !closing else { return }
+        (root.preview as? VideoEditorPreview)?.showBoundary(image)
+    }, failed: { [weak self] in
+        guard let self, !closing else { return }
+        message = ToolbarHint("端のプレビューを読めませんでした", isError: true); update()
+    })
     private(set) var position = 0.0
     private var playing = false
     private var seeking = false
@@ -72,10 +80,11 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         timeline.onSelectStill = { [weak self] id in self?.selectStill(id) }
         timeline.onEdit = { [weak self] document, commit in
             guard let self else { return }
-            pause(); discardArmed = false; message = nil
+            pause(clearBoundaryPreview: commit); discardArmed = false; message = nil
             if commit { history.commit(document); updateBoundaries() }
             timeline.document = document; update()
         }
+        timeline.onBoundaryPreview = { [weak self] time in self?.previewBoundary(at: time) }
         timeline.onSelection = { [weak self] in self?.discardArmed = false; self?.update() }
         observer = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1 / 60.0, preferredTimescale: 60000), queue: .main) { [weak self] time in
             MainActor.assumeIsolated { self?.tick(time.seconds) }
@@ -85,6 +94,7 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
             do {
                 frameTimes = try await VideoEditMedia.frameTimes(url: source)
                 try Task.checkCancellation()
+                if let boundaryPreviewTime { previewBoundary(at: boundaryPreviewTime) }
                 update()
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: source))
                 generator.appliesPreferredTrackTransform = true
@@ -228,7 +238,16 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         default: return false
         }
     }
-    private func pause(clearTransition: Bool = true) {
+    private func previewBoundary(at time: Double?) {
+        boundaryPreviewTime = time
+        guard let time else {
+            boundaryPreview.cancel(); (root.preview as? VideoEditorPreview)?.showBoundary(nil); return
+        }
+        guard let frame = VideoFrameNavigation.frame(times: frameTimes, at: time) else { return }
+        boundaryPreview.request(frame)
+    }
+    private func pause(clearTransition: Bool = true, clearBoundaryPreview: Bool = true) {
+        if clearBoundaryPreview { previewBoundary(at: nil) }
         seekTask?.cancel(); seekID = UUID(); seeking = false
         transitionTask?.cancel(); transitionTask = nil; transitioning = false
         playing = false; player.pause(); timeline.playing = false
@@ -367,6 +386,7 @@ private final class VideoEditorPreview: NSView {
     private let beforeLayer = CALayer()
     private let afterLayer = CALayer()
     private let blackLayer = CALayer()
+    private let boundaryLayer = CALayer()
     private var speed: Int?
     init(player: AVPlayer) {
         playerLayer = AVPlayerLayer(player: player)
@@ -378,6 +398,8 @@ private final class VideoEditorPreview: NSView {
             overlay.contentsGravity = .resizeAspect; overlay.isHidden = true; layer?.addSublayer(overlay)
         }
         blackLayer.backgroundColor = NSColor.black.cgColor
+        boundaryLayer.contentsGravity = .resizeAspect; boundaryLayer.isHidden = true
+        layer?.addSublayer(boundaryLayer)
     }
     required init?(coder: NSCoder) { fatalError() }
     private var videoRect: CGRect { playerLayer.videoRect.offsetBy(dx: playerLayer.frame.minX, dy: playerLayer.frame.minY) }
@@ -385,6 +407,7 @@ private final class VideoEditorPreview: NSView {
         super.layout(); playerLayer.frame = bounds.insetBy(dx: 16, dy: 4)
         CATransaction.begin(); CATransaction.setDisableActions(true)
         for overlay in [badgeLayer, beforeLayer, afterLayer, blackLayer] { overlay.frame = videoRect }
+        boundaryLayer.frame = playerLayer.frame
         CATransaction.commit()
     }
     func showSpeed(_ speed: Int?) {
@@ -410,6 +433,13 @@ private final class VideoEditorPreview: NSView {
     func clearTransition() {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         for overlay in [beforeLayer, afterLayer, blackLayer] { overlay.isHidden = true; overlay.contents = nil }
+        CATransaction.commit()
+    }
+    func showBoundary(_ image: CGImage?) {
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        // 再生位置は変えず、離すとそのコマへ戻る。Playerの準備前でも画像の縦横比を保つ。
+        boundaryLayer.frame = playerLayer.frame; boundaryLayer.backgroundColor = NSColor.black.cgColor
+        boundaryLayer.contents = image; boundaryLayer.isHidden = image == nil
         CATransaction.commit()
     }
     override var needsPanelToBecomeKey: Bool { true }
@@ -451,6 +481,7 @@ final class VideoEditorTimeline: NSView {
     var onSelectStill: ((UUID) -> Void)?
     var activeStill: UUID? { didSet { needsDisplay = true } }
     var onEdit: ((VideoEditDocument, Bool) -> Void)?
+    var onBoundaryPreview: ((Double?) -> Void)?
     var onSelection: (() -> Void)?
     private let play = VideoEditorButton()
     let startButton = VideoEditorButton()
@@ -565,13 +596,18 @@ final class VideoEditorTimeline: NSView {
         guard hit != .outside else { return }
         dragStart = point; dragDocument = document; selection = nil; onSelection?()
         if hit == .strip { onSeek?(time(point.x)) }
+        if case let .boundary(segment, start) = hit {
+            onEdit?(document, false)
+            onBoundaryPreview?(start ? document.kept[segment].start : document.kept[segment].end)
+        }
     }
     override func mouseDragged(with event: NSEvent) {
         guard let start = dragStart, var next = dragDocument else { return }
         let point = convert(event.locationInWindow, from: nil)
         switch hit {
         case let .boundary(segment, start):
-            next.moveBoundary(segment: segment, start: start, to: time(point.x)); onEdit?(next, false)
+            let boundary = next.moveBoundary(segment: segment, start: start, to: time(point.x))
+            onEdit?(next, false); onBoundaryPreview?(boundary)
         case .strip:
             selection = VideoTimelineGesture.selection(from: start.x - strip.minX, to: point.x - strip.minX,
                 width: strip.width, duration: document.duration)
@@ -580,11 +616,12 @@ final class VideoEditorTimeline: NSView {
         }
     }
     override func mouseUp(with event: NSEvent) {
-        if case .boundary = hit { onEdit?(document, true) }
+        if case .boundary = hit { onEdit?(document, true); onBoundaryPreview?(nil) }
         dragStart = nil; dragDocument = nil; hit = .outside
     }
     func cancelInteraction() -> Bool {
         let interacting = dragStart != nil
+        if case .boundary = hit { onBoundaryPreview?(nil) }
         dragStart = nil; dragDocument = nil; hit = .outside
         return interacting
     }

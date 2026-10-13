@@ -63,6 +63,24 @@ import UtsushieCore
     #expect(document.kept == [.init(0, 10)])
 }
 
+@Test func videoBoundaryPreviewTimeUsesClampedHandleBeforeMergingOrRemovingSegment() {
+    var document = VideoEditDocument(duration: 10, kept: [.init(1, 3), .init(6, 9)])
+    #expect(document.moveBoundary(segment: 0, start: true, to: -2) == 0)
+    #expect(document.moveBoundary(segment: 1, start: false, to: 12) == 10)
+    #expect(document.moveBoundary(segment: 0, start: false, to: 8) == 6)
+    #expect(document.kept == [.init(0, 10)])
+    let clamped = document.moveBoundary(segment: 0, start: true, to: 20)
+    #expect(clamped == document.kept[0].start && clamped! < 10)
+    document = VideoEditDocument(duration: 10, kept: [.init(0, 2), .init(4, 6), .init(8, 10)])
+    #expect(document.moveBoundary(segment: 1, start: true, to: 9) == 6)
+    #expect(document.kept == [.init(0, 2), .init(8, 10)])
+    document = VideoEditDocument(duration: 10, kept: [.init(0, 2), .init(4, 6), .init(8, 10)])
+    #expect(document.moveBoundary(segment: 1, start: false, to: 1) == 4)
+    #expect(document.kept == [.init(0, 2), .init(8, 10)])
+    #expect(document.moveBoundary(segment: 4, start: true, to: 2) == nil)
+    #expect(document.moveBoundary(segment: 0, start: true, to: .nan) == nil)
+}
+
 @Test func videoIOInsideCutAlignsOuterBoundaryToRequestedSourceTime() {
     var start = VideoEditDocument(duration: 10, kept: [.init(0, 3), .init(6, 10)])
     start.setStart(4)

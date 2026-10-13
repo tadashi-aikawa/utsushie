@@ -125,22 +125,28 @@ public struct VideoEditDocument: Equatable, Sendable {
         kept = VideoRange.merged(kept + [range], duration: duration)
         reconcileTransitions(from: old)
     }
-    public mutating func moveBoundary(segment: Int, start: Bool, to time: Double) {
-        guard kept.indices.contains(segment), time.isFinite else { return }
+    /// 正規化で区間が結合・消滅しても、制限後のドラッグ端の時刻を返す。
+    @discardableResult public mutating func moveBoundary(segment: Int, start: Bool, to time: Double) -> Double? {
+        guard kept.indices.contains(segment), time.isFinite else { return nil }
         let old = transitions
         let minimum = min(1 / 60000.0, kept[segment].duration)
+        let boundary: Double
         if kept.count > 1, (start && time >= kept[segment].end || !start && time <= kept[segment].start) {
             // 隣り合う切り口の間の残す区間をなくしたときは、切り口を1つへ結合する。
+            boundary = start ? kept[segment].end : kept[segment].start
             kept.remove(at: segment)
         } else if start {
             let limit = segment == 0 ? 0 : kept[segment - 1].end
             kept[segment].start = min(kept[segment].end - minimum, max(limit, time))
+            boundary = kept[segment].start
         } else {
             let limit = segment == kept.count - 1 ? duration : kept[segment + 1].start
             kept[segment].end = max(kept[segment].start + minimum, min(limit, time))
+            boundary = kept[segment].end
         }
         kept = VideoRange.merged(kept, duration: duration)
         reconcileTransitions(from: old)
+        return boundary
     }
     /// I/Oは外側の両端。指定点が切った範囲の中なら、その点まで境界を戻す。
     public mutating func setStart(_ time: Double) {

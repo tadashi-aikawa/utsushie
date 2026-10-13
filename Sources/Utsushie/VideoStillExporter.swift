@@ -13,6 +13,9 @@ enum VideoStillExporter {
         let generator = AVAssetImageGenerator(asset: AVURLAsset(url: source))
         generator.appliesPreferredTrackTransform = true; generator.maximumSize = maximumSize
         generator.requestedTimeToleranceBefore = .zero; generator.requestedTimeToleranceAfter = .zero
+        return try await frame(generator: generator, time: time)
+    }
+    static func frame(generator: AVAssetImageGenerator, time: Double) async throws -> CGImage {
         let result = try await generator.image(at: CMTime(seconds: time, preferredTimescale: 60000))
         guard abs(result.actualTime.seconds - time) <= 1 / 60000.0 else {
             throw CaptureError.unavailable("指定したコマを正確に取り出せませんでした")

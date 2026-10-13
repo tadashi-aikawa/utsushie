@@ -75,9 +75,12 @@ private final class VideoRunningApplication: NSRunningApplication, @unchecked Se
             windowNumber: editor.window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
     }
     timeline.mouseDown(with: try event(.leftMouseDown, 0))
+    #expect(editor.boundaryPreviewTime == 0 && editor.position == 0)
     timeline.mouseDragged(with: try event(.leftMouseDragged, 1))
     timeline.mouseDragged(with: try event(.leftMouseDragged, 2))
+    #expect(editor.boundaryPreviewTime == 2 && editor.position == 0)
     timeline.mouseUp(with: try event(.leftMouseUp, 2))
+    #expect(editor.boundaryPreviewTime == nil)
     #expect(timeline.document.kept == [.init(2, 10)])
     editor.undo()
     #expect(timeline.document.kept == [.init(0, 10)])
@@ -89,6 +92,7 @@ private final class VideoRunningApplication: NSRunningApplication, @unchecked Se
     timeline.mouseDragged(with: try event(.leftMouseDragged, 4))
     timeline.mouseUp(with: try event(.leftMouseUp, 4))
     #expect(timeline.document.kept == [.init(2, 10)])
+    #expect(editor.boundaryPreviewTime == nil)
     editor.undo()
     #expect(timeline.document.kept == [.init(0, 10)])
 }

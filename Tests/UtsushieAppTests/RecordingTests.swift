@@ -497,6 +497,63 @@ func seekingDuringTransitionPreviewCancelsAnimationAndDoesNotResumePlayback(_ ki
     #expect(editor.timeline.document.stills.map(\.time) == [0.3, 214000.0 / 60000])
 }
 
+@MainActor @Test func videoBoundaryDragDisplaysActualVFRPixelsAndRestoresPlayerOnReleaseOrUndo() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    let editor = VideoEditorController(source: source.temporaryURL, document: VideoEditDocument(duration: source.duration),
+        screen: nil, focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    for _ in 0..<300 where !editor.canCapture { try await Task.sleep(for: .milliseconds(10)) }
+    try #require(editor.canCapture)
+    editor.seek(to: 1.2)
+    let root = try #require(editor.window.contentView)
+    root.layoutSubtreeIfNeeded()
+    let view = try #require(root.subviews.first { $0.layer?.sublayers?.contains { $0 is AVPlayerLayer } == true })
+    let overlay = try #require(view.layer?.sublayers?.last)
+    let timeline = editor.timeline, width = timeline.bounds.width - 48
+    func event(_ type: NSEvent.EventType, _ time: Double) throws -> NSEvent {
+        let location = timeline.convert(CGPoint(x: 24 + width * time / source.duration, y: 95), to: nil)
+        return try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [], timestamp: 0,
+            windowNumber: editor.window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+    }
+    func pixel() -> Int? {
+        guard let contents = overlay.contents else { return nil }
+        let image = contents as! CGImage
+        guard let data = image.dataProvider?.data else { return nil }
+        return Int((data as Data)[1])
+    }
+    func expectPixel(_ expected: Int) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while abs((pixel() ?? -1000) - expected) > 8, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!overlay.isHidden && abs((pixel() ?? -1000) - expected) <= 8)
+    }
+    timeline.mouseDown(with: try event(.leftMouseDown, source.duration))
+    try await expectPixel(200) // 録画末尾は最後の実コマ。
+    timeline.mouseDragged(with: try event(.leftMouseDragged, 1.39))
+    try await expectPixel(80) // 1.4秒の次コマを先取りしない。
+    #expect(editor.position == 1.2 && timeline.position == 1.2)
+    timeline.mouseUp(with: try event(.leftMouseUp, 1.39))
+    #expect(overlay.isHidden && overlay.contents == nil && editor.position == 1.2)
+    editor.undo()
+    #expect(timeline.document.kept == [.init(0, source.duration)])
+    timeline.mouseDown(with: try event(.leftMouseDown, 0))
+    timeline.mouseDragged(with: try event(.leftMouseDragged, 1.6))
+    try await expectPixel(140)
+    editor.undo()
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(overlay.isHidden && overlay.contents == nil && editor.position == 1.2)
+    #expect(timeline.document.kept == [.init(0, source.duration)])
+    timeline.mouseDown(with: try event(.leftMouseDown, 0))
+    timeline.mouseDragged(with: try event(.leftMouseDragged, 2.7))
+    editor.window.close()
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(overlay.isHidden && overlay.contents == nil)
+}
+
 @MainActor @Test func recentMP4ReadsDurationThumbnailAndRestoresAnEditableVideoCard() async throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
