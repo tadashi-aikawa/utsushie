@@ -48,14 +48,14 @@ final class VideoTransitionMenu: NSViewController, NSTextFieldDelegate {
         refresh(); change(kind, transition.speed)
     }
     @objc private func stepSpeed() { commitSpeed(stepper.integerValue) }
+    /// 入力欄はフォーカスが外れたときもactionを送る。メニューを閉じただけで暗転などを早送りへ切り替えないよう、
+    /// 倍率を書き換えたときだけ早送りにする。
     @objc private func editSpeed() {
-        guard let value = Int(speedField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) else { refresh(); return }
+        guard let value = Int(speedField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)),
+              value != transition.multiplier else { refresh(); return }
         commitSpeed(value)
     }
-    func controlTextDidEndEditing(_ obj: Notification) {
-        // 数字欄へフォーカスしただけで、暗転などを早送りへ切り替えない。
-        if Int(speedField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) != transition.multiplier { editSpeed() }
-    }
+    func controlTextDidEndEditing(_ obj: Notification) { editSpeed() }
     private func commitSpeed(_ value: Int) {
         transition = VideoCutTransition(range: transition.range, kind: .fastForward, speed: value)
         refresh(); change(.fastForward, transition.speed)

@@ -156,6 +156,26 @@ private final class VideoRunningApplication: NSRunningApplication, @unchecked Se
     #expect(!bar.discardButton.armed && bar.discardButton.title == "破棄")
 }
 
+@MainActor @Test(arguments: [VideoTransitionKind.none, .fade, .dissolve])
+func closingTransitionMenuKeepsChosenKindWhenSpeedFieldLosesFocus(_ kind: VideoTransitionKind) throws {
+    let document = VideoEditDocument(duration: 24.1, kept: [.init(2.4, 6.2), .init(11, 21.8)])
+    let range = document.interiorCuts[0]
+    var chosen: [VideoTransitionKind] = []
+    let menu = VideoTransitionMenu(transition: document.transition(for: range)) { kind, _ in chosen.append(kind) }
+    // ポップオーバーと同じく、唯一の入力欄が最初のfirst responderになる。
+    let window = NSWindow(contentRect: menu.view.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    window.contentView = menu.view
+    let field = try #require(menu.view.subviews.compactMap { $0 as? NSTextField }.first { $0.isEditable })
+    #expect(window.makeFirstResponder(field))
+    let button = try #require(menu.view.subviews.compactMap { $0 as? NSButton }.first { $0.tag == VideoTransitionKind.allCases.firstIndex(of: kind) })
+    button.performClick(nil)
+    // 閉じるとフォーカスが外れ、入力欄の編集終了のactionが届く。
+    #expect(window.makeFirstResponder(nil))
+    #expect(chosen == [kind])
+}
+
 @MainActor @Test func cutTransitionMenuEditsIntegerSpeedAndUsesEditorUndoHistory() throws {
     var document = VideoEditDocument(duration: 24.1, kept: [.init(2.4, 6.2), .init(11, 21.8)])
     let range = document.interiorCuts[0]
