@@ -16,7 +16,8 @@ enum VideoStillExporter {
         return try await frame(generator: generator, time: time)
     }
     static func frame(generator: AVAssetImageGenerator, time: Double) async throws -> CGImage {
-        let result = try await generator.image(at: CMTime(seconds: time, preferredTimescale: 60000))
+        // CMTime(seconds:)は切り捨てる。325/600秒のようなコマが1目盛り手前になり、前のコマが返るため四捨五入する。
+        let result = try await generator.image(at: VideoExportTiming.time(time))
         guard abs(result.actualTime.seconds - time) <= 1 / 60000.0 else {
             throw CaptureError.unavailable("指定したコマを正確に取り出せませんでした")
         }

@@ -196,3 +196,26 @@ private func tonedRecording(in dir: URL) async throws -> RecordedVideo {
         else { #expect(sound.peak(1.2, 1.3) > 0.1) }
     }
 }
+
+/// 実際の録画で取り出せなかった325/600秒などのコマ。Doubleでは僅かに小さく表され、切り捨てると前のコマになる。
+@Test func everyFrameOfVariableRateRecordingCanBeExtractedExactly() async throws {
+    let dir = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
+    let writer = try MP4Writer(url: dir.appendingPathComponent("source.mp4"), width: 64, height: 48, fps: 30)
+    let ticks = [0, 20, 40, 60, 80, 100, 125, 145, 165, 185, 205, 225, 245, 265, 285, 305, 325, 350, 370, 390,
+                 410, 430, 450, 470, 490, 510, 530, 550, 570, 595, 615, 635, 655]
+    for tick in ticks {
+        let time = Double(tick) / 600
+        let sample = try frame(time: 100 + time)
+        await onQueue(writer) { writer.append(sample.buffer, hostTime: 1000 + time) }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    let result = try await writer.finish(hostTime: 1001.2)
+    let times = try await VideoEditMedia.frameTimes(url: result.temporaryURL)
+    #expect(times.count == ticks.count + 1)
+    var failed: [Double] = []
+    for time in times {
+        do { _ = try await VideoStillExporter.frame(source: result.temporaryURL, time: time, maximumSize: CGSize(width: 1280, height: 1280)) }
+        catch { failed.append(time) }
+    }
+    #expect(failed.isEmpty)
+}

@@ -251,7 +251,7 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         let id = UUID(); seekID = id; seeking = true; playing = resume; timeline.playing = resume
         seekTask = Task { [weak self] in
             guard let self else { return }
-            let succeeded = await player.seek(to: CMTime(seconds: position, preferredTimescale: 60000), toleranceBefore: .zero, toleranceAfter: .zero)
+            let succeeded = await player.seek(to: VideoExportTiming.time(position), toleranceBefore: .zero, toleranceAfter: .zero)
             guard !closing, !Task.isCancelled, seekID == id else { return }
             seeking = false
             (root.preview as? VideoEditorPreview)?.clearTransition()
@@ -326,7 +326,7 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
     }
     private func updateBoundaries() {
         if let boundaryObserver { player.removeTimeObserver(boundaryObserver) }
-        let times = history.document.kept.flatMap { [$0.start, $0.end] }.map { NSValue(time: CMTime(seconds: $0, preferredTimescale: 60000)) }
+        let times = history.document.kept.flatMap { [$0.start, $0.end] }.map { NSValue(time: VideoExportTiming.time($0)) }
         boundaryObserver = player.addBoundaryTimeObserver(forTimes: times, queue: .main) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.playing else { return }
