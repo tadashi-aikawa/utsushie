@@ -37,6 +37,14 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
     private var seeking = false
     private var transitionTask: Task<Void, Never>?
     private var transitioning = false
+    /// 演出の間、切った範囲の頭の音を絞りながら鳴らす。映像は出さない。
+    private lazy var outgoingAudio: AVPlayer = {
+        let player = AVPlayer(url: source); player.automaticallyWaitsToMinimizeStalling = false
+        return player
+    }()
+    private struct TransitionFrames: Sendable { let before: CGImage; let after: CGImage }
+    private var transitionPreload: (range: VideoRange, task: Task<TransitionFrames, Error>)?
+    private var incomingReady = false
     private var discardArmed = false
     private var closing = false
     var onComplete: ((VideoEditDocument) -> Void)?
@@ -239,7 +247,9 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
     private func pause(clearTransition: Bool = true, clearBoundaryPreview: Bool = true) {
         if clearBoundaryPreview { previewBoundary(at: nil) }
         seekTask?.cancel(); seekID = UUID(); seeking = false
-        transitionTask?.cancel(); transitionTask = nil; transitioning = false
+        transitionTask?.cancel(); transitionTask = nil
+        if transitioning { outgoingAudio.pause(); player.volume = 1 }
+        transitioning = false
         playing = false; player.pause(); timeline.playing = false
         (root.preview as? VideoEditorPreview)?.showSpeed(nil)
         if clearTransition { (root.preview as? VideoEditorPreview)?.clearTransition() }
@@ -270,6 +280,9 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
     private func tick(_ time: Double) {
         guard !closing, !seeking, !transitioning, time.isFinite else { return }
         if playing {
+            if let upcoming = timeline.document.transitions.first(where: {
+                ($0.kind == .fade || $0.kind == .dissolve) && $0.range.start > time && $0.range.start - time <= 0.6
+            }) { _ = preloadTransition(upcoming) }
             if let transition = timeline.document.transitions.first(where: {
                 ($0.kind == .fade || $0.kind == .dissolve) && time >= $0.range.start && position < $0.range.end
             }) {
@@ -290,34 +303,77 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         player.isMuted = transition != nil
         (root.preview as? VideoEditorPreview)?.showSpeed(transition?.multiplier)
     }
-    private func previewTransition(_ transition: VideoCutTransition) {
-        guard let preview = root.preview as? VideoEditorPreview else { return }
-        transitioning = true; player.pause(); preview.showSpeed(nil)
+    /// 演出の手前で前後のコマを読み、切った範囲の頭へ音を合わせておく。演出の開始で再生を止める時間をなくすため。
+    private func preloadTransition(_ transition: VideoCutTransition) -> Task<TransitionFrames, Error> {
+        if let transitionPreload, transitionPreload.range == transition.range { return transitionPreload.task }
+        transitionPreload?.task.cancel()
         // 半開区間の境界では、前は境界より厳密に前、後ろは境界を含む表示コマを使う。
         let beforeTime = frameTimes.last { $0 < transition.range.start } ?? transition.range.start
         let afterTime = frameTimes.last { $0 <= transition.range.end } ?? transition.range.end
+        let outgoing = outgoingAudio, source = source
+        let task = Task {
+            outgoing.pause()
+            let seeked = await outgoing.seek(to: VideoExportTiming.time(transition.range.start), toleranceBefore: .zero, toleranceAfter: .zero)
+            if seeked, outgoing.status == .readyToPlay { _ = await outgoing.preroll(atRate: 1) }
+            let before = try await VideoStillExporter.frame(source: source, time: beforeTime, maximumSize: CGSize(width: 1280, height: 1280))
+            let after = try await VideoStillExporter.frame(source: source, time: afterTime, maximumSize: CGSize(width: 1280, height: 1280))
+            return TransitionFrames(before: before, after: after)
+        }
+        transitionPreload = (transition.range, task)
+        return task
+    }
+    private func previewTransition(_ transition: VideoCutTransition) {
+        guard let preview = root.preview as? VideoEditorPreview else { return }
+        transitioning = true; player.pause(); player.isMuted = false; preview.showSpeed(nil)
+        let frames = preloadTransition(transition); transitionPreload = nil
+        let audio = VideoTransitionAudioPreview(kind: transition.kind, cut: transition.range)
         transitionTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let before = try await VideoStillExporter.frame(source: source, time: beforeTime, maximumSize: CGSize(width: 1280, height: 1280))
-                let after = try await VideoStillExporter.frame(source: source, time: afterTime, maximumSize: CGSize(width: 1280, height: 1280))
+                let loaded = try await frames.value
                 try Task.checkCancellation()
-                preview.beginTransition(before: before, after: after)
+                preview.beginTransition(before: loaded.before, after: loaded.after)
+                // 書き出しと同じく、前は切った範囲の頭の音を絞り、後ろは末尾の手前から音を戻す。映像は演出の絵で隠れている。
+                outgoingAudio.volume = audio.outgoingVolume(at: 0)
+                if audio.outgoing > 0 { outgoingAudio.play() }
+                player.volume = 0; incomingReady = false
+                let resumeAt = transition.range.end - audio.incoming
+                Task { [weak self] in
+                    guard let self else { return }
+                    let seeked = await player.seek(to: VideoExportTiming.time(resumeAt), toleranceBefore: .zero, toleranceAfter: .zero)
+                    if seeked, transitioning { incomingReady = true }
+                }
                 let began = CACurrentMediaTime()
-                while CACurrentMediaTime() - began < 0.5 {
+                var incomingStarted = false
+                while true {
+                    let elapsed = CACurrentMediaTime() - began
+                    guard elapsed < VideoTransitionAudioPreview.duration else { break }
                     try Task.checkCancellation()
-                    let progress = min(1, (CACurrentMediaTime() - began) / 0.5)
+                    outgoingAudio.volume = audio.outgoingVolume(at: elapsed)
+                    if elapsed >= audio.outgoing { outgoingAudio.pause() }
+                    if !incomingStarted, incomingReady, audio.incoming > 0, elapsed >= audio.incomingStart {
+                        player.play(); incomingStarted = true
+                    }
+                    player.volume = audio.incomingVolume(at: elapsed)
+                    let progress = min(1, elapsed / VideoTransitionAudioPreview.duration)
                     preview.transitionProgress(progress, kind: transition.kind)
                     position = progress < 0.5 ? transition.range.start : transition.range.end
                     timeline.position = position
                     try await Task.sleep(for: .milliseconds(16))
                 }
+                outgoingAudio.pause(); player.volume = 1
                 transitionTask = nil; transitioning = false
                 preview.transitionProgress(1, kind: transition.kind)
-                seek(to: transition.range.end, resume: true, retainingTransition: true)
+                if incomingStarted {
+                    // 本体は切った範囲の末尾まで進んでいる。シークし直さず続け、残す範囲の頭の音を途切れさせない。
+                    preview.clearTransition()
+                    position = transition.range.end; timeline.position = position
+                    updatePlaybackRate(at: position)
+                } else { seek(to: transition.range.end, resume: true, retainingTransition: true) }
             } catch is CancellationError { }
             catch {
                 guard !closing, !Task.isCancelled else { return }
+                outgoingAudio.pause(); player.volume = 1
                 transitionTask = nil; transitioning = false
                 seek(to: transition.range.end, resume: true)
                 message = ToolbarHint("つなぎのプレビューを読めませんでした", isError: true); update()

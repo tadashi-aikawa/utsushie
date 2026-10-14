@@ -253,14 +253,8 @@ public struct VideoAudioPlan: Equatable, Sendable {
             guard let before = kept.firstIndex(of: junction.precedingSegment),
                   let after = kept.firstIndex(of: junction.followingSegment) else { continue }
             let cut = VideoRange(plan.segments[junction.precedingSegment].source.end, plan.segments[junction.followingSegment].source.start)
-            let overlap: Double
-            switch junction.transition.kind {
-            case .fade: overlap = 0.25
-            case .dissolve: overlap = 0.5
-            case .none, .fastForward: continue
-            }
             // 演出の0.5秒は残した範囲を削らずに差し込むため、切った範囲の音を延ばして埋める。
-            let length = min(overlap, cut.duration)
+            let length = junction.transition.kind.audioOverlap(cut: cut)
             guard length > 0 else { continue }
             clips[before].source = VideoRange(clips[before].source.start, clips[before].source.end + length)
             clips[before].fadeOut = length
@@ -274,6 +268,38 @@ public struct VideoAudioPlan: Equatable, Sendable {
             guard total > duration, total > 0 else { continue }
             clips[index].fadeIn *= duration / total; clips[index].fadeOut *= duration / total
         }
+    }
+}
+
+extension VideoTransitionKind {
+    /// 演出の間に鳴らす、切った範囲の頭と末尾の音の長さ。暗転は0.25秒ずつ絞って戻し、ディゾルブは0.5秒重ねる。
+    public func audioOverlap(cut: VideoRange) -> Double {
+        switch self {
+        case .fade: min(0.25, max(0, cut.duration))
+        case .dissolve: min(0.5, max(0, cut.duration))
+        case .none, .fastForward: 0
+        }
+    }
+}
+
+/// 編集画面の演出0.5秒で、書き出しと同じ音の絞りを再生する。経過秒から前後の音量を返す。
+public struct VideoTransitionAudioPreview: Equatable, Sendable {
+    public static let duration = 0.5
+    /// 切った範囲の頭から鳴らし、0へ絞る長さ。
+    public let outgoing: Double
+    /// 切った範囲の末尾の手前から鳴らし、1へ戻す長さ。
+    public let incoming: Double
+    public init(kind: VideoTransitionKind, cut: VideoRange) {
+        outgoing = kind.audioOverlap(cut: cut); incoming = outgoing
+    }
+    public var incomingStart: Double { Self.duration - incoming }
+    public func outgoingVolume(at elapsed: Double) -> Float {
+        guard outgoing > 0, elapsed < outgoing else { return 0 }
+        return Float(1 - max(0, elapsed) / outgoing)
+    }
+    public func incomingVolume(at elapsed: Double) -> Float {
+        guard incoming > 0, elapsed > incomingStart else { return 0 }
+        return Float(min(1, (elapsed - incomingStart) / incoming))
     }
 }
 

@@ -90,6 +90,25 @@ import CoreGraphics
     #expect(plan.clips.map(\.track) == [0, 1, 0])
 }
 
+@Test func transitionPreviewAudioMatchesExportFades() {
+    let fade = VideoTransitionAudioPreview(kind: .fade, cut: .init(2, 4))
+    #expect(fade.outgoing == 0.25 && fade.incoming == 0.25 && fade.incomingStart == 0.25)
+    #expect(fade.outgoingVolume(at: 0) == 1 && abs(fade.outgoingVolume(at: 0.125) - 0.5) < 1e-6 && fade.outgoingVolume(at: 0.25) == 0)
+    #expect(fade.incomingVolume(at: 0.2) == 0 && abs(fade.incomingVolume(at: 0.375) - 0.5) < 1e-6 && fade.incomingVolume(at: 0.5) == 1)
+    // 暗転の中央は前後とも無音。
+    #expect(fade.outgoingVolume(at: 0.25) + fade.incomingVolume(at: 0.25) == 0)
+    let dissolve = VideoTransitionAudioPreview(kind: .dissolve, cut: .init(2, 4))
+    #expect(dissolve.incomingStart == 0)
+    #expect(abs(dissolve.outgoingVolume(at: 0.25) + dissolve.incomingVolume(at: 0.25) - 1) < 1e-6)
+    let short = VideoTransitionAudioPreview(kind: .dissolve, cut: .init(6, 6.1))
+    #expect(abs(short.outgoing - 0.1) < 1e-9 && abs(short.incomingStart - 0.4) < 1e-9)
+    #expect(short.outgoingVolume(at: 0.2) == 0 && short.incomingVolume(at: 0.3) == 0)
+    for kind in [VideoTransitionKind.none, .fastForward] {
+        let none = VideoTransitionAudioPreview(kind: kind, cut: .init(2, 4))
+        #expect(none.outgoing == 0 && none.incoming == 0)
+    }
+}
+
 @Test func audioPlanNeverOverlapsFadesOnShortClip() {
     let document = VideoEditDocument(duration: 10, kept: [.init(0, 2), .init(5, 5.012), .init(8, 10)])
     let plan = VideoAudioPlan(plan: VideoExportPlan(document: document), sourceDuration: 10)
