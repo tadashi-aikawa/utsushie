@@ -180,6 +180,11 @@ public struct VideoEditDocument: Equatable, Sendable {
         }
         return nil
     }
+    /// 再生で切った範囲の頭を前から越えたときだけ、暗転・ディゾルブを見せる。
+    /// 演出の後に本体が末尾の手前を再生していても、同じ演出を繰り返さない。
+    public func transitionCrossed(from previous: Double, to time: Double) -> VideoCutTransition? {
+        transitions.first { ($0.kind == .fade || $0.kind == .dissolve) && previous < $0.range.start && time >= $0.range.start }
+    }
     public var completionText: String {
         let trim = isTrimmed ? (transitionDuration > 0
             ? String(format: "残す %.1f秒 + つなぎ %.1f秒", keptDuration, transitionDuration)

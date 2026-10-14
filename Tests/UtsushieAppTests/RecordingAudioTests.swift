@@ -219,3 +219,34 @@ private func tonedRecording(in dir: URL) async throws -> RecordedVideo {
     }
     #expect(failed.isEmpty)
 }
+
+@MainActor @Test(arguments: [VideoTransitionKind.fade, .dissolve])
+func editorPlaysTransitionOnceAndContinuesPastCut(_ kind: VideoTransitionKind) async throws {
+    _ = NSApplication.shared
+    let dir = try temporaryDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await tonedRecording(in: dir)
+    // ドラッグで決まる端は任意の小数になる。2.01234秒は60000分の1秒へ丸めると僅かに手前になる。
+    let end = 2.01234
+    var document = VideoEditDocument(duration: source.duration, kept: [.init(0, 1), .init(end, 3.6)])
+    document.setTransition(for: .init(1, end), kind: kind)
+    let editor = VideoEditorController(source: source.temporaryURL, document: document, screen: nil,
+        focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    editor.window.orderFront(nil)
+    let loading = Date()
+    while !editor.canCapture, Date().timeIntervalSince(loading) < 3 { try await Task.sleep(for: .milliseconds(20)) }
+    try #require(editor.canCapture)
+    let space = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: editor.window.windowNumber, context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: false, keyCode: 49))
+    #expect(editor.handleKey(space))
+    var positions: [Double] = []
+    let playing = Date()
+    // 並列で走る他の試験の負荷で再生が遅れても、先へ進むかだけを見る。
+    while (positions.last ?? 0) <= 2.5, Date().timeIntervalSince(playing) < 6 {
+        positions.append(editor.position); try await Task.sleep(for: .milliseconds(5))
+    }
+    // 切った範囲の末尾を越えた後に、範囲の頭へ戻って演出を繰り返さない。
+    let crossed = try #require(positions.firstIndex { $0 >= end })
+    #expect(!positions[crossed...].contains { $0 < 1.9 }, "\(positions.map { String(format: "%.2f", $0) })")
+    #expect((positions.last ?? 0) > 2.5)
+}

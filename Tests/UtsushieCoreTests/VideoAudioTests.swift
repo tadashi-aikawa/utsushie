@@ -109,6 +109,20 @@ import CoreGraphics
     }
 }
 
+@Test func transitionPreviewStartsOnlyWhenPlaybackCrossesCutStart() {
+    var document = VideoEditDocument(duration: 10, kept: [.init(0, 2), .init(4, 6), .init(7, 10)])
+    document.setTransition(for: .init(2, 4), kind: .dissolve)
+    document.setTransition(for: .init(6, 7), kind: .fastForward, speed: 4)
+    #expect(document.transitionCrossed(from: 1.98, to: 2.01)?.range == .init(2, 4))
+    #expect(document.transitionCrossed(from: 1.98, to: 4.2)?.range == .init(2, 4))
+    // 演出の後、本体が末尾の手前を再生していても繰り返さない。
+    #expect(document.transitionCrossed(from: 4, to: 3.99) == nil)
+    #expect(document.transitionCrossed(from: 3.99, to: 3.995) == nil)
+    #expect(document.transitionCrossed(from: 4, to: 4.02) == nil)
+    // 早送りは再生速度で見せるため、演出の対象にしない。
+    #expect(document.transitionCrossed(from: 5.99, to: 6.01) == nil)
+}
+
 @Test func audioPlanNeverOverlapsFadesOnShortClip() {
     let document = VideoEditDocument(duration: 10, kept: [.init(0, 2), .init(5, 5.012), .init(8, 10)])
     let plan = VideoAudioPlan(plan: VideoExportPlan(document: document), sourceDuration: 10)

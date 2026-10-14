@@ -283,9 +283,7 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
             if let upcoming = timeline.document.transitions.first(where: {
                 ($0.kind == .fade || $0.kind == .dissolve) && $0.range.start > time && $0.range.start - time <= 0.6
             }) { _ = preloadTransition(upcoming) }
-            if let transition = timeline.document.transitions.first(where: {
-                ($0.kind == .fade || $0.kind == .dissolve) && time >= $0.range.start && position < $0.range.end
-            }) {
+            if let transition = timeline.document.transitionCrossed(from: position, to: time) {
                 previewTransition(transition); return
             }
             guard let next = timeline.document.playbackTime(at: time) else {
@@ -362,8 +360,15 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
                     try await Task.sleep(for: .milliseconds(16))
                 }
                 outgoingAudio.pause(); player.volume = 1
-                transitionTask = nil; transitioning = false
                 preview.transitionProgress(1, kind: transition.kind)
+                // 再生開始の遅れの分だけ、本体はまだ末尾の手前にいる。後ろのコマを見せたまま着くのを待ち、
+                // 切った範囲の中と判定してシークし直す一瞬の停止を避ける。
+                let waitStarted = CACurrentMediaTime()
+                while incomingStarted, player.currentTime().seconds < transition.range.end - 1 / 60000.0,
+                      CACurrentMediaTime() - waitStarted < 0.3 {
+                    try await Task.sleep(for: .milliseconds(4))
+                }
+                transitionTask = nil; transitioning = false
                 if incomingStarted {
                     // 本体は切った範囲の末尾まで進んでいる。シークし直さず続け、残す範囲の頭の音を途切れさせない。
                     preview.clearTransition()
