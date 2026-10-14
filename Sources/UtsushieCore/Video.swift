@@ -14,7 +14,21 @@ public enum VideoGeometry {
     }
 }
 
-public enum RecordingPhase: Equatable, Sendable { case idle, starting, recording, finalizing }
+/// 録画に入れる音。設定の値はrawValueで書く。
+public enum VideoAudio: String, CaseIterable, Sendable {
+    case none, system, microphone = "mic", both
+    public var capturesSystem: Bool { self == .system || self == .both }
+    public var capturesMicrophone: Bool { self == .microphone || self == .both }
+    public var title: String {
+        switch self { case .none: "音 なし"; case .system: "音 アプリ"; case .microphone: "音 マイク"; case .both: "音 両方" }
+    }
+    public var next: VideoAudio {
+        let all = Self.allCases
+        return all[(all.firstIndex(of: self)! + 1) % all.count]
+    }
+}
+
+public enum RecordingPhase:Equatable, Sendable { case idle, starting, recording, finalizing }
 public struct RecordingState: Sendable {
     public private(set) var phase: RecordingPhase = .idle
     public init() {}
@@ -46,6 +60,12 @@ public struct VideoTimeline: Sendable {
         if firstSource == nil { firstSource = sourceTime; firstHost = hostTime }
         lastPresentation = relative
         return relative
+    }
+    /// 音は最初のコマの時刻を原点に置く。コマより前の音と、コマを受け取る前の音は使わない。
+    public func audioPresentation(sourceTime: Double) -> Double? {
+        guard let firstSource, sourceTime.isFinite else { return nil }
+        let relative = sourceTime - firstSource
+        return relative >= 0 ? relative : nil
     }
     /// 最後の実フレームから停止までを保持。SCStreamは静止中にフレームを送らないため、
     /// 最終フレームの複製とendSessionの時刻を明示して実時間をMP4へ残す。

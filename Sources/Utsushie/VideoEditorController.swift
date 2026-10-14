@@ -286,6 +286,8 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
     private func updatePlaybackRate(at time: Double) {
         let transition = timeline.document.transitions.first { $0.kind == .fastForward && $0.range.contains(time) }
         player.rate = Float(transition?.multiplier ?? 1)
+        // 書き出しと同じく、早送りの間は音を出さない。
+        player.isMuted = transition != nil
         (root.preview as? VideoEditorPreview)?.showSpeed(transition?.multiplier)
     }
     private func previewTransition(_ transition: VideoCutTransition) {

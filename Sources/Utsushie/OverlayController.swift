@@ -46,7 +46,7 @@ final class OverlayController {
 
     func show(last: CGRect?) {
         close()
-        state = CaptureState()
+        state = CaptureState(audio: config.video.audio)
         state.modifiersChanged(shift: NSEvent.modifierFlags.contains(.shift))
         self.last = last
         message = ""
@@ -74,8 +74,8 @@ final class OverlayController {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.isVisible else { return event }
             let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
-            let keys: [UInt16] = self.state.target == .element ? [53, 48, 8, 14, 36, 76, 125, 126] : [53, 48, 8, 14, 36, 76]
-            guard modifiers.isEmpty, keys.contains(event.keyCode) else {
+            let arrows = self.state.target == .element && [125, 126].contains(event.keyCode)
+            guard modifiers.isEmpty, arrows || self.state.handles(event.keyCode) else {
                 if self.confirmingElement { self.clearElements(); self.updateWindow(); self.redraw() }
                 return event
             }
@@ -102,6 +102,8 @@ final class OverlayController {
     }
     private func key(_ code: UInt16) {
         message = ""
+        // 音の切り替えは要素の候補や取得中の確認を保つ。
+        if code == 0 { _ = state.key(code, hasLast: last != nil); redraw(); return }
         elementClick = nil
         if state.target == .element, code == 36 || code == 76 {
             state.cancelGesture()
@@ -498,7 +500,9 @@ final class OverlayView: NSView {
         let widths = items.map { item in
             ToolbarDrawing.itemWidth(title: item.title, key: item.key, recording: item.recording, face: item.title == "やめる" ? .secondary : .tool)
         }
-        let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: ToolbarDrawing.keyWidth("Tab"))
+        let audio = OverlayPresentation.audioItem(output: controller.state.output, audio: controller.state.audio)
+        let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: ToolbarDrawing.keyWidth("Tab"),
+            audioWidth: audio.map { ToolbarDrawing.itemWidth(title: $0.title, key: $0.key, recording: false, face: .tool) })
         let stripWidth = layout.width
         let factor = min(1, (visible.width - 24) / stripWidth)
         let hasError = !controller.message.isEmpty
@@ -514,6 +518,9 @@ final class OverlayView: NSView {
         ToolbarDrawing.tray(layout.outputTray)
         ToolbarDrawing.tray(layout.targetTray)
         ToolbarDrawing.key("Tab", in: layout.tab)
+        if let audio, let frame = layout.audio {
+            ToolbarDrawing.item(title: audio.title, key: audio.key, in: frame, style: .tool, selected: audio.selected, recording: false, dimmed: false)
+        }
         for (index, item) in items.enumerated() {
             ToolbarDrawing.item(title: item.title, key: item.key, in: layout.items[index],
                 style: item.title == "やめる" ? .secondary : .tool, selected: item.selected, recording: item.recording, dimmed: !item.enabled)

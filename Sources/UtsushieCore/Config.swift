@@ -13,6 +13,7 @@ public struct VideoConfig: Equatable, Sendable {
     public var fps = 30
     public var downscale = true
     public var showsCursor = true
+    public var audio: VideoAudio = .none
     public init() {}
 }
 public struct Hotkey: Equatable, Sendable {
@@ -103,6 +104,10 @@ public enum ConfigLoader {
                 if let bool = item.bool { assign(bool) } else { warn("video.\(key)") }
             }
         }
+        if let item = value("video", "audio") {
+            if let string = item.string, let audio = VideoAudio(rawValue: string) { config.video.audio = audio }
+            else { warn("video.audio") }
+        }
         if let item = value("privacy", "ai") {
             if let enabled = item.bool { config.privacy.ai = enabled } else { warn("privacy.ai") }
         }
@@ -184,6 +189,7 @@ public enum ConfigLoader {
     fps = 30 # 1〜60
     downscale = true # H.264の寸法は偶数へ切り下げ
     showsCursor = true
+    audio = "none" # none / system / mic / both。範囲選択中のAでその回だけ切り替え
 
     [clipboard]
     mode = "both" # both / file / data

@@ -227,6 +227,56 @@ public struct VideoExportPlan: Sendable {
     }
 }
 
+/// 残す区間の音を元録画から並べる。早送りは無音、暗転・ディゾルブは切った範囲の音で絞り・重ねる。
+public struct VideoAudioPlan: Equatable, Sendable {
+    public struct Clip: Equatable, Sendable {
+        public var source: VideoRange
+        public var outputStart: Double
+        public var fadeIn: Double
+        public var fadeOut: Double
+        /// 重なる前後の音を別トラックへ置くため、0と1を交互に使う。
+        public var track: Int
+        public var outputEnd: Double { outputStart + source.duration }
+    }
+    /// 切り口のプツッという音を防ぐ短い絞り。
+    public static let seam = 0.01
+    public var clips: [Clip]
+    public init(plan: VideoExportPlan, sourceDuration: Double) {
+        let kept = plan.segments.indices.filter { plan.segments[$0].speed == 1 }
+        clips = kept.enumerated().map { order, index in
+            let segment = plan.segments[index]
+            return Clip(source: segment.source, outputStart: segment.outputStart,
+                        fadeIn: segment.source.start > 0 ? Self.seam : 0,
+                        fadeOut: segment.source.end < sourceDuration ? Self.seam : 0, track: order % 2)
+        }
+        for junction in plan.junctions {
+            guard let before = kept.firstIndex(of: junction.precedingSegment),
+                  let after = kept.firstIndex(of: junction.followingSegment) else { continue }
+            let cut = VideoRange(plan.segments[junction.precedingSegment].source.end, plan.segments[junction.followingSegment].source.start)
+            let overlap: Double
+            switch junction.transition.kind {
+            case .fade: overlap = 0.25
+            case .dissolve: overlap = 0.5
+            case .none, .fastForward: continue
+            }
+            // 演出の0.5秒は残した範囲を削らずに差し込むため、切った範囲の音を延ばして埋める。
+            let length = min(overlap, cut.duration)
+            guard length > 0 else { continue }
+            clips[before].source = VideoRange(clips[before].source.start, clips[before].source.end + length)
+            clips[before].fadeOut = length
+            clips[after].source = VideoRange(clips[after].source.start - length, clips[after].source.end)
+            clips[after].outputStart -= length
+            clips[after].fadeIn = length
+        }
+        // 短い区間でも絞りの範囲を重ねない。
+        for index in clips.indices {
+            let total = clips[index].fadeIn + clips[index].fadeOut, duration = clips[index].source.duration
+            guard total > duration, total > 0 else { continue }
+            clips[index].fadeIn *= duration / total; clips[index].fadeOut *= duration / total
+        }
+    }
+}
+
 public enum VideoTimelineHit: Equatable, Sendable {
     case boundary(segment: Int, start: Bool)
     case strip

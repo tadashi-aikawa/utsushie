@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import AVFoundation
 import UtsushieCore
 
 @MainActor
@@ -173,15 +174,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         busy = true; stopWhenStarted = false
         let token = UUID(); recordingToken = token
         recordingConfig = config; recordingDate = Date()
+        let audio = overlay.state.audio
         updateRecordingStatus()
         recordingStartTask = Task {
             var prepared: RecordingService?
             do {
+                if audio.capturesMicrophone { try await requestMicrophone() }
                 // 赤枠も開始前に窓番号を確保し、撮影用UIだけを除外する。
                 borderRect = request.rect; recordingBorder.show(rect: request.rect)
                 let excluded = CaptureWindowExclusion.windows()
                 // 準備中のEscはTaskを取消し、非同期処理の後から録画が始まることを防ぐ。
-                let session = try await RecordingService.prepare(request: request, config: recordingConfig.video,
+                let session = try await RecordingService.prepare(request: request, config: recordingConfig.video, audio: audio,
                     directory: recordingConfig.outputURL(), excluding: excluded, onStop: { [weak self] in
                         // 古いSCStreamの遅延通知で次の録画を止めない。
                         guard let self, self.recordingToken == token else { return }
@@ -219,6 +222,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 if quitAfterRecording { NSApp.terminate(nil) }
             }
+        }
+    }
+    private func requestMicrophone() async throws {
+        let denied = CaptureError.unavailable("マイクの許可が必要です。システム設定の「プライバシーとセキュリティ → マイク」でUTSUSHIEを許可してください")
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return
+        case .notDetermined:
+            // 許可の確認を選択画面の下に隠さない。範囲は決まっているので閉じてから尋ねる。
+            overlay.close()
+            guard await AVCaptureDevice.requestAccess(for: .audio) else { throw denied }
+            try Task.checkCancellation()
+        default:
+            openPrivacy("Privacy_Microphone")
+            throw denied
         }
     }
     private func streamStopped() {

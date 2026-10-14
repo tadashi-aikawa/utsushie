@@ -11,10 +11,66 @@ enum VideoEditExporter {
         }
         let size = try await track.load(.naturalSize)
         let transform = try await track.load(.preferredTransform)
-        let job = try VideoExportJob(asset: asset, track: track, destination: destination,
-                                     plan: VideoExportPlan(document: document), sourceDuration: document.duration,
+        let plan = VideoExportPlan(document: document)
+        var audio: VideoEditAudio?
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        if !audioTracks.isEmpty {
+            var sources: [(track: AVAssetTrack, range: CMTimeRange)] = []
+            for audioTrack in audioTracks { sources.append((audioTrack, try await audioTrack.load(.timeRange))) }
+            audio = try VideoEditAudio(sources: sources, plan: VideoAudioPlan(plan: plan, sourceDuration: document.duration))
+        }
+        let job = try VideoExportJob(asset: asset, track: track, audio: audio, destination: destination,
+                                     plan: plan, sourceDuration: document.duration,
                                      width: Int(size.width), height: Int(size.height), fps: fps, transform: transform)
         return try await job.run()
+    }
+}
+
+/// 残す区間の音を書き出しの時刻へ並べたComposition。前後が重なる音は別トラックへ置き、音量の変化で絞る。
+struct VideoEditAudio {
+    let composition: AVMutableComposition
+    let tracks: [AVMutableCompositionTrack]
+    let mix: AVMutableAudioMix
+
+    init?(sources: [(track: AVAssetTrack, range: CMTimeRange)], plan: VideoAudioPlan) throws {
+        composition = AVMutableComposition()
+        var tracks: [AVMutableCompositionTrack] = []
+        var parameters: [AVMutableAudioMixInputParameters] = []
+        for source in sources {
+            for slot in 0..<2 {
+                let clips = plan.clips.filter { $0.track == slot }
+                guard !clips.isEmpty,
+                      let track = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { continue }
+                let volume = AVMutableAudioMixInputParameters(track: track)
+                // 音量の既定は1で、絞りの始まりの一瞬が鳴る。最初の絞りより前を0にしておく。
+                if let first = clips.first, first.fadeIn > 0, first.outputStart > 0 { volume.setVolume(0, at: .zero) }
+                var cursor = CMTime.zero
+                for clip in clips {
+                    // 音が映像より短い録画では、音のある範囲だけを並べる。
+                    let requested = CMTimeRange(start: VideoExportTiming.time(clip.source.start), end: VideoExportTiming.time(clip.source.end))
+                    let available = requested.intersection(source.range)
+                    guard available.duration > .zero else { continue }
+                    let start = VideoExportTiming.time(clip.outputStart) + (available.start - requested.start)
+                    if start > cursor { track.insertEmptyTimeRange(CMTimeRange(start: cursor, end: start)) }
+                    try track.insertTimeRange(available, of: source.track, at: start)
+                    cursor = start + available.duration
+                    let clipStart = VideoExportTiming.time(clip.outputStart), clipEnd = VideoExportTiming.time(clip.outputEnd)
+                    if clip.fadeIn > 0 {
+                        volume.setVolumeRamp(fromStartVolume: 0, toEndVolume: 1,
+                            timeRange: CMTimeRange(start: clipStart, duration: VideoExportTiming.time(clip.fadeIn)))
+                    } else { volume.setVolume(1, at: clipStart) }
+                    if clip.fadeOut > 0 {
+                        volume.setVolumeRamp(fromStartVolume: 1, toEndVolume: 0,
+                            timeRange: CMTimeRange(start: clipEnd - VideoExportTiming.time(clip.fadeOut), end: clipEnd))
+                    }
+                }
+                guard cursor > .zero else { composition.removeTrack(track); continue }
+                tracks.append(track); parameters.append(volume)
+            }
+        }
+        guard !tracks.isEmpty else { return nil }
+        self.tracks = tracks
+        mix = AVMutableAudioMix(); mix.inputParameters = parameters
     }
 }
 
@@ -50,8 +106,14 @@ private final class VideoExportJob: @unchecked Sendable {
     private var image: CGImage?
     private var completed = false
     private var continuation: CheckedContinuation<RecordedVideo, Error>?
+    /// 音はCompositionを別のreaderで読み、映像と同じwriterへ並行して渡す。
+    private let audioReader: AVAssetReader?
+    private let audioOutput: AVAssetReaderAudioMixOutput?
+    private let audioInput: AVAssetWriterInput?
+    private var videoFinished = false
+    private var audioFinished: Bool
 
-    init(asset: AVAsset, track: AVAssetTrack, destination: URL, plan: VideoExportPlan, sourceDuration: Double,
+    init(asset: AVAsset, track: AVAssetTrack, audio: VideoEditAudio?, destination: URL, plan: VideoExportPlan, sourceDuration: Double,
          width: Int, height: Int, fps: Int, transform: CGAffineTransform) throws {
         guard plan.duration > 0 else { throw CaptureError.unavailable("残す範囲がありません") }
         self.destination = destination; self.plan = plan; self.sourceDuration = sourceDuration
@@ -68,22 +130,48 @@ private final class VideoExportJob: @unchecked Sendable {
         input.expectsMediaDataInRealTime = false; input.transform = transform; input.mediaTimeScale = 60000
         guard writer.canAdd(input) else { throw CaptureError.unavailable("H.264の書き出し設定を作れません") }
         writer.add(input)
+        if let audio {
+            let reader = try AVAssetReader(asset: audio.composition)
+            let output = AVAssetReaderAudioMixOutput(audioTracks: audio.tracks, audioSettings: VideoEncoding.pcmSettings)
+            output.audioMix = audio.mix
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: VideoEncoding.audioSettings)
+            input.expectsMediaDataInRealTime = false
+            guard reader.canAdd(output), writer.canAdd(input) else { throw CaptureError.unavailable("AACの書き出し設定を作れません") }
+            reader.add(output); writer.add(input)
+            audioReader = reader; audioOutput = output; audioInput = input
+        } else { audioReader = nil; audioOutput = nil; audioInput = nil }
+        audioFinished = audio == nil
     }
     func run() async throws -> RecordedVideo {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 self.continuation = continuation
-                guard self.reader.startReading(), self.writer.startWriting() else {
-                    self.fail(self.reader.error ?? self.writer.error ?? CaptureError.unavailable("書き出しを開始できません")); return
+                guard self.reader.startReading(), self.audioReader?.startReading() ?? true, self.writer.startWriting() else {
+                    self.fail(self.reader.error ?? self.audioReader?.error ?? self.writer.error ?? CaptureError.unavailable("書き出しを開始できません")); return
                 }
                 self.writer.startSession(atSourceTime: .zero)
                 self.current = self.output.copyNextSampleBuffer(); self.next = self.output.copyNextSampleBuffer()
                 self.input.requestMediaDataWhenReady(on: self.queue) { self.pump() }
+                self.audioInput?.requestMediaDataWhenReady(on: self.queue) { self.pumpAudio() }
             }
         }
     }
+    private func pumpAudio() {
+        guard !completed, !audioFinished, let audioReader, let audioOutput, let audioInput else { return }
+        do {
+            while audioInput.isReadyForMoreMediaData {
+                if let sample = audioOutput.copyNextSampleBuffer() {
+                    guard audioInput.append(sample) else { throw writer.error ?? CaptureError.unavailable("動画の音を書けません") }
+                    continue
+                }
+                guard audioReader.status == .completed else { throw audioReader.error ?? CaptureError.unavailable("動画の音を読み取れません") }
+                audioFinished = true; audioInput.markAsFinished(); finishIfReady()
+                return
+            }
+        } catch { fail(error) }
+    }
     private func pump() {
-        guard !completed else { return }
+        guard !completed, !videoFinished else { return }
         do {
             while input.isReadyForMoreMediaData {
                 if !pending.isEmpty {
@@ -147,9 +235,14 @@ private final class VideoExportJob: @unchecked Sendable {
         } catch { fail(error) }
     }
     private func finish() {
-        completed = true; current = nil; next = nil; precedingFrame = nil; heldFastForward = nil
-        writer.endSession(atSourceTime: VideoExportTiming.time(plan.duration))
+        videoFinished = true; current = nil; next = nil; precedingFrame = nil; heldFastForward = nil
         input.markAsFinished()
+        finishIfReady()
+    }
+    private func finishIfReady() {
+        guard videoFinished, audioFinished, !completed else { return }
+        completed = true
+        writer.endSession(atSourceTime: VideoExportTiming.time(plan.duration))
         writer.finishWriting {
             self.queue.async {
                 guard self.writer.status == .completed, let image = self.image else {
@@ -162,7 +255,7 @@ private final class VideoExportJob: @unchecked Sendable {
         }
     }
     private func fail(_ error: Error) {
-        completed = true; reader.cancelReading(); writer.cancelWriting()
+        completed = true; reader.cancelReading(); audioReader?.cancelReading(); writer.cancelWriting()
         current = nil; next = nil; pending = []; precedingFrame = nil; heldFastForward = nil
         try? FileManager.default.removeItem(at: destination)
         continuation?.resume(throwing: error); continuation = nil

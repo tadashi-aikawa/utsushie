@@ -15,7 +15,7 @@ final class RecordingService {
     private var filteredWindowIDs: Set<UInt32>
     private var exclusionUpdate: Task<Void, Error>?
 
-    static func prepare(request: CaptureRequest, config: VideoConfig, directory: URL,
+    static func prepare(request: CaptureRequest, config: VideoConfig, audio: VideoAudio, directory: URL,
                         excluding windows: [NSWindow],
                         onStop: @escaping @MainActor @Sendable () -> Void) async throws -> RecordingService {
         let displays = ScreenGeometry.displays
@@ -50,7 +50,10 @@ final class RecordingService {
         streamConfig.width = size.width; streamConfig.height = size.height
         streamConfig.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(config.fps))
         streamConfig.showsCursor = config.showsCursor
-        streamConfig.capturesAudio = false; streamConfig.captureMicrophone = false
+        streamConfig.capturesAudio = audio.capturesSystem; streamConfig.captureMicrophone = audio.capturesMicrophone
+        // 共有カードなどUTSUSHIE自身の音は録らない。
+        streamConfig.excludesCurrentProcessAudio = true
+        streamConfig.sampleRate = 48_000; streamConfig.channelCount = 2
         streamConfig.pixelFormat = kCVPixelFormatType_32BGRA
         streamConfig.colorSpaceName = CGColorSpace.sRGB
         streamConfig.queueDepth = 5
@@ -62,12 +65,16 @@ final class RecordingService {
         let temporaryURL = directory.appendingPathComponent(".utsushie-\(UUID().uuidString).recording.mp4")
         let notify: @Sendable () -> Void = { Task { @MainActor in onStop() } }
         let writer: MP4Writer
-        do { writer = try MP4Writer(url: temporaryURL, width: size.width, height: size.height, fps: config.fps, onFailure: notify) }
+        let sources = AudioSource.allCases.filter { $0 == .system ? audio.capturesSystem : audio.capturesMicrophone }
+        do { writer = try MP4Writer(url: temporaryURL, width: size.width, height: size.height, fps: config.fps, audio: sources, onFailure: notify) }
         catch { try? FileManager.default.removeItem(at: temporaryURL); throw error }
         let sink = RecordingSink(writer: writer, onStop: notify)
         let stream = SCStream(filter: filter, configuration: streamConfig, delegate: sink)
-        do { try stream.addStreamOutput(sink, type: .screen, sampleHandlerQueue: writer.queue) }
-        catch { await writer.abort(); throw error }
+        do {
+            try stream.addStreamOutput(sink, type: .screen, sampleHandlerQueue: writer.queue)
+            if audio.capturesSystem { try stream.addStreamOutput(sink, type: .audio, sampleHandlerQueue: writer.queue) }
+            if audio.capturesMicrophone { try stream.addStreamOutput(sink, type: .microphone, sampleHandlerQueue: writer.queue) }
+        } catch { await writer.abort(); throw error }
         return RecordingService(request: request, displayID: geometry.id, width: size.width, height: size.height,
                                 stream: stream, sink: sink, excludedWindows: windows)
     }

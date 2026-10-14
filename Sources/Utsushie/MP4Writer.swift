@@ -28,8 +28,10 @@ final class MP4Writer: @unchecked Sendable {
     private var failure: Error?
     private var finishing = false
     private let onFailure: @Sendable () -> Void
+    /// 音源ごとに1トラック。2つあれば完成後に1トラックへ混ぜる。
+    private let audioTracks: [AudioSource: AudioTrackWriter]
 
-    init(url: URL, width: Int, height: Int, fps: Int, onFailure: @escaping @Sendable () -> Void = {}) throws {
+    init(url: URL, width: Int, height: Int, fps: Int, audio: [AudioSource] = [], onFailure: @escaping @Sendable () -> Void = {}) throws {
         self.url = url; self.width = width; self.height = height; self.fps = fps; self.onFailure = onFailure
         writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         writer.shouldOptimizeForNetworkUse = true
@@ -37,6 +39,13 @@ final class MP4Writer: @unchecked Sendable {
         input.expectsMediaDataInRealTime = true
         guard writer.canAdd(input) else { throw CaptureError.unavailable("H.264の録画設定を作れません") }
         writer.add(input)
+        var tracks: [AudioSource: AudioTrackWriter] = [:]
+        for source in AudioSource.allCases where audio.contains(source) {
+            let track = AudioTrackWriter()
+            guard writer.canAdd(track.input) else { throw CaptureError.unavailable("AACの録音設定を作れません") }
+            writer.add(track.input); tracks[source] = track
+        }
+        audioTracks = tracks
         guard writer.startWriting() else { throw writer.error ?? CaptureError.unavailable("MP4の保存を開始できません") }
     }
 
@@ -65,7 +74,21 @@ final class MP4Writer: @unchecked Sendable {
         } catch { failure = error; onFailure() }
     }
 
+    /// 呼び出し元はSCStreamへ渡したqueue。最初のコマを受け取るまでの音は使わない。
+    func appendAudio(_ sample: CMSampleBuffer, from source: AudioSource) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard !finishing, failure == nil, sample.isValid, let track = audioTracks[source],
+              let start = timeline.audioPresentation(sourceTime: sample.presentationTimeStamp.seconds) else { return }
+        do { try track.append(sample, at: start) }
+        catch { failure = writer.error ?? error; onFailure() }
+    }
+
     func finish(hostTime: Double = ProcessInfo.processInfo.systemUptime) async throws -> RecordedVideo {
+        let video = try await finishWriting(hostTime: hostTime)
+        if audioTracks.count > 1 { await AudioMixdown.mixInPlace(video.temporaryURL) }
+        return video
+    }
+    private func finishWriting(hostTime: Double) async throws -> RecordedVideo {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 guard !self.finishing else {
@@ -98,6 +121,7 @@ final class MP4Writer: @unchecked Sendable {
             }
             writer.endSession(atSourceTime: CMTime(seconds: end.duration, preferredTimescale: 60000))
             input.markAsFinished()
+            audioTracks.values.forEach { $0.input.markAsFinished() }
             writer.finishWriting {
                 self.queue.async {
                     guard self.writer.status == .completed else {
@@ -147,7 +171,12 @@ final class RecordingSink: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     private let onStop: @Sendable () -> Void
     init(writer: MP4Writer, onStop: @escaping @Sendable () -> Void) { self.writer = writer; self.onStop = onStop }
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        if type == .screen { writer.append(sampleBuffer) }
+        switch type {
+        case .screen: writer.append(sampleBuffer)
+        case .audio: writer.appendAudio(sampleBuffer, from: .system)
+        case .microphone: writer.appendAudio(sampleBuffer, from: .microphone)
+        @unknown default: break
+        }
     }
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         // 対象の消失などでストリームが止まった場合も、受信済みのフレームをfinalizeする。

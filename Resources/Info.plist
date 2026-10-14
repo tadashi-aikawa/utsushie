@@ -26,5 +26,7 @@
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
     <string>選択した画面の範囲やウィンドウを画像として保存するために画面収録を使います。</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>マイクの声を入れて動画を録画するためにマイクを使います。</string>
 </dict>
 </plist>

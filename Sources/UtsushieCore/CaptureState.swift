@@ -9,13 +9,24 @@ public struct CaptureState: Sendable {
     public private(set) var output: CaptureOutput = .image
     public private(set) var target: CaptureTarget = .area
     public private(set) var gesture = SelectionGesture()
+    /// 設定の既定から始め、Aで変えた音はその回の選択だけに使う。
+    public private(set) var audio: VideoAudio
     private var shiftPressed = false
     public var cursor: CaptureCursor { target == .element ? .arrow : .crosshair }
     public var highlightsWindow: Bool { !gesture.isDragging && !shiftPressed }
     public var highlightsDisplay: Bool { target != .element && !gesture.isDragging && shiftPressed }
-    public init() {}
+    public init(audio: VideoAudio = .none) { self.audio = audio }
+    /// 動画のときだけ受けるキー。画像のAは他のアプリへ渡す。
+    public func handles(_ code: UInt16) -> Bool {
+        [UInt16(53), 48, 8, 14, 36, 76].contains(code) || code == 0 && output == .video
+    }
     /// 文字やIMEの変換結果に依存しない物理keyCodeで判断する。
     public mutating func key(_ code: UInt16, hasLast: Bool) -> CaptureAction {
+        // 音の切り替えは範囲の選び方を変えないため、ドラッグ中でも続ける。
+        if code == 0 {
+            if output == .video { audio = audio.next }
+            return .none
+        }
         guard [UInt16(53), 48, 8, 14, 36, 76].contains(code) else { return .none }
         // キー操作で選択ジェスチャーを終える。Esc後のmouseUpは撮影へ遷移しない。
         gesture.cancel()
