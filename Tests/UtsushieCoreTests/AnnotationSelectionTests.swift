@@ -2,6 +2,30 @@ import Foundation
 import Testing
 @testable import UtsushieCore
 
+@Test func highlighterShiftSnapsToNearestAxisAndClampsAfterChoosingAxis() {
+    let anchor = CGPoint(x: 50, y: 50)
+    let size = CGSize(width: 100, height: 80)
+    let cases: [(CGPoint, CGPoint)] = [
+        (CGPoint(x: 90, y: 30), CGPoint(x: 90, y: 50)),
+        (CGPoint(x: 70, y: 10), CGPoint(x: 50, y: 10)),
+        (CGPoint(x: 10, y: 70), CGPoint(x: 10, y: 50)),
+        (CGPoint(x: 30, y: 90), CGPoint(x: 50, y: 80)),
+        (CGPoint(x: 80, y: 20), CGPoint(x: 80, y: 50)),
+        (CGPoint(x: 20, y: 80), CGPoint(x: 20, y: 50)),
+        (anchor, anchor),
+        (CGPoint(x: 200, y: -50), CGPoint(x: 100, y: 50)),
+        (CGPoint(x: -100, y: 150), CGPoint(x: 0, y: 50)),
+        (CGPoint(x: 80, y: -100), CGPoint(x: 50, y: 0)),
+        (CGPoint(x: 120, y: 200), CGPoint(x: 50, y: 80)),
+    ]
+    for (point, expected) in cases {
+        #expect(AnnotationGeometry.highlighterEndpoint(point, from: anchor, imageSize: size) == expected)
+        let pen = Annotation(tool: .highlighter, start: anchor)
+        #expect(AnnotationGeometry.creating(pen, to: point, shift: true, imageSize: size).end == expected)
+        #expect(AnnotationGeometry.creating(pen, to: point, shift: false, imageSize: size).end == AnnotationGeometry.clamped(point, to: size))
+    }
+}
+
 @Test func marqueeSelectsPartialIntersectionAndPolylineSegments() {
     let area = Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 80, y: 80))
     let line = Annotation(tool: .line, start: CGPoint(x: 100, y: 100), end: CGPoint(x: 200, y: 200))

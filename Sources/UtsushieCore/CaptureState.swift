@@ -11,6 +11,8 @@ public struct CaptureState: Sendable {
     public private(set) var gesture = SelectionGesture()
     /// 設定の既定から始め、Aで変えた音はその回の選択だけに使う。
     public private(set) var audio: VideoAudio
+    /// 出力ごとの既定を反転する。その回の選択を開き直すと戻る。
+    public private(set) var resolutionInverted = false
     private var shiftPressed = false
     public var cursor: CaptureCursor { target == .element ? .arrow : .crosshair }
     public var highlightsWindow: Bool { !gesture.isDragging && !shiftPressed }
@@ -18,11 +20,25 @@ public struct CaptureState: Sendable {
     public init(audio: VideoAudio = .none) { self.audio = audio }
     /// 動画のときだけ受けるキー。画像のAは他のアプリへ渡す。
     public func handles(_ code: UInt16) -> Bool {
-        [UInt16(53), 48, 8, 14, 36, 76].contains(code) || code == 0 && output == .video
+        [UInt16(53), 48, 8, 14, 15, 36, 76].contains(code) || code == 0 && output == .video
+    }
+    public func effectiveDownscale(config: UtsushieConfig) -> Bool {
+        (output == .video ? config.video.downscale : config.downscale) != resolutionInverted
+    }
+    /// 録画と編集カードに同じ実効値を渡す。2xは設定のfpsによらず60fps。
+    public func effectiveVideoConfig(_ defaults: VideoConfig) -> VideoConfig {
+        var result = defaults
+        result.downscale = defaults.downscale != resolutionInverted
+        result.fps = result.downscale ? defaults.fps : 60
+        return result
     }
     /// 文字やIMEの変換結果に依存しない物理keyCodeで判断する。
     public mutating func key(_ code: UInt16, hasLast: Bool) -> CaptureAction {
-        // 音の切り替えは範囲の選び方を変えないため、ドラッグ中でも続ける。
+        // 音と解像度の切り替えは範囲の選び方を変えないため、ドラッグ中でも続ける。
+        if code == 15 {
+            resolutionInverted.toggle()
+            return .none
+        }
         if code == 0 {
             if output == .video { audio = audio.next }
             return .none

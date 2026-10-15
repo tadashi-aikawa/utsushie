@@ -704,8 +704,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             annotation = Annotation(id: initial.id, tool: .text, start: rect.origin,
                                     end: CGPoint(x: rect.maxX, y: rect.maxY), text: "入力", leaderTarget: anchor, inkColor: initial.inkColor, size: initial.size)
         case .create(let initial):
-            annotation = initial.tool == .highlighter ? (preview?.annotations.first { $0.id == initial.id } ?? initial) : initial
-            annotation = AnnotationGeometry.creating(annotation, to: p, shift: shift, imageSize: imageSize)
+            annotation = initial.tool == .highlighter && !highlighterStraight ? (preview?.annotations.first { $0.id == initial.id } ?? initial) : initial
+            annotation = AnnotationGeometry.creating(annotation, to: p,
+                shift: initial.tool == .highlighter ? highlighterStraight : shift, imageSize: imageSize)
             if initial.tool == .highlighter {
                 if highlighterStraight { annotation.points = [initial.start, annotation.end] }
                 else { annotation.points.append(annotation.end) }

@@ -590,10 +590,23 @@ func annotationSizeToolbarSwitchClearsSelectionAndImmediatelyShowsRememberedSize
         canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: end, flags: straight ? [] : .shift))
         canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: end))
         let annotation = try #require(canvas.document.annotations.first)
-        if straight { #expect(annotation.points == [start, CGPoint(x: 160, y: 90)]) }
+        if straight { #expect(annotation.points == [start, CGPoint(x: 160, y: 20)]) }
         else { #expect(annotation.points.count > 2 && annotation.points.last == start) }
         canvas.undoAnnotation(); #expect(canvas.document.annotations.isEmpty)
     }
+}
+
+@MainActor @Test func annotationHighlighterSnapsVerticallyAndKeepsAnchorAcrossDrags() throws {
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .highlighter)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    let start = CGPoint(x: 20, y: 20)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: start, flags: .shift))
+    for end in [CGPoint(x: -20, y: 10), CGPoint(x: 30, y: 180)] {
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: end))
+    }
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 30, y: 180)))
+    let annotation = try #require(canvas.document.annotations.first)
+    #expect(annotation.points == [start, CGPoint(x: 20, y: 100)])
 }
 
 @MainActor @Test func annotationShiftConstraintsFollowCurrentDragFlags() throws {

@@ -181,13 +181,13 @@ public enum ConfigLoader {
     # modifiers = ["command", "shift"]
 
     [webp]
-    downscale = true # 見た目の1xへ縮小
+    downscale = true # 見た目の1xへ縮小する既定。範囲選択のRでその回だけ切り替え
     quality = 80 # 0〜100
     lossless = false
 
     [video]
     fps = 30 # 1〜60
-    downscale = true # H.264の寸法は偶数へ切り下げ
+    downscale = true # 見た目の1xへ縮小する既定。範囲選択のRでその回だけ切り替え。H.264の寸法は偶数へ切り下げ
     showsCursor = true
     audio = "none" # none / system / mic / both。範囲選択中のAでその回だけ切り替え
 

@@ -84,6 +84,12 @@ extension AnnotationGeometry {
         abs(delta.x) >= abs(delta.y) ? CGPoint(x: delta.x, y: 0) : CGPoint(x: 0, y: delta.y)
     }
 
+    /// 同値は水平。軸を決めてから画像内へ制限し、端でも直線を保つ。
+    public static func highlighterEndpoint(_ point: CGPoint, from anchor: CGPoint, imageSize: CGSize) -> CGPoint {
+        let delta = axisConstrained(CGPoint(x: point.x - anchor.x, y: point.y - anchor.y))
+        return clamped(CGPoint(x: anchor.x + delta.x, y: anchor.y + delta.y), to: imageSize)
+    }
+
     public static func angleConstrained(_ point: CGPoint, from anchor: CGPoint) -> CGPoint {
         let dx = point.x - anchor.x, dy = point.y - anchor.y
         let angle = (atan2(dy, dx) / (.pi / 4)).rounded() * (.pi / 4)
@@ -106,6 +112,7 @@ extension AnnotationGeometry {
         if [.rectangle, .spotlight].contains(tool) {
             return creating(Annotation(tool: tool, start: anchor, size: size), to: point, shift: shift, imageSize: imageSize).end
         }
+        if tool == .highlighter && shift { return highlighterEndpoint(point, from: anchor, imageSize: imageSize) }
         let point = tool.allowsMargin ? point : clamped(point, to: imageSize)
         guard shift else { return point }
         if [.arrow, .line].contains(tool) { return angleConstrained(point, from: anchor) }

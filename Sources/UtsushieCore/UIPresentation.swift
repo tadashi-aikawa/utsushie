@@ -23,6 +23,9 @@ public enum OverlayPresentation {
          HUDItem(title: "要素", key: "E", selected: target == .element, recording: false, enabled: true),
          HUDItem(title: "やめる", key: "Esc", selected: false, recording: false, enabled: true)]
     }
+    public static func resolutionItem(downscale: Bool) -> HUDItem {
+        HUDItem(title: downscale ? "1x" : "2x", key: "R", selected: !downscale, recording: false, enabled: true)
+    }
     /// 画像では出さない。音を入れるときだけ選択の面にする。
     public static func audioItem(output: CaptureOutput, audio: VideoAudio) -> HUDItem? {
         guard output == .video else { return nil }

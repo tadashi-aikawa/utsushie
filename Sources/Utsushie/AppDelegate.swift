@@ -174,6 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         busy = true; stopWhenStarted = false
         let token = UUID(); recordingToken = token
         recordingConfig = config; recordingDate = Date()
+        recordingConfig.video = overlay.state.effectiveVideoConfig(config.video)
         let audio = overlay.state.audio
         updateRecordingStatus()
         recordingStartTask = Task {
@@ -326,12 +327,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         busy = true
         // 閉じたパネルも列挙・合成が終わるまで保持し、窓番号で確実に除外する。
         let excluded = CaptureWindowExclusion.windows()
-        overlay.close()
         let snapshot = config
+        let downscale = overlay.state.effectiveDownscale(config: snapshot)
+        overlay.close()
         let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: request.rect.midX, y: request.rect.midY)) }
         Task {
             do {
-                let image = try await capture.image(for: request, downscale: snapshot.downscale, excluding: excluded)
+                let image = try await capture.image(for: request, downscale: downscale, excluding: excluded)
                 // エンコードとディスク書き込みはメインスレッドを塞がない。
                 let (data, url) = try await Task.detached(priority: .userInitiated) {
                     let data = try WebPEncoder.encode(image, quality: snapshot.quality, lossless: snapshot.lossless)

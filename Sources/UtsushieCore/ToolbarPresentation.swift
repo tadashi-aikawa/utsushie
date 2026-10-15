@@ -67,11 +67,13 @@ public struct OverlayToolbarLayout: Equatable, Sendable {
     public let outputTray: CGRect
     public let targetTray: CGRect
     public let tab: CGRect
-    /// 動画の音。Tabの右で台に入れず、対象の台を右へ送る。
+    /// 解像度。Tabの右で台に入れず、音と対象の台を右へ送る。
+    public let resolution: CGRect?
+    /// 動画の音。解像度の右で台に入れず、対象の台を右へ送る。
     public let audio: CGRect?
     public let width: CGFloat
 
-    public init(itemWidths: [CGFloat], tabWidth: CGFloat, audioWidth: CGFloat? = nil) {
+    public init(itemWidths: [CGFloat], tabWidth: CGFloat, resolutionWidth: CGFloat? = nil, audioWidth: CGFloat? = nil) {
         precondition(itemWidths.count >= 6)
         let lastIndex = itemWidths.count - 1
         var frames: [CGRect] = []
@@ -82,10 +84,13 @@ public struct OverlayToolbarLayout: Equatable, Sendable {
         }
         outputTray = CGRect(x: 6, y: 4, width: x + 2 - 6, height: 32)
         tab = CGRect(x: outputTray.maxX + 6, y: 11.5, width: tabWidth, height: 17)
+        var resolutionFrame: CGRect?
+        if let resolutionWidth { resolutionFrame = CGRect(x: tab.maxX + 10, y: 6, width: resolutionWidth, height: 28) }
+        resolution = resolutionFrame
         var audioFrame: CGRect?
-        if let audioWidth { audioFrame = CGRect(x: tab.maxX + 10, y: 6, width: audioWidth, height: 28) }
+        if let audioWidth { audioFrame = CGRect(x: (resolutionFrame?.maxX ?? tab.maxX) + 10, y: 6, width: audioWidth, height: 28) }
         audio = audioFrame
-        let targetX = (audioFrame?.maxX ?? tab.maxX) + 10
+        let targetX = (audioFrame?.maxX ?? resolutionFrame?.maxX ?? tab.maxX) + 10
         x = targetX + 2
         for index in 2..<lastIndex {
             frames.append(CGRect(x: x, y: 6, width: itemWidths[index], height: 28))
