@@ -12,6 +12,11 @@ public struct CaptureWindowPolicy: Sendable {
         excludedWindowIDs.contains(windowID)
     }
 
+    /// 前もって取った窓の一覧は、今の撮影用UIがすべて載っているときだけ使える。閉じた窓が残っていても除外は崩れない。
+    public func canReuse(listedWindowIDs: Set<UInt32>) -> Bool {
+        excludedWindowIDs.isSubset(of: listedWindowIDs)
+    }
+
     public func canSelect(windowID: UInt32, processID: Int32?, layer: Int, alpha: Double) -> Bool {
         guard alpha > 0, !excludes(windowID: windowID) else { return false }
         // 編集パネル・シート・メニューも選べるよう、自アプリは通常層に限定しない。

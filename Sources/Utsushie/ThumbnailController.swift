@@ -15,6 +15,8 @@ final class ThumbnailController {
     var editorFocus = AnnotationApplicationFocus()
     var makeVideoSession: (SharedArtifact, Int) -> VideoEditSession = { VideoEditSession(artifact: $0, fps: $1) }
     var onArtifactsChange: (() -> Void)?
+    /// 表示中のカードの窓が増えた。撮影用UIの除外に使う窓の一覧を取り直す合図にする。
+    var onCardAdded: (() -> Void)?
     var onLibraryExportStatus: ((URL, String?) -> Void)?
     var beforeShowingCard: ((NSWindow) async -> Bool)?
 
@@ -80,6 +82,7 @@ final class ThumbnailController {
             keyboardTargetID = card.id
             updateKeyboardTarget(); layout()
             if !suspended { card.show() }
+            onCardAdded?()
         }
         return card.id
     }

@@ -13,6 +13,16 @@ import Testing
     #expect(!policy.excludes(windowID: 101))
 }
 
+@Test func prefetchedWindowListIsReusedOnlyWhenItListsEveryCaptureUI() {
+    let policy = CaptureWindowPolicy(ownProcessID: 42, excludedWindowIDs: [10, 11])
+    #expect(policy.canReuse(listedWindowIDs: [10, 11, 200]))
+    // 先読みの後に閉じたカードが一覧に残っていてもよい。
+    #expect(policy.canReuse(listedWindowIDs: [9, 10, 11]))
+    // 先読みの後に出た新しいカードが無ければ取り直す。
+    #expect(!policy.canReuse(listedWindowIDs: [10, 200]))
+    #expect(CaptureWindowPolicy(ownProcessID: 42, excludedWindowIDs: []).canReuse(listedWindowIDs: []))
+}
+
 @Test(arguments: [0, 3, 8, 101])
 func ownEditorSheetPopoverAndMenuCanBeSelectedAtAnyLayer(_ layer: Int) {
     let policy = CaptureWindowPolicy(ownProcessID: 42, excludedWindowIDs: [10])

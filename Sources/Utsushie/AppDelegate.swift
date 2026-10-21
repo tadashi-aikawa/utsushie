@@ -70,7 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         overlay.onCancel = { [weak self] in
             self?.recordingStartTask?.cancel()
             self?.thumbnails.setSuspended(false)
+            self?.capture.prefetch()
         }
+        thumbnails.onCardAdded = { [weak self] in self?.capture.prefetch() }
+        capture.prefetch()
         overlay.onAccessibilityNeeded = { [weak self] in self?.openPrivacy("Privacy_Accessibility") }
         // AppKitが初期化中の例外を捕捉しても、メニューと撮影の準備は完了した状態にする。
         captureLibrary = CaptureLibraryController(directory: { [weak self] in self?.config.outputURL() ?? UtsushieConfig().outputURL() },
@@ -166,11 +169,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         thumbnails.setSuspended(true)
         overlay.config = config
         freezing = true
+        let start = ContinuousClock.now
         Task {
             // 撮れなければ止めずに今の画面で選ばせる。
             let frozen = try? await capture.freeze(excluding: CaptureWindowExclusion.windows())
             freezing = false
             overlay.show(last: last, frozen: frozen)
+            CaptureService.log.debug("overlay shown: elapsed=\(start.duration(to: .now), privacy: .public)")
         }
     }
     private func startRecording(_ request: CaptureRequest, remember: Bool) {

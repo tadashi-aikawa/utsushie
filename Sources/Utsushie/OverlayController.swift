@@ -53,7 +53,11 @@ final class OverlayController {
         state = CaptureState(audio: config.video.audio)
         state.modifiersChanged(shift: NSEvent.modifierFlags.contains(.shift))
         self.last = last
-        self.frozen = frozen
+        // 撮った後にディスプレイが変わったら、止めた画面と選択画面の画面がずれる。外した画面の絵も撮らせない。今の画面で開く。
+        let displays = ScreenGeometry.displays
+        self.frozen = frozen.flatMap { frozen in
+            frozen.count == displays.count && displays.allSatisfy { display in frozen.contains { $0.geometry == display } } ? frozen : nil
+        }
         message = ""
         refreshWindowContent()
         for screen in NSScreen.screens {
@@ -70,7 +74,7 @@ final class OverlayController {
             // 止めた画面と選択の幕を同じ窓で1度に出す。別の窓に分けると、幕の下で今の画面が動いてから止めた画面へ戻って見える。
             let container = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
             container.wantsLayer = true
-            if let display = frozen?.first(where: { $0.geometry.frame == screen.frame }) {
+            if let display = self.frozen?.first(where: { $0.geometry.frame == screen.frame }) {
                 CATransaction.begin(); CATransaction.setDisableActions(true)
                 container.layer?.contents = display.image
                 container.layer?.contentsGravity = .resize
