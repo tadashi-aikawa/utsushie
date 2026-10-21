@@ -55,13 +55,14 @@ private func pixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     let mosaic = Annotation(tool: .mosaic, start: CGPoint(x: 16, y: 8), end: CGPoint(x: 41, y: 33))
     let image = try AnnotationRenderer.compose(original, document: AnnotationDocument(annotations: [mosaic]))
     var sum = [Int](repeating: 0, count: 4)
-    for y in 8..<16 { for x in 16..<24 {
+    // 粒は1xで15px。
+    for y in 8..<23 { for x in 16..<31 {
         let p = try pixel(original, x: x, y: y)
         for i in 0..<4 { sum[i] += p[i] }
     }}
-    let average = sum.map { ($0 + 32) / 64 }
+    let average = sum.map { ($0 + 112) / 225 }
     #expect(try pixel(image, x: 16, y: 8) == average)
-    #expect(try pixel(image, x: 23, y: 15) == average)
+    #expect(try pixel(image, x: 30, y: 22) == average)
     #expect(try pixel(image, x: 2, y: 2) == pixel(original, x: 2, y: 2))
     #expect(try pixel(image, x: 16, y: 80) == pixel(original, x: 16, y: 80))
 }
@@ -73,7 +74,7 @@ private func pixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     #expect(try pixel(image, x: 60, y: 80) == [255, 255, 255, 255])
 }
 @MainActor @Test func annotationTextAndNumberRemainAboveSpotlight() throws {
-    let style = AnnotationStyle(imageSize: CGSize(width: 160, height: 100))
+    let style = AnnotationStyle()
     let size = AnnotationRenderer.textSize("手順\n次へ", style: style)
     #expect(size.height > AnnotationRenderer.textSize("手順", style: style).height)
     let label = Annotation(tool: .text, start: CGPoint(x: 20, y: 10), end: CGPoint(x: 20 + size.width, y: 10 + size.height), text: "手順\n次へ")
@@ -175,7 +176,7 @@ private func pixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
         Annotation(tool: .number, start: CGPoint(x: number == 1 ? 100 : 300, y: number == 1 || number == 12 ? 100 : 400))
     }
     let document = AnnotationDocument(annotations: numbers)
-    let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
+    let style = AnnotationStyle()
     let image = try AnnotationRenderer.compose(original, document: document)
     for number in [numbers[0], numbers[11]] {
         let rect = document.bounds(of: number, style: style)
@@ -331,17 +332,17 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
     canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 300, y: 200)))
     let input = try #require(canvas.subviews.compactMap { $0 as? NSTextView }.first)
     let font = try #require(input.font)
-    #expect(abs(font.pointSize - AnnotationStyle(imageSize: CGSize(width: 960, height: 600), size: .normal).fontSize * canvas.displayScale) < 0.00001)
+    #expect(abs(font.pointSize - AnnotationStyle(size: .normal).fontSize * canvas.displayScale) < 0.00001)
     #expect(!canvas.handleSizeKey(try sizeKey(30, keyboardType: 40)))
     input.string = "文字"
     canvas.commitText()
     let text = try #require(canvas.document.annotations.last)
     #expect(text.size == .normal)
-    let measured = AnnotationRenderer.textSize(text.text, style: AnnotationStyle(imageSize: CGSize(width: 960, height: 600), size: .normal))
+    let measured = AnnotationRenderer.textSize(text.text, style: AnnotationStyle(size: .normal))
     #expect(text.rect.size == measured)
     canvas.applySize(.small)
     let changed = try #require(canvas.document.annotations.last)
-    let expected = AnnotationRenderer.textSize(text.text, style: AnnotationStyle(imageSize: CGSize(width: 960, height: 600), size: .small))
+    let expected = AnnotationRenderer.textSize(text.text, style: AnnotationStyle(size: .small))
     #expect(abs(changed.rect.width - expected.width) < 0.000001)
     #expect(abs(changed.rect.height - expected.height) < 0.000001)
 }
@@ -511,7 +512,7 @@ func annotationSizeToolbarSwitchClearsSelectionAndImmediatelyShowsRememberedSize
     #expect(canvas.handleClipboardKey(try annotationKeyEvent(keyCode: 8, flags: .command)))
     #expect(canvas.handleClipboardKey(try annotationKeyEvent(keyCode: 9, flags: .command)))
     #expect(canvas.document.annotations.count == 4 && canvas.selection.count == 2)
-    #expect(canvas.document.annotations[2].start == CGPoint(x: 23.2, y: 23.2))
+    #expect(canvas.document.annotations[2].start == CGPoint(x: 38, y: 38))
     #expect(canvas.document.number(for: canvas.document.annotations[3].id) == 2)
     canvas.undoAnnotation(); #expect(canvas.document == beforeMove)
     try drag(CGPoint(x: 5, y: 5), CGPoint(x: 120, y: 80))
@@ -563,7 +564,7 @@ func annotationSizeToolbarSwitchClearsSelectionAndImmediatelyShowsRememberedSize
         let y = (canvas.imageRect.minY + point.y * canvas.displayScale) * CGFloat(bitmap.pixelsHigh) / canvas.bounds.height
         return try #require(bitmap.colorAt(x: Int(x), y: Int(y))?.usingColorSpace(.sRGB))
     }
-    let style = AnnotationStyle(imageSize: CGSize(width: 160, height: 100))
+    let style = AnnotationStyle()
     let ink = AnnotationGeometry.inkBounds(of: a, bounds: a.rect, style: style)
     let borderPoint = CGPoint(x: ink.maxX + 4 / canvas.displayScale, y: 35)
     let before = try color(at: borderPoint)
@@ -981,7 +982,7 @@ func annotationAreaCanvasCreationAndResizeKeepFixedCornerAndVisibleInk(tool: Ann
     let rendered = try AnnotationRenderer.compose(canvas.original, document: canvas.document)
     #expect(rendered.width == 400 && rendered.height == 300)
     // 画像端からの赤い帯が左右で同じ長さになり、外半分が欠けない。
-    let inset = AnnotationStyle(imageSize: imageSize, size: size).areaInset(for: tool)
+    let inset = AnnotationStyle(size: size).areaInset(for: tool)
     let sampleCount = Int(ceil(inset * 2 + 2))
     var leftRed = 0, rightRed = 0
     for x in 0..<sampleCount {
@@ -1073,7 +1074,7 @@ func annotationAreaCanvasCreationAndResizeKeepFixedCornerAndVisibleInk(tool: Ann
         (Annotation(tool: .arrow, start: CGPoint(x: 20, y: 50), end: CGPoint(x: 140, y: 50), inkColor: color), CGPoint(x: 60, y: 50), CGPoint(x: 60, y: 46)),
         (Annotation(tool: .line, start: CGPoint(x: 20, y: 50), end: CGPoint(x: 140, y: 50), inkColor: color), CGPoint(x: 60, y: 50), CGPoint(x: 60, y: 46)),
         (Annotation(tool: .text, start: CGPoint(x: 50, y: 40), end: CGPoint(x: 130, y: 80), leaderTarget: CGPoint(x: 20, y: 60), inkColor: color), CGPoint(x: 80, y: 40), CGPoint(x: 80, y: 38)),
-        (Annotation(tool: .number, start: CGPoint(x: 100, y: 50), leaderTarget: CGPoint(x: 20, y: 50), inkColor: color), CGPoint(x: 90, y: 50), CGPoint(x: 87, y: 50))
+        (Annotation(tool: .number, start: CGPoint(x: 100, y: 50), leaderTarget: CGPoint(x: 20, y: 50), inkColor: color), CGPoint(x: 90, y: 50), CGPoint(x: 85, y: 50))
     ]
     for (annotation, center, border) in cases {
         let image = try AnnotationRenderer.compose(annotationFixture(width: 320), document: AnnotationDocument(annotations: [annotation]))
@@ -1262,11 +1263,11 @@ func annotationColorCycleKeysRememberDefaultsAndRejectOtherModifiers(tool: Annot
         #expect(item.width == image.width && item.height == image.height)
         return ClipboardWriter.copy(item, data: data, mode: mode, to: board)
     }
-    #expect(updated.width == 266 && updated.height == 100 && updated.url == artifact.url)
+    #expect(updated.width == 286 && updated.height == 100 && updated.url == artifact.url)
     let copied = try #require(board.data(forType: .init("org.webmproject.webp")))
     let source = try #require(CGImageSourceCreateWithData(copied as CFData, nil))
     let decoded = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
-    #expect(decoded.width == 266 && decoded.height == 100)
+    #expect(decoded.width == 286 && decoded.height == 100)
     let shrink = try AnnotationRenderer.compose(original, document: AnnotationDocument())
     let shrinkData = try WebPEncoder.encode(shrink, quality: 80, lossless: true)
     let restored = try AnnotationSave.commit(data: shrinkData, artifact: updated, mode: .both, imageSize: CGSize(width: shrink.width, height: shrink.height)) { _, _, _ in true }

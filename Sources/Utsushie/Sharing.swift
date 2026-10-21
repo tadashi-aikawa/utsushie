@@ -18,6 +18,8 @@ struct SharedArtifact: Sendable {
     var byteCount: Int
     var duration: Double? = nil
     var videoFPS: Int? = nil
+    /// 撮影時の1ptあたりの画素数。保存済みファイルから読んだものは分からないのでnil。
+    var pixelScale: Double? = nil
 }
 
 struct ClipboardEntry: Sendable {

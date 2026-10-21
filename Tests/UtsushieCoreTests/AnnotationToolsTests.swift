@@ -5,7 +5,7 @@ import Testing
 @Test func straightLineUsesArrowGeometryWithoutHead() {
     let line = Annotation(tool: .line, start: CGPoint(x: -20, y: 100), end: CGPoint(x: 200, y: 100))
     let size = CGSize(width: 400, height: 300)
-    let style = AnnotationStyle(imageSize: size)
+    let style = AnnotationStyle()
     let doc = AnnotationDocument(annotations: [line])
     #expect(doc.hit(at: CGPoint(x: 50, y: 104), style: style, tolerance: 2) == line.id)
     #expect(doc.hit(at: CGPoint(x: 50, y: 120), style: style, tolerance: 2) == nil)
@@ -20,7 +20,7 @@ import Testing
     let pen = Annotation(tool: .highlighter, start: points[0], end: points[2], points: points)
     let size = CGSize(width: 400, height: 300)
     let doc = AnnotationDocument(annotations: [pen])
-    let style = AnnotationStyle(imageSize: size)
+    let style = AnnotationStyle()
     #expect(pen.rect == CGRect(x: 10, y: 10, width: 90, height: 70))
     #expect(doc.hit(at: CGPoint(x: 103, y: 40), style: style, tolerance: 2) == pen.id)
     #expect(doc.hit(at: CGPoint(x: 50, y: 40), style: style, tolerance: 2) == nil)

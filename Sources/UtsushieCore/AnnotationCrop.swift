@@ -5,9 +5,7 @@ import CoreGraphics
 public struct AnnotationCrop: Equatable, Sendable {
     /// 元画像の左上原点のピクセル座標。整数へ揃える。
     public var rect: CGRect
-    /// 最初のトリミング前の長辺。切った後も注釈の太さと文字の大きさを変えない。
-    public var styleLength: Double
-    public init(rect: CGRect, styleLength: Double) { self.rect = rect; self.styleLength = styleLength }
+    public init(rect: CGRect) { self.rect = rect }
 }
 
 extension AnnotationDocument {
@@ -17,13 +15,12 @@ extension AnnotationDocument {
         let image = CGRect(origin: .zero, size: imageSize)
         let local = rect.standardized.integral.intersection(image)
         guard !local.isNull, local.width >= 1, local.height >= 1, local != image else { return nil }
-        let basis = styleBasis ?? max(imageSize.width, imageSize.height)
-        let style = AnnotationStyle(imageSize: imageSize, basis: basis)
+        let style = self.style()
         let kept = intersecting(local, style: style)
         let size = local.size
         let delta = CGPoint(x: -local.minX, y: -local.minY)
         var result = self
-        result.crop = AnnotationCrop(rect: local.offsetBy(dx: crop?.rect.minX ?? 0, dy: crop?.rect.minY ?? 0), styleLength: basis)
+        result.crop = AnnotationCrop(rect: local.offsetBy(dx: crop?.rect.minX ?? 0, dy: crop?.rect.minY ?? 0))
         // 番号は残った注釈で振り直る。札の幅を測る前に一覧を入れ替える。
         result.annotations = annotations.filter { kept.contains($0.id) }.map { annotation in
             var moved = annotation.translated(by: delta)
@@ -42,13 +39,12 @@ extension AnnotationDocument {
                 moved.start = AnnotationGeometry.clamped(moved.start, to: size)
                 moved.end = AnnotationGeometry.clamped(moved.end, to: size)
             case .rectangle, .spotlight:
-                moved = AnnotationGeometry.clampingAreaPoints(moved, square: false, imageSize: size, basis: basis)
+                moved = AnnotationGeometry.clampingAreaPoints(moved, square: false, imageSize: size, scale: scale)
             case .highlighter:
                 // 点を端へ寄せると縁に沿った線になる。分けると重なりで色が二重になる。点は残し、描画で画像の中へ切る。
                 break
             default:
-                let style = AnnotationStyle(imageSize: size, basis: basis)
-                moved = AnnotationGeometry.placed(moved, bounds: placing.bounds(of: moved, style: style), imageSize: size, basis: basis)
+                moved = AnnotationGeometry.placed(moved, bounds: placing.bounds(of: moved, style: style), imageSize: size, scale: scale)
             }
             return moved
         }

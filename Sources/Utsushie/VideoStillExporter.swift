@@ -23,7 +23,8 @@ enum VideoStillExporter {
         }
         return result.image
     }
-    static func save(source: URL, marks: [VideoStillMark], directory: URL, quality: Double, lossless: Bool) async throws -> [VideoStillArtifact] {
+    static func save(source: URL, marks: [VideoStillMark], directory: URL, quality: Double, lossless: Bool,
+                     pixelScale: Double? = nil) async throws -> [VideoStillArtifact] {
         var result: [VideoStillArtifact] = []
         do {
             let date = Date()
@@ -33,7 +34,7 @@ enum VideoStillExporter {
                 let data = try WebPEncoder.encode(image, quality: quality, lossless: lossless)
                 let url = try ArtifactStore.save(data: data, kind: .webP, directory: directory, date: date)
                 result.append(VideoStillArtifact(artifact: SharedArtifact(url: url, kind: .webP, width: image.width,
-                    height: image.height, byteCount: data.count), data: data, image: image))
+                    height: image.height, byteCount: data.count, pixelScale: pixelScale), data: data, image: image))
             }
             return result
         } catch {

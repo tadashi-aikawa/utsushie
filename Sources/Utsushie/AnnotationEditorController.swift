@@ -503,8 +503,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         history.commit(next); changed()
     }
     private var imageSize: CGSize { CGSize(width: original.width, height: original.height) }
-    private var style: AnnotationStyle { document.style(imageSize: imageSize) }
-    private var styleBasis: Double? { document.styleBasis }
+    private var style: AnnotationStyle { document.style() }
+    private var styleScale: Double { document.scale }
     private func style(for annotation: Annotation) -> AnnotationStyle { style.forAnnotation(annotation) }
     var exportLayout: AnnotationExportLayout { document.exportLayout(imageSize: imageSize) }
     private var viewport: AnnotationViewport {
@@ -698,7 +698,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         }
         selection = []
         guard tool.allowsMargin || tool == .spotlight || CGRect(origin: .zero, size: imageSize).contains(p) else { changed(); return }
-        let start = AnnotationGeometry.creationStart(p, tool: tool, imageSize: imageSize, size: defaultSize, basis: styleBasis)
+        let start = AnnotationGeometry.creationStart(p, tool: tool, imageSize: imageSize, size: defaultSize, scale: styleScale)
         let annotation = Annotation(tool: tool, start: start, highlighterColor: Self.lastHighlighterColor,
                                     darkBackground: Self.lastHighlighterDarkBackground, inkColor: Self.lastInkColor, size: defaultSize)
         highlighterStraight = event.modifierFlags.contains(.shift)
@@ -707,7 +707,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         changed()
     }
     private func placed(_ annotation: Annotation) -> Annotation {
-        AnnotationGeometry.placed(annotation, bounds: history.document.bounds(of: annotation, style: style), imageSize: imageSize, basis: styleBasis)
+        AnnotationGeometry.placed(annotation, bounds: history.document.bounds(of: annotation, style: style), imageSize: imageSize, scale: styleScale)
     }
     override func mouseDragged(with event: NSEvent) {
         guard isEnabled, let gesture else { return }
@@ -743,7 +743,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         case .create(let initial):
             annotation = initial.tool == .highlighter && !highlighterStraight ? (preview?.annotations.first { $0.id == initial.id } ?? initial) : initial
             annotation = AnnotationGeometry.creating(annotation, to: p,
-                shift: initial.tool == .highlighter ? highlighterStraight : shift, imageSize: imageSize, basis: styleBasis)
+                shift: initial.tool == .highlighter ? highlighterStraight : shift, imageSize: imageSize, scale: styleScale)
             if initial.tool == .highlighter {
                 if highlighterStraight { annotation.points = [initial.start, annotation.end] }
                 else { annotation.points.append(annotation.end) }
@@ -754,7 +754,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             preview = history.document.moving(ids, by: delta, imageSize: imageSize)
             changed(); return
         case .resize(let initial, let handle):
-            annotation = AnnotationGeometry.resized(initial, handle: handle, to: p, shift: shift, imageSize: imageSize, basis: styleBasis)
+            annotation = AnnotationGeometry.resized(initial, handle: handle, to: p, shift: shift, imageSize: imageSize, scale: styleScale)
         case .pan: return
         }
         annotation = placed(annotation)
@@ -1043,7 +1043,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             UITheme.indigo.setStroke(); path.lineWidth = 1; path.stroke()
         }
         if tool == .number, let cursorPoint, !isEditingText, gesture == nil {
-            let style = document.style(imageSize: imageSize, size: defaultSize)
+            let style = document.style(size: defaultSize)
             let string = String(document.nextNumber) as NSString
             let r = viewRect(style.numberRect(at: cursorPoint, number: document.nextNumber))
             UITheme.inkFace(Self.lastInkColor).withAlphaComponent(0.45).setFill()

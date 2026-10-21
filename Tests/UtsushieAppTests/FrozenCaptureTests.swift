@@ -36,8 +36,9 @@ private func displays() throws -> [FrozenDisplay] {
 }
 
 @Test func frozenRegionSpansDisplaysAtMaxScale() throws {
-    let image = try CaptureService.image(for: .region(CGRect(x: -20, y: 10, width: 60, height: 20)), downscale: false, frozen: displays())
-    #expect(image.width == 120 && image.height == 40)
+    let captured = try CaptureService.image(for: .region(CGRect(x: -20, y: 10, width: 60, height: 20)), downscale: false, frozen: displays())
+    let image = captured.image
+    #expect(image.width == 120 && image.height == 40 && captured.scale == 2)
     // 上の10pxは主画面の上半分、残りは下半分。左の40pxは1xの画面を拡大したもの。
     #expect(try dominant(image, x: 100, y: 2) == "red")
     #expect(try dominant(image, x: 100, y: 30) == "green")
@@ -45,14 +46,15 @@ private func displays() throws -> [FrozenDisplay] {
 }
 
 @Test func frozenRegionHonorsDownscale() throws {
-    let image = try CaptureService.image(for: .region(CGRect(x: 10, y: 10, width: 60, height: 20)), downscale: true, frozen: displays())
-    #expect(image.width == 60 && image.height == 20)
+    let captured = try CaptureService.image(for: .region(CGRect(x: 10, y: 10, width: 60, height: 20)), downscale: true, frozen: displays())
+    let image = captured.image
+    #expect(image.width == 60 && image.height == 20 && captured.scale == 1)
     #expect(try dominant(image, x: 30, y: 2) == "red")
     #expect(try dominant(image, x: 30, y: 18) == "green")
 }
 
 @Test func frozenWindowIsClippedToVisibleDisplays() throws {
-    let image = try CaptureService.image(for: .window(7, CGRect(x: 50, y: 0, width: 100, height: 50)), downscale: false, frozen: displays())
+    let image = try CaptureService.image(for: .window(7, CGRect(x: 50, y: 0, width: 100, height: 50)), downscale: false, frozen: displays()).image
     #expect(image.width == 100 && image.height == 100)
     #expect(throws: CaptureError.self) {
         try CaptureService.image(for: .window(7, CGRect(x: 300, y: 0, width: 10, height: 10)), downscale: false, frozen: displays())

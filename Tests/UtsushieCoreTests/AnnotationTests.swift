@@ -19,18 +19,18 @@ import Testing
     #expect(!history.canRedo)
     #expect(history.document.number(for: second.id) == 1)
 }
-@Test func annotationStyleScalesFromImagePixels() {
-    let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
-    #expect(style.fontSize == 19.2)
+@Test func annotationStyleIsFixedPerCapturePoint() {
+    let style = AnnotationStyle()
+    #expect(style.fontSize == 18)
     #expect(style.lineWidth == 3)
     #expect(style.edge == 2 && style.radius == 6)
     #expect(style.horizontalPadding == 11 && style.verticalPadding == 6)
-    #expect(abs(style.numberDiameter - 28.8) < 0.0001)
-    #expect(style.blockSize == 16)
-    let tiny = AnnotationStyle(imageSize: CGSize(width: 20, height: 10))
-    #expect(tiny.fontSize == 16 && tiny.lineWidth == 3 && tiny.blockSize == 8)
-    let large = AnnotationStyle(imageSize: CGSize(width: 4000, height: 2000))
-    #expect(large.fontSize == 80 && large.lineWidth == 10)
+    #expect(style.numberDiameter == 27)
+    #expect(style.blockSize == 15 && style.marginPadding == 24 && style.leaderDotDiameter == 9 && style.pasteOffset == 18)
+    // Rで2xにした画像は中の文字も2倍の画素なので、同じ見た目になるよう倍にする。
+    let retina = AnnotationStyle(scale: 2)
+    #expect(retina.fontSize == 36 && retina.lineWidth == 6 && retina.blockSize == 30 && retina.marginPadding == 48)
+    #expect(AnnotationDocument(scale: 2).style() == retina)
     #expect(style.numberRect(at: .zero, number: 12).width > style.numberRect(at: .zero, number: 1).width)
 }
 @Test func annotationHitUsesFixedLayersAndArrowSegment() {
@@ -39,7 +39,7 @@ import Testing
     let mosaic = Annotation(tool: .mosaic, start: .zero, end: CGPoint(x: 200, y: 200))
     let arrow = Annotation(tool: .arrow, start: .zero, end: CGPoint(x: 100, y: 100))
     let doc = AnnotationDocument(annotations: [number, rect, arrow, mosaic])
-    let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
+    let style = AnnotationStyle()
     #expect(doc.hit(at: CGPoint(x: 50, y: 50), style: style, tolerance: 3) == number.id)
     #expect(doc.hit(at: CGPoint(x: 70, y: 72), style: style, tolerance: 3) == arrow.id)
     #expect(doc.hit(at: CGPoint(x: 10, y: 40), style: style, tolerance: 3) == rect.id)
@@ -50,7 +50,7 @@ import Testing
 @Test(arguments: [AnnotationTool.rectangle, .spotlight, .mosaic])
 func annotationAreaHitOnlySelectsEdgeBand(_ tool: AnnotationTool) {
     let area = Annotation(tool: tool, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 180, y: 180))
-    let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
+    let style = AnnotationStyle()
     let document = AnnotationDocument(annotations: [area])
     #expect(document.hit(at: CGPoint(x: 100, y: 100), style: style, tolerance: 6) == nil)
     for point in [CGPoint(x: 20, y: 100), CGPoint(x: 180, y: 100), CGPoint(x: 100, y: 20), CGPoint(x: 100, y: 180), CGPoint(x: 15, y: 100), CGPoint(x: 25, y: 100)] {
@@ -83,7 +83,7 @@ func annotationAreaHitOnlySelectsEdgeBand(_ tool: AnnotationTool) {
 func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(_ areaTool: AnnotationTool) {
     let area = Annotation(tool: areaTool, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 180, y: 140))
     let document = AnnotationDocument(annotations: [area])
-    let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
+    let style = AnnotationStyle()
     let locations: [(CGPoint, AnnotationResizeHandle, AnnotationCursor)] = [
         (CGPoint(x: 20, y: 20), .topLeft, .diagonalDown),
         (CGPoint(x: 180, y: 20), .topRight, .diagonalUp),
@@ -126,7 +126,7 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
     let line = Annotation(tool: .line, start: CGPoint(x: 20, y: 180), end: CGPoint(x: 120, y: 180))
     let pen = Annotation(tool: .highlighter, start: CGPoint(x: 20, y: 240), end: CGPoint(x: 120, y: 240))
     let document = AnnotationDocument(annotations: [arrow, label, number, line, pen])
-    let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
+    let style = AnnotationStyle()
     for mode in AnnotationTool.allCases {
         for (point, id) in [(CGPoint(x: 70, y: 30), arrow.id), (CGPoint(x: 70, y: 80), label.id), (CGPoint(x: 160, y: 100), number.id),
                             (CGPoint(x: 70, y: 180), line.id), (CGPoint(x: 70, y: 240), pen.id)] {
@@ -168,15 +168,13 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
     #expect(rightOnly.left == 0 && rightOnly.top == 0 && rightOnly.bottom == 0 && rightOnly.right == 285)
     #expect(rightOnly.summary == "書き出し 1245 × 600 右に余白 285")
     #expect(AnnotationDocument(annotations: [inside]).exportLayout(imageSize: size).bounds.size == size)
-    #expect(AnnotationStyle(imageSize: CGSize(width: 1920, height: 1200)).marginPadding == 48)
-    #expect(AnnotationStyle(imageSize: size).leaderDotDiameter == 9)
     #expect(AnnotationDocument(annotations: document.annotations.reversed()).exportLayout(imageSize: size) == layout)
 }
 
 @Test(arguments: AnnotationTool.allCases)
 func annotationPlacementUsesCenterAndToolRestriction(_ tool: AnnotationTool) {
     let size = CGSize(width: 960, height: 600)
-    let style = AnnotationStyle(imageSize: size)
+    let style = AnnotationStyle()
     let document = AnnotationDocument()
     let outside = Annotation(tool: tool, start: CGPoint(x: -100, y: 200), end: CGPoint(x: -20, y: 280))
     let bounds = document.bounds(of: outside, style: style)
@@ -238,7 +236,7 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
 }
 
 @Test func annotationNumberLeaderUsesCircleAndCapsuleEdgeAfterRenumbering() throws {
-    let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
+    let style = AnnotationStyle()
     var numbers = (1...12).map { _ in Annotation(tool: .number, start: CGPoint(x: 300, y: 120), leaderTarget: CGPoint(x: 100, y: 120)) }
     var document = AnnotationDocument(annotations: numbers)
     let last = numbers[11]
@@ -265,7 +263,7 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
 @Test func annotationSpotVisibleOuterFrameResizesAtHighZoomWithoutSelection() {
     let spot = Annotation(tool: .spotlight, start: CGPoint(x: 100, y: 100), end: CGPoint(x: 300, y: 300))
     let document = AnnotationDocument(annotations: [spot])
-    let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
+    let style = AnnotationStyle()
     for tool in AnnotationTool.allCases {
         let action = document.interaction(at: CGPoint(x: 95, y: 200), selected: [], tool: tool, style: style, tolerance: 7 / 4)
         #expect(action == .resize(spot.id, .left))
@@ -277,7 +275,7 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
     let rect = Annotation(tool: .rectangle, start: CGPoint(x: 100, y: 100), end: CGPoint(x: 300, y: 300))
     let arrow = Annotation(tool: .arrow, start: CGPoint(x: 100, y: 50), end: CGPoint(x: 300, y: 50))
     let label = Annotation(tool: .number, start: CGPoint(x: 300, y: 200), leaderTarget: CGPoint(x: 100, y: 200))
-    let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
+    let style = AnnotationStyle()
     for annotation in [rect, arrow, label] {
         let handle = annotation.tool == .number ? annotation.leaderTarget! : annotation.start
         #expect(AnnotationGeometry.resizeHandle(at: CGPoint(x: handle.x + 1.5, y: handle.y), annotation: annotation, tolerance: 7 / 4) != nil)
@@ -310,7 +308,7 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
 @Test func annotationLeaderMovesLabelAndTargetIndependentlyAndHitsLine() {
     let label = Annotation(tool: .text, start: CGPoint(x: 200, y: 100), end: CGPoint(x: 300, y: 140), text: "説明", leaderTarget: CGPoint(x: 20, y: 120))
     let document = AnnotationDocument(annotations: [label])
-    let style = AnnotationStyle(imageSize: CGSize(width: 960, height: 600))
+    let style = AnnotationStyle()
     #expect(document.hit(at: CGPoint(x: 100, y: 122), style: style, tolerance: 7) == label.id)
     #expect(document.hit(at: CGPoint(x: 100, y: 135), style: style, tolerance: 7) == nil)
     for tool in AnnotationTool.allCases {

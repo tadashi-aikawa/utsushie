@@ -47,7 +47,7 @@ extension AnnotationDocument {
             var annotation = result.annotations[index]
             let previous = annotation.size
             annotation.size = size
-            let style = self.style(imageSize: imageSize, size: size)
+            let style = self.style(size: size)
             if annotation.tool == .text {
                 let center = CGPoint(x: annotation.rect.midX, y: annotation.rect.midY)
                 let ratio = size.multiplier / previous.multiplier
@@ -58,7 +58,7 @@ extension AnnotationDocument {
             }
             // 蛍光ペンは太さだけ変わり点は動かない。トリミングで外へ出た点を押し戻さない。
             result.annotations[index] = annotation.tool == .highlighter ? annotation
-                : AnnotationGeometry.placed(annotation, bounds: result.bounds(of: annotation, style: style), imageSize: imageSize, basis: styleBasis)
+                : AnnotationGeometry.placed(annotation, bounds: result.bounds(of: annotation, style: style), imageSize: imageSize, scale: scale)
         }
         return result
     }

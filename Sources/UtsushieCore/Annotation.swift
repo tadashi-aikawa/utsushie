@@ -209,8 +209,8 @@ public struct Annotation: Equatable, Sendable, Identifiable {
     }
 }
 
+/// 画像の寸法によらず、撮影時の1ptあたりの画素数だけで決める。中の文字に対して同じ見た目にする。
 public struct AnnotationStyle: Equatable, Sendable {
-    public let imageSize: CGSize
     public let fontSize: Double
     public let lineWidth: Double
     public let numberDiameter: Double
@@ -221,26 +221,27 @@ public struct AnnotationStyle: Equatable, Sendable {
     public let verticalPadding: Double
     public let marginPadding: Double
     public let leaderDotDiameter: Double
-    /// 太さと文字の基準にする長辺。トリミング後もトリミング前の長辺を保つ。
-    public let length: Double
+    /// 複製・貼り付けで右下へずらす量。
+    public let pasteOffset: Double
+    /// 撮影時の1ptあたりの画素数。Rで2xにした画像は2。
+    public let scale: Double
     public var highlighterWidth: Double { lineWidth * 5 }
-    public init(imageSize: CGSize, size: AnnotationSize = .normal, basis: Double? = nil) {
-        self.imageSize = imageSize
-        let length = basis ?? max(imageSize.width, imageSize.height)
-        self.length = length
-        fontSize = max(16, length / 50) * size.multiplier
-        lineWidth = max(3, length / 400) * size.multiplier
+    public init(size: AnnotationSize = .normal, scale: Double = 1) {
+        self.scale = scale
+        fontSize = 18 * scale * size.multiplier
+        lineWidth = 3 * scale * size.multiplier
         numberDiameter = fontSize * 1.5
-        blockSize = max(8, Int((length / 60).rounded()))
+        blockSize = Int((15 * scale).rounded())
         let factor = lineWidth / 3
         edge = 2 * factor; radius = 6 * factor
         horizontalPadding = 11 * factor; verticalPadding = 6 * factor
-        marginPadding = length / 40
-        leaderDotDiameter = length * 9 / 960 * size.multiplier
+        marginPadding = 24 * scale
+        leaderDotDiameter = 9 * scale * size.multiplier
+        pasteOffset = 18 * scale
     }
     /// すでに倍率付きのスタイルを渡しても二重に拡大しない。
     public func forAnnotation(_ annotation: Annotation) -> AnnotationStyle {
-        AnnotationStyle(imageSize: imageSize, size: annotation.size, basis: length)
+        AnnotationStyle(size: annotation.size, scale: scale)
     }
     public func numberRect(at point: CGPoint, number: Int) -> CGRect {
         let width = numberDiameter + Double(max(0, String(number).count - 1)) * fontSize * 0.6
@@ -252,11 +253,13 @@ public struct AnnotationDocument: Equatable, Sendable {
     public var annotations: [Annotation]
     /// 元画像のどこを今の画像にしているか。注釈の座標は今の画像の左上が原点。
     public var crop: AnnotationCrop?
-    public init(annotations: [Annotation] = [], crop: AnnotationCrop? = nil) { self.annotations = annotations; self.crop = crop }
-    /// 太さと文字の基準。トリミングしても変えない。
-    public var styleBasis: Double? { crop?.styleLength }
-    public func style(imageSize: CGSize, size: AnnotationSize = .normal) -> AnnotationStyle {
-        AnnotationStyle(imageSize: imageSize, size: size, basis: styleBasis)
+    /// 撮影時の1ptあたりの画素数。分からない画像は1。トリミングしても変えない。
+    public var scale: Double
+    public init(annotations: [Annotation] = [], crop: AnnotationCrop? = nil, scale: Double = 1) {
+        self.annotations = annotations; self.crop = crop; self.scale = scale
+    }
+    public func style(size: AnnotationSize = .normal) -> AnnotationStyle {
+        AnnotationStyle(size: size, scale: scale)
     }
     public var nextNumber: Int { annotations.filter { $0.tool == .number }.count + 1 }
     public func number(for id: UUID) -> Int? {
@@ -340,7 +343,7 @@ public struct AnnotationDocument: Equatable, Sendable {
         let image = CGRect(origin: .zero, size: imageSize)
         var minX = image.minX, minY = image.minY, maxX = image.maxX, maxY = image.maxY
         for annotation in annotations where annotation.tool.allowsMargin {
-            let style = self.style(imageSize: imageSize, size: annotation.size)
+            let style = self.style(size: annotation.size)
             let rect = bounds(of: annotation, style: style)
             let isOutside = [.arrow, .line].contains(annotation.tool)
                 ? !AnnotationGeometry.contains(annotation.start, in: image) || !AnnotationGeometry.contains(annotation.end, in: image)
@@ -465,11 +468,11 @@ public enum AnnotationGeometry {
         CGPoint(x: max(0, min(imageSize.width, point.x)), y: max(0, min(imageSize.height, point.y)))
     }
     /// 制限前の中心で外への配置を判定する。札の移動で指す点は変えない。
-    public static func placed(_ annotation: Annotation, bounds: CGRect, imageSize: CGSize, basis: Double? = nil) -> Annotation {
+    public static func placed(_ annotation: Annotation, bounds: CGRect, imageSize: CGSize, scale: Double = 1) -> Annotation {
         let image = CGRect(origin: .zero, size: imageSize)
         var result = annotation
         if keepsAreaInside(annotation, imageSize: imageSize) {
-            result = placingArea(annotation, imageSize: imageSize, basis: basis)
+            result = placingArea(annotation, imageSize: imageSize, scale: scale)
         } else if ![.arrow, .line].contains(annotation.tool), !annotation.tool.allowsMargin || containsCenter(of: bounds, in: image) {
             func offset(_ minimum: CGFloat, length: CGFloat, limit: CGFloat) -> CGFloat {
                 // トリミングで画像より大きくなった蛍光ペンは押し戻さず、画像から完全には出さない。

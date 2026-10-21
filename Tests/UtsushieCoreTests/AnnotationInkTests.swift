@@ -50,8 +50,8 @@ import Testing
             _ = document.duplicate([original.id], imageSize: size)
             for copy in document.annotations.dropFirst() {
                 #expect(copy.id != original.id && copy.inkColor == color)
-                #expect(copy.start == CGPoint(x: 120, y: 120) && copy.text == original.text)
-                #expect(copy.leaderTarget == original.leaderTarget.map { CGPoint(x: $0.x + 20, y: $0.y + 20) })
+                #expect(copy.start == CGPoint(x: 118, y: 118) && copy.text == original.text)
+                #expect(copy.leaderTarget == original.leaderTarget.map { CGPoint(x: $0.x + 18, y: $0.y + 18) })
             }
         }
     }

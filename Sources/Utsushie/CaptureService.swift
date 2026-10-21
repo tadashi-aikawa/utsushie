@@ -16,6 +16,12 @@ enum CaptureRequest {
     }
 }
 
+/// 撮った画像と、実際に使った1ptあたりの画素数。注釈の大きさはこの倍率で決める。
+struct CapturedImage: Sendable {
+    let image: CGImage
+    let scale: Double
+}
+
 /// 選択画面を出す前に撮った1枚のディスプレイ。画像は左上原点・ディスプレイの倍率のピクセル。
 struct FrozenDisplay: Sendable {
     let geometry: DisplayGeometry
@@ -88,7 +94,7 @@ final class CaptureService {
         return fresh
     }
     /// 止めた画面から切り出す。ウィンドウは見えているとおりに、手前の窓やポップアップも含めて写す。
-    nonisolated static func image(for request: CaptureRequest, downscale: Bool, frozen: [FrozenDisplay]) throws -> CGImage {
+    nonisolated static func image(for request: CaptureRequest, downscale: Bool, frozen: [FrozenDisplay]) throws -> CapturedImage {
         let displays = frozen.map(\.geometry)
         let rect: CGRect
         switch request {
@@ -114,13 +120,13 @@ final class CaptureService {
                 width: part.width * scale, height: part.height * scale))
         }
         guard let image = canvas.makeImage() else { throw WebPError.bitmap }
-        return image
+        return CapturedImage(image: image, scale: scale)
     }
     func content() async throws -> SCShareableContent {
         // 非表示の共有カードも列挙し、再表示や合成の遅延でもフィルターで外す。
         try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
     }
-    func image(for request: CaptureRequest, downscale: Bool, excluding windows: [NSWindow]) async throws -> CGImage {
+    func image(for request: CaptureRequest, downscale: Bool, excluding windows: [NSWindow]) async throws -> CapturedImage {
         let shareable = try await content()
         let policy = CaptureWindowExclusion.policy(for: windows)
         switch request {
@@ -135,7 +141,7 @@ final class CaptureService {
             let configuration = configuration(width: dimensions.width, height: dimensions.height)
             configuration.ignoreShadowsSingleWindow = true
             configuration.includeChildWindows = false
-            return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+            return CapturedImage(image: try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration), scale: scale)
         case let .region(rect):
             let displays = ScreenGeometry.displays
             guard CaptureGeometry.isVisible(rect, displays: displays) else { throw CaptureError.unavailable("範囲が画面外です。選び直してください") }
@@ -160,7 +166,7 @@ final class CaptureService {
                     width: part.width * scale, height: part.height * scale))
             }
             guard let image = canvas.makeImage() else { throw WebPError.bitmap }
-            return image
+            return CapturedImage(image: image, scale: scale)
         }
     }
     private func configuration(width: Int, height: Int) -> SCStreamConfiguration {

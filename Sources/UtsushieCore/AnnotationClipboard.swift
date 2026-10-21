@@ -27,18 +27,18 @@ public struct AnnotationClipboard: Sendable {
             moved.leaderTarget = annotation.leaderTarget.map { CGPoint(x: $0.x + shift.x, y: $0.y + shift.y) }
             return moved
         }
-        return document.appendCopies(originals, offset: Double(pasteCount) * max(imageSize.width, imageSize.height) * 0.02, imageSize: imageSize)
+        return document.appendCopies(originals, offset: Double(pasteCount) * document.style().pasteOffset, imageSize: imageSize)
     }
 }
 
 extension AnnotationDocument {
     public mutating func duplicate(_ ids: Set<UUID>, imageSize: CGSize) -> Set<UUID> {
-        appendCopies(annotations.filter { ids.contains($0.id) }, offset: max(imageSize.width, imageSize.height) * 0.02, imageSize: imageSize)
+        appendCopies(annotations.filter { ids.contains($0.id) }, offset: style().pasteOffset, imageSize: imageSize)
     }
 
     fileprivate mutating func appendCopies(_ originals: [Annotation], offset: Double, imageSize: CGSize) -> Set<UUID> {
         let delta = CGPoint(x: offset, y: offset)
-        let style = self.style(imageSize: imageSize)
+        let style = self.style()
         var ids: Set<UUID> = []
         let image = CGRect(origin: .zero, size: imageSize)
         for var original in originals {
@@ -56,7 +56,7 @@ extension AnnotationDocument {
                                   leaderTarget: target, points: moved.points,
                                   highlighterColor: moved.highlighterColor, darkBackground: moved.darkBackground, inkColor: moved.inkColor, size: moved.size)
             // 番号は新しいIDを追加した順で採番する。元の番号の文字列を複製しない。
-            copy = AnnotationGeometry.placed(copy, bounds: bounds(of: copy, style: style), imageSize: imageSize, basis: styleBasis)
+            copy = AnnotationGeometry.placed(copy, bounds: bounds(of: copy, style: style), imageSize: imageSize, scale: scale)
             annotations.append(copy); ids.insert(copy.id)
         }
         return ids

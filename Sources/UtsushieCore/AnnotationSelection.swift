@@ -60,11 +60,11 @@ extension AnnotationDocument {
 
     /// 全体へ同じ移動量を適用し、画像内に留める道具との相対位置も保つ。
     public func moving(_ ids: Set<UUID>, by delta: CGPoint, imageSize: CGSize) -> AnnotationDocument {
-        let style = self.style(imageSize: imageSize)
+        let style = self.style()
         var movement = delta
         for annotation in annotations where ids.contains(annotation.id) {
             let proposed = annotation.translated(by: delta)
-            let placed = AnnotationGeometry.placed(proposed, bounds: bounds(of: proposed, style: style), imageSize: imageSize, basis: styleBasis)
+            let placed = AnnotationGeometry.placed(proposed, bounds: bounds(of: proposed, style: style), imageSize: imageSize, scale: scale)
             let allowed = CGPoint(x: placed.start.x - annotation.start.x, y: placed.start.y - annotation.start.y)
             if delta.x > 0 { movement.x = min(movement.x, max(0, allowed.x)) }
             if delta.x < 0 { movement.x = max(movement.x, min(0, allowed.x)) }
@@ -78,7 +78,7 @@ extension AnnotationDocument {
         result.annotations = annotations.map { annotation in
             guard ids.contains(annotation.id) else { return annotation }
             let moved = annotation.translated(by: movement)
-            return AnnotationGeometry.placed(moved, bounds: bounds(of: moved, style: style), imageSize: imageSize, basis: styleBasis)
+            return AnnotationGeometry.placed(moved, bounds: bounds(of: moved, style: style), imageSize: imageSize, scale: scale)
         }
         return result
     }
@@ -113,9 +113,9 @@ extension AnnotationGeometry {
     }
 
     public static func creationPoint(_ point: CGPoint, from anchor: CGPoint, tool: AnnotationTool,
-                                     shift: Bool, imageSize: CGSize, size: AnnotationSize = .normal, basis: Double? = nil) -> CGPoint {
+                                     shift: Bool, imageSize: CGSize, size: AnnotationSize = .normal, scale: Double = 1) -> CGPoint {
         if [.rectangle, .spotlight].contains(tool) {
-            return creating(Annotation(tool: tool, start: anchor, size: size), to: point, shift: shift, imageSize: imageSize, basis: basis).end
+            return creating(Annotation(tool: tool, start: anchor, size: size), to: point, shift: shift, imageSize: imageSize, scale: scale).end
         }
         if tool == .highlighter && shift { return highlighterEndpoint(point, from: anchor, imageSize: imageSize) }
         let point = tool.allowsMargin ? point : clamped(point, to: imageSize)
@@ -128,12 +128,12 @@ extension AnnotationGeometry {
     }
 
     public static func resized(_ annotation: Annotation, handle: AnnotationResizeHandle, to point: CGPoint,
-                               shift: Bool, imageSize: CGSize, basis: Double? = nil) -> Annotation {
+                               shift: Bool, imageSize: CGSize, scale: Double = 1) -> Annotation {
         if [.rectangle, .spotlight].contains(annotation.tool) {
             var result = resized(annotation, handle: handle, to: point)
             let corner = [.topLeft, .topRight, .bottomRight, .bottomLeft].contains(handle)
             if shift && corner { result.end = squareConstrained(point, from: result.start) }
-            return clampingAreaPoints(result, square: shift && corner, imageSize: imageSize, basis: basis)
+            return clampingAreaPoints(result, square: shift && corner, imageSize: imageSize, scale: scale)
         }
         var point = handle == .leaderTarget || !annotation.tool.allowsMargin ? clamped(point, to: imageSize) : point
         if shift {

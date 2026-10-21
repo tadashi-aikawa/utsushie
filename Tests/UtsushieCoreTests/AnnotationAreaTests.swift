@@ -5,7 +5,7 @@ import Testing
 private let areaImage = CGSize(width: 400, height: 300)
 
 private func expectAreaInkInside(_ annotation: Annotation, imageSize: CGSize = areaImage, sourceLocation: SourceLocation = #_sourceLocation) {
-    let style = AnnotationStyle(imageSize: imageSize, size: annotation.size)
+    let style = AnnotationStyle(size: annotation.size)
     let ink = AnnotationGeometry.inkBounds(of: annotation, bounds: annotation.rect, style: style)
     #expect(ink.minX >= -0.000001 && ink.minY >= -0.000001, sourceLocation: sourceLocation)
     #expect(ink.maxX <= imageSize.width + 0.000001 && ink.maxY <= imageSize.height + 0.000001, sourceLocation: sourceLocation)
@@ -13,7 +13,7 @@ private func expectAreaInkInside(_ annotation: Annotation, imageSize: CGSize = a
 
 @Test(arguments: [AnnotationTool.rectangle, .spotlight], AnnotationSize.allCases)
 func areaPlacementIncludesWholeStrokeAtEveryEdge(tool: AnnotationTool, size: AnnotationSize) {
-    let style = AnnotationStyle(imageSize: areaImage, size: size)
+    let style = AnnotationStyle(size: size)
     let inset = style.areaInset(for: tool)
     #expect(inset == (tool == .rectangle ? style.lineWidth / 2 + style.edge : style.lineWidth + style.edge * 2))
     for origin in [CGPoint.zero, CGPoint(x: 320, y: 0), CGPoint(x: 0, y: 240), CGPoint(x: 320, y: 240)] {
@@ -70,7 +70,7 @@ func areaResizeClampsDraggedPointAndKeepsOppositeCorner(tool: AnnotationTool, si
 
 @Test(arguments: [AnnotationTool.rectangle, .spotlight])
 func areaMovementCopiesAndSizeChangeKeepFullInkInside(tool: AnnotationTool) {
-    let inset = AnnotationStyle(imageSize: areaImage).areaInset(for: tool)
+    let inset = AnnotationStyle().areaInset(for: tool)
     let original = Annotation(tool: tool, start: CGPoint(x: inset, y: inset), end: CGPoint(x: areaImage.width - inset, y: areaImage.height - inset))
     var document = AnnotationDocument(annotations: [original])
     let larger = document.settingSize([original.id], size: .largest, imageSize: areaImage)

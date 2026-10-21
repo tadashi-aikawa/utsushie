@@ -19,7 +19,7 @@ enum AnnotationRenderer {
         guard !document.annotations.isEmpty else { return original }
         let width = original.width, height = original.height
         let full = CGRect(x: 0, y: 0, width: width, height: height)
-        let style = document.style(imageSize: full.size)
+        let style = document.style()
         let layout = document.exportLayout(imageSize: full.size)
         // モザイクの生バイト処理は元画像の寸法と行幅のまま行う。
         let source = try bitmap(width: width, height: height)

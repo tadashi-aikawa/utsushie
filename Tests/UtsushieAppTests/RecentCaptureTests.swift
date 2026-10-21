@@ -145,9 +145,24 @@ func allCardLifetimesPauseDuringEitherEditorAndResumeIndependently(_ video: Bool
     let files = (0..<12).map { index in
         RecentCaptureFile(url: URL(fileURLWithPath: "/tmp/recent-\(index).\(index.isMultiple(of: 2) ? "webp" : "mp4")"), date: Date(timeIntervalSince1970: Double(index)))
     }
-    for file in files where file.kind == .webP { memory.remember(ImageEditState(original: image), at: file.url, among: files) }
+    for file in files where file.kind == .webP { memory.remember(ImageEditState(original: image, scale: nil), at: file.url, among: files) }
     #expect(memory.count == 5 && memory.state(for: files[0].url) == nil && memory.state(for: files[2].url) != nil)
     memory.retain([]); #expect(memory.count == 0)
+}
+
+@MainActor @Test func cardEditsWithCaptureScaleAndFallsBackToOneForFilesFromDisk() async throws {
+    let dir = try recentDirectory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let image = try recentImage()
+    var artifact = try recentArtifact(image, in: dir)
+    artifact.pixelScale = 2
+    let controller = recentController()
+    controller.add(artifact, image: image, copied: false, seconds: 5, screen: nil)
+    #expect(controller.card(for: artifact.url)?.imageState?.history.document.scale == 2)
+    // 倍率はファイルに残らないので、記憶から外れた画像は1xで描く。
+    controller.forgetLibraryFiles([artifact.url])
+    try await controller.restore(artifact.url, seconds: 5, screen: nil)
+    #expect(controller.card(for: artifact.url)?.imageState?.history.document.scale == 1)
 }
 
 @MainActor @Test func libraryListsFilesAndKeepsSelectionAcrossUpdatesAndFinderDeletion() async throws {

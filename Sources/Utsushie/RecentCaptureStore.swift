@@ -61,8 +61,12 @@ enum RecentCaptureStore {
 final class ImageEditState {
     let original: CGImage
     var history: AnnotationHistory
-    init(original: CGImage, history: AnnotationHistory = AnnotationHistory()) {
+    init(original: CGImage, history: AnnotationHistory) {
         self.original = original; self.history = history
+    }
+    /// 倍率が分からない画像は1xとして注釈を描く。
+    convenience init(original: CGImage, scale: Double?) {
+        self.init(original: original, history: AnnotationHistory(AnnotationDocument(scale: scale ?? 1)))
     }
 }
 

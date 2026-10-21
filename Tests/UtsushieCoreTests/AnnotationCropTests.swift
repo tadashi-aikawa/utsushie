@@ -16,7 +16,7 @@ private let full = CGSize(width: 1600, height: 1200)
 
     let cropped = try #require(document.cropping(to: CGRect(x: 800, y: 0, width: 800, height: 600), imageSize: full))
     let size = CGSize(width: 800, height: 600)
-    #expect(cropped.crop == AnnotationCrop(rect: CGRect(x: 800, y: 0, width: 800, height: 600), styleLength: 1600))
+    #expect(cropped.crop == AnnotationCrop(rect: CGRect(x: 800, y: 0, width: 800, height: 600)))
     #expect(cropped.annotations.map(\.id) == [frame.id, text.id, mosaic.id, spot.id, number.id])
     let byID = Dictionary(uniqueKeysWithValues: cropped.annotations.map { ($0.id, $0) })
     // 中心が外の枠は余白へ出る。中の注釈は同じ見た目の位置へ写す。
@@ -27,23 +27,20 @@ private let full = CGSize(width: 1600, height: 1200)
     // モザイクは押し戻さず、はみ出た分を切る。
     #expect(byID[mosaic.id]?.rect == CGRect(x: 0, y: 400, width: 160, height: 200))
     let spotRect = try #require(byID[spot.id]?.rect)
-    let inset = cropped.style(imageSize: size).areaInset(for: .spotlight)
+    let inset = cropped.style().areaInset(for: .spotlight)
     #expect(spotRect.minX == 600 && spotRect.minY == 500 && abs(spotRect.maxY - (600 - inset)) < 1e-9)
     #expect(cropped.exportLayout(imageSize: size).left > 0)
 }
 
-@Test func cropKeepsStyleOfFirstImageAndComposesWithEarlierCrop() throws {
+@Test func cropKeepsCaptureScaleAndComposesWithEarlierCrop() throws {
     let text = Annotation(tool: .text, start: CGPoint(x: 1000, y: 120), end: CGPoint(x: 1200, y: 200), text: "文字")
-    let document = AnnotationDocument(annotations: [text])
+    let document = AnnotationDocument(annotations: [text], scale: 2)
     let first = try #require(document.cropping(to: CGRect(x: 800, y: 0, width: 800, height: 600), imageSize: full))
     let second = try #require(first.cropping(to: CGRect(x: 150.4, y: 100.6, width: 300, height: 200), imageSize: CGSize(width: 800, height: 600)))
     // 範囲は整数へ広げ、元画像の座標で積み上げる。
-    #expect(second.crop == AnnotationCrop(rect: CGRect(x: 950, y: 100, width: 301, height: 201), styleLength: 1600))
+    #expect(second.crop == AnnotationCrop(rect: CGRect(x: 950, y: 100, width: 301, height: 201)))
     #expect(second.annotations.first?.rect == CGRect(x: 50, y: 20, width: 200, height: 80))
-    let original = AnnotationStyle(imageSize: full)
-    let style = second.style(imageSize: CGSize(width: 301, height: 201))
-    #expect(style.lineWidth == original.lineWidth && style.fontSize == original.fontSize && style.blockSize == original.blockSize)
-    #expect(AnnotationStyle(imageSize: CGSize(width: 301, height: 201)).lineWidth < original.lineWidth)
+    #expect(second.style() == document.style() && second.style() == AnnotationStyle(scale: 2))
 }
 
 @Test func cropIgnoresWholeImageAndEmptyRangeAndStaysInsideImage() throws {
@@ -79,7 +76,7 @@ private let full = CGSize(width: 1600, height: 1200)
     #expect(moved.annotations[0].points == line.points.map { CGPoint(x: $0.x + 10, y: $0.y) })
     let away = cropped.moving([line.id], by: CGPoint(x: 5000, y: 0), imageSize: size)
     #expect(away.annotations[0].rect.minX > -400 && away.annotations[0].rect.minX < 199)
-    #expect(!away.intersecting(CGRect(origin: .zero, size: size), style: away.style(imageSize: size)).isEmpty)
+    #expect(!away.intersecting(CGRect(origin: .zero, size: size), style: away.style()).isEmpty)
     // 外接矩形は重なっても、斜めの線が画像から外れる移動は止める。
     let slant = try #require(AnnotationDocument(annotations: [Annotation(tool: .highlighter, start: CGPoint(x: 100, y: 100),
         points: [CGPoint(x: 100, y: 100), CGPoint(x: 900, y: 900)])])
@@ -88,9 +85,9 @@ private let full = CGSize(width: 1600, height: 1200)
     let slid = slant.moving(Set(slant.annotations.map(\.id)), by: CGPoint(x: 300, y: 0), imageSize: square)
     let squareImage = CGRect(origin: .zero, size: square)
     #expect(slid.annotations[0].points[0].x > -300 && slid.annotations[0].points[0].x < 0)
-    #expect(AnnotationGeometry.highlighterShows(slid.annotations[0], in: squareImage, style: slid.style(imageSize: square)))
+    #expect(AnnotationGeometry.highlighterShows(slid.annotations[0], in: squareImage, style: slid.style()))
     #expect(!AnnotationGeometry.highlighterShows(slid.annotations[0].translated(by: CGPoint(x: 2, y: 0)), in: squareImage,
-                                                 style: slid.style(imageSize: square)))
+                                                 style: slid.style()))
     // 複製を繰り返しても、線が画像から消える所までずらさない。
     let corner = try #require(AnnotationDocument(annotations: [Annotation(tool: .highlighter, start: CGPoint(x: 200, y: 999),
         points: [CGPoint(x: 200, y: 999), CGPoint(x: 999, y: 200)])])
@@ -99,7 +96,7 @@ private let full = CGSize(width: 1600, height: 1200)
     var latest = Set(copies.annotations.map(\.id))
     for _ in 0..<5 { latest = copies.duplicate(latest, imageSize: square) }
     #expect(copies.annotations.count == 6)
-    #expect(copies.annotations.allSatisfy { AnnotationGeometry.highlighterShows($0, in: squareImage, style: copies.style(imageSize: square)) })
+    #expect(copies.annotations.allSatisfy { AnnotationGeometry.highlighterShows($0, in: squareImage, style: copies.style()) })
     // 画像に収まる大きさの線は、移動で形を保ったまま中へ戻す。
     let inside = cropped.moving([partial.id], by: CGPoint(x: 10, y: 0), imageSize: size).annotations[1]
     #expect(zip(inside.points, partial.points).allSatisfy { $0.x - $1.x == 10 && $0.y - $1.y == 100 })
@@ -121,14 +118,14 @@ private let full = CGSize(width: 1600, height: 1200)
     let pasted = clipboard.paste(into: &document, imageSize: square)
     let copies = document.annotations.filter { pasted.contains($0.id) }
     #expect(copies.count == 4)
-    #expect(copies[3].points[1] == CGPoint(x: 104, y: 104))
-    #expect(copies[1].rect == CGRect(x: 54, y: 54, width: 50, height: 30))
+    #expect(copies[3].points[1] == CGPoint(x: 118, y: 118))
+    #expect(copies[1].rect == CGRect(x: 68, y: 68, width: 50, height: 30))
     let image = CGRect(origin: .zero, size: square)
     #expect(copies.filter { $0.tool == .highlighter }.allSatisfy {
-        AnnotationGeometry.highlighterShows($0, in: image, style: document.style(imageSize: square))
+        AnnotationGeometry.highlighterShows($0, in: image, style: document.style())
     })
-    // 中央へ寄せた後に、貼り付けのずれ(長辺の2%)を足す。
-    #expect(copies[2].rect == CGRect(x: 79, y: 104, width: 50, height: 0))
+    // 中央へ寄せた後に、貼り付けのずれを足す。
+    #expect(copies[2].rect == CGRect(x: 93, y: 118, width: 50, height: 0))
 }
 
 @Test func cropIsOneHistoryStepWithAnnotations() throws {

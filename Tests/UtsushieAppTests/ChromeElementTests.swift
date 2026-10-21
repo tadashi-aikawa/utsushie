@@ -54,7 +54,7 @@ import UtsushieCore
         let afterScroll = await reader.selection(for: query(90, 25))
         let clippedCard = CGRect(x: viewport.minX + 40 * zoom, y: viewport.minY, width: 360 * zoom, height: 100 * zoom)
         #expect(afterScroll.candidates.contains { ElementSelection.matches($0.rect, clippedCard) })
-        let image = try await CaptureService().image(for: .region(ScreenGeometry.appKit(clippedCard)), downscale: true, excluding: [])
+        let image = try await CaptureService().image(for: .region(ScreenGeometry.appKit(clippedCard)), downscale: true, excluding: []).image
         #expect(image.width == Int(360 * zoom) && image.height == Int(100 * zoom))
         if let output = ProcessInfo.processInfo.environment["UTSUSHIE_CHROME_PROBE_IMAGE"] {
             try WebPEncoder.encode(image, quality: 85, lossless: false).write(to: URL(fileURLWithPath: output))
@@ -78,7 +78,7 @@ import UtsushieCore
     try await Task.sleep(for: .milliseconds(100))
     let withOverlay = await reader.selection(for: query(62, 65))
     #expect(withOverlay.candidates == button.candidates)
-    let image = try await CaptureService().image(for: .region(ScreenGeometry.appKit(expectedCard)), downscale: true, excluding: [panel])
+    let image = try await CaptureService().image(for: .region(ScreenGeometry.appKit(expectedCard)), downscale: true, excluding: [panel]).image
     #expect(image.width == Int(360 * zoom) && image.height == Int(160 * zoom))
     if let output = ProcessInfo.processInfo.environment["UTSUSHIE_CHROME_PROBE_IMAGE"] {
         try WebPEncoder.encode(image, quality: 85, lossless: false).write(to: URL(fileURLWithPath: output))

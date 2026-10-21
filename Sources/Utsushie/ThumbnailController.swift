@@ -44,7 +44,7 @@ final class ThumbnailController {
             guard let self, let card else { return }
             for still in stills {
                 if card.libraryEditing {
-                    let state = ImageEditState(original: still.image)
+                    let state = ImageEditState(original: still.image, scale: still.artifact.pixelScale)
                     if let files = try? RecentCaptureStore.files(in: still.artifact.url.deletingLastPathComponent()) {
                         recentImages.remember(state, at: still.artifact.url, among: files)
                     }
@@ -242,7 +242,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     init(artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, finalizing: Bool, imageState: ImageEditState? = nil) {
         self.artifact = artifact; remaining = seconds; self.finalizing = finalizing
         lifetime = seconds
-        self.imageState = artifact.kind == .webP ? imageState ?? image.map { ImageEditState(original: $0) } : nil
+        self.imageState = artifact.kind == .webP ? imageState ?? image.map { ImageEditState(original: $0, scale: artifact.pixelScale) } : nil
         panel = ThumbnailPanel(contentRect: CGRect(x: 0, y: 0, width: 264, height: 216), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         panel.delegate = self

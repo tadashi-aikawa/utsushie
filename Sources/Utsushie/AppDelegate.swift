@@ -323,7 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 temporary = nil
                 let bytes = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
                 let artifact = SharedArtifact(url: url, kind: .mp4, width: result.width, height: result.height,
-                    byteCount: bytes, duration: result.duration, videoFPS: recordingConfig.video.fps)
+                    byteCount: bytes, duration: result.duration, videoFPS: recordingConfig.video.fps, pixelScale: session.pixelScale)
                 let copied = ClipboardWriter.copy(artifact, mode: recordingConfig.clipboard)
                 thumbnails.complete(cardID, artifact: artifact, image: result.image, copied: copied)
             } catch {
@@ -347,20 +347,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: request.rect.midX, y: request.rect.midY)) }
         Task {
             do {
-                let image = if let frozen {
+                let captured = if let frozen {
                     try await Task.detached(priority: .userInitiated) {
                         try CaptureService.image(for: request, downscale: downscale, frozen: frozen)
                     }.value
                 } else {
                     try await capture.image(for: request, downscale: downscale, excluding: excluded)
                 }
+                let image = captured.image
                 // エンコードとディスク書き込みはメインスレッドを塞がない。
                 let (data, url) = try await Task.detached(priority: .userInitiated) {
                     let data = try WebPEncoder.encode(image, quality: snapshot.quality, lossless: snapshot.lossless)
                     let url = try ArtifactStore.save(data: data, kind: .webP, directory: snapshot.outputURL())
                     return (data, url)
                 }.value
-                let artifact = SharedArtifact(url: url, kind: .webP, width: image.width, height: image.height, byteCount: data.count)
+                let artifact = SharedArtifact(url: url, kind: .webP, width: image.width, height: image.height, byteCount: data.count,
+                    pixelScale: captured.scale)
                 let copied = ClipboardWriter.copy(artifact, data: data, mode: snapshot.clipboard)
                 if remember { persistLast(request.rect) }
                 thumbnails.setSuspended(false)

@@ -32,7 +32,7 @@ import Testing
     let pen = Annotation(tool: .highlighter, start: CGPoint(x: 220, y: 100),
                          points: [CGPoint(x: 220, y: 100), CGPoint(x: 280, y: 100), CGPoint(x: 280, y: 200)])
     let doc = AnnotationDocument(annotations: [area, line, pen])
-    let style = AnnotationStyle(imageSize: CGSize(width: 400, height: 300))
+    let style = AnnotationStyle()
     #expect(doc.intersecting(CGRect(x: 70, y: 70, width: 10, height: 20), style: style) == [area.id])
     #expect(doc.intersecting(CGRect(x: 145, y: 145, width: 5, height: 5), style: style) == [line.id])
     #expect(doc.intersecting(CGRect(x: 100, y: 180, width: 10, height: 10), style: style).isEmpty)
@@ -56,7 +56,7 @@ import Testing
     #expect(history.document.annotations.isEmpty)
     history.undo(); #expect(history.document == doc)
     for tool in AnnotationTool.allCases {
-        let style = AnnotationStyle(imageSize: CGSize(width: 400, height: 300))
+        let style = AnnotationStyle()
         for point in [mosaic.start, CGPoint(x: 30, y: 30)] {
             #expect(doc.interaction(at: point, selected: ids, tool: tool, style: style, tolerance: 7) == .move(mosaic.id))
         }

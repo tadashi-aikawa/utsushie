@@ -9,6 +9,8 @@ final class RecordingService {
     let displayID: UInt32
     let width: Int
     let height: Int
+    /// 1ptあたりの画素数。静止画の注釈の大きさに使う。
+    let pixelScale: Double
     private let stream: SCStream
     private let sink: RecordingSink
     private var excludedWindows: [NSWindow]
@@ -76,11 +78,11 @@ final class RecordingService {
             if audio.capturesMicrophone { try stream.addStreamOutput(sink, type: .microphone, sampleHandlerQueue: writer.queue) }
         } catch { await writer.abort(); throw error }
         return RecordingService(request: request, displayID: geometry.id, width: size.width, height: size.height,
-                                stream: stream, sink: sink, excludedWindows: windows)
+                                pixelScale: config.downscale ? 1 : scale, stream: stream, sink: sink, excludedWindows: windows)
     }
-    private init(request: CaptureRequest, displayID: UInt32, width: Int, height: Int, stream: SCStream,
+    private init(request: CaptureRequest, displayID: UInt32, width: Int, height: Int, pixelScale: Double, stream: SCStream,
                  sink: RecordingSink, excludedWindows: [NSWindow]) {
-        self.request = request; self.displayID = displayID; self.width = width; self.height = height
+        self.request = request; self.displayID = displayID; self.width = width; self.height = height; self.pixelScale = pixelScale
         self.stream = stream; self.sink = sink
         self.excludedWindows = excludedWindows
         self.filteredWindowIDs = CaptureWindowExclusion.policy(for: excludedWindows).excludedWindowIDs
