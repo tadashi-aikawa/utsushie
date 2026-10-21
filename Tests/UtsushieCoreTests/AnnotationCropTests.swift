@@ -102,6 +102,60 @@ private let full = CGSize(width: 1600, height: 1200)
     #expect(zip(inside.points, partial.points).allSatisfy { $0.x - $1.x == 10 && $0.y - $1.y == 100 })
 }
 
+@Test func highlighterVisibilityUsesFlatEndsAndRoundJoins() throws {
+    let style = AnnotationStyle()
+    let half = style.highlighterWidth / 2
+    let pen = Annotation(tool: .highlighter, start: CGPoint(x: 40, y: 50), points: [CGPoint(x: 40, y: 50), CGPoint(x: 120, y: 50)])
+    // 端は平らなので、端の先の範囲には見えない。丸い端なら半幅だけ先まで塗れていた。
+    #expect(!AnnotationGeometry.highlighterShows(pen, in: CGRect(x: 125, y: 40, width: 30, height: 20), style: style))
+    #expect(!AnnotationGeometry.highlighterShows(pen, in: CGRect(x: 0, y: 40, width: 39, height: 20), style: style))
+    #expect(AnnotationGeometry.highlighterShows(pen, in: CGRect(x: 118, y: 40, width: 30, height: 20), style: style))
+    #expect(AnnotationGeometry.highlighterShows(pen, in: CGRect(x: 60, y: 50 + half - 3, width: 10, height: 10), style: style))
+    #expect(!AnnotationGeometry.highlighterShows(pen, in: CGRect(x: 60, y: 50 + half + 1, width: 10, height: 10), style: style))
+    // 帯の中に画像が丸ごと入る場合も見える。
+    #expect(AnnotationGeometry.highlighterShows(pen, in: CGRect(x: 80, y: 49, width: 2, height: 2), style: style))
+    // 斜めの線も帯の向きで測る。
+    let slant = Annotation(tool: .highlighter, start: .zero, points: [.zero, CGPoint(x: 100, y: 100)])
+    #expect(!AnnotationGeometry.highlighterShows(slant, in: CGRect(x: 101, y: 101, width: 20, height: 20), style: style))
+    #expect(AnnotationGeometry.highlighterShows(slant, in: CGRect(x: 95, y: 80, width: 5, height: 5), style: style))
+    // 折れ線の途中の点は丸い継ぎ目なので、外側の角まで塗れる。
+    let bend = Annotation(tool: .highlighter, start: CGPoint(x: 0, y: 50),
+                          points: [CGPoint(x: 0, y: 50), CGPoint(x: 100, y: 50), CGPoint(x: 100, y: 150)])
+    let outsideCorner = CGRect(x: 100 + half * 0.5, y: 50 - half * 0.5 - 2, width: 2, height: 2)
+    #expect(AnnotationGeometry.highlighterShows(bend, in: outsideCorner, style: style))
+    // 内側の角には継ぎ目を足さない。
+    let insideCorner = CGRect(x: 100 - half * 2, y: 50 + half * 2, width: 2, height: 2)
+    #expect(!AnnotationGeometry.highlighterShows(bend, in: insideCorner, style: style))
+    // まっすぐ続く途中の点と、描き始めに重なった点は、平らな端より手前へ塗らない。
+    let straight = Annotation(tool: .highlighter, start: CGPoint(x: 40, y: 50),
+                              points: [CGPoint(x: 40, y: 50), CGPoint(x: 40, y: 50), CGPoint(x: 45, y: 50), CGPoint(x: 120, y: 50)])
+    #expect(!AnnotationGeometry.highlighterShows(straight, in: CGRect(x: 30, y: 40, width: 9, height: 20), style: style))
+    // 折り返した点は、進んでいた向きの先へ半円だけ塗る。
+    let back = Annotation(tool: .highlighter, start: CGPoint(x: 40, y: 50),
+                          points: [CGPoint(x: 40, y: 50), CGPoint(x: 100, y: 50), CGPoint(x: 60, y: 50)])
+    #expect(AnnotationGeometry.highlighterShows(back, in: CGRect(x: 100 + half - 4, y: 49, width: 2, height: 2), style: style))
+    #expect(!AnnotationGeometry.highlighterShows(back, in: CGRect(x: 100 + half + 1, y: 49, width: 2, height: 2), style: style))
+    // 半円の弧が矩形の角を少しだけかすめる場合も、近似せずに見えると判定する。
+    #expect(AnnotationGeometry.highlighterShows(back, in: CGRect(x: 110, y: 52, width: 20, height: 20), style: style))
+    #expect(!AnnotationGeometry.highlighterShows(back, in: CGRect(x: 110, y: 57, width: 20, height: 20), style: style))
+    // ごく短い線は帯が潰れても、延長線上を見えると判定しない。
+    let tiny = Annotation(tool: .highlighter, start: CGPoint(x: 40, y: 50), points: [CGPoint(x: 40, y: 50), CGPoint(x: 41, y: 51)])
+    #expect(!AnnotationGeometry.highlighterShows(tiny, in: CGRect(x: 29, y: 62, width: 1, height: 1), style: style))
+    // 1点だけの線は見えない。
+    #expect(!AnnotationGeometry.highlighterShows(Annotation(tool: .highlighter, start: CGPoint(x: 40, y: 50), points: [CGPoint(x: 40, y: 50)]),
+                                                 in: CGRect(x: 0, y: 0, width: 200, height: 100), style: style))
+
+    // 端の先へ切り詰めたら、見えない線として消す。
+    let document = AnnotationDocument(annotations: [pen])
+    let cropped = try #require(document.cropping(to: CGRect(x: 125, y: 40, width: 30, height: 20), imageSize: CGSize(width: 200, height: 100)))
+    #expect(cropped.annotations.isEmpty)
+    // 移動は端が画像から出る手前で止める。
+    let image = CGSize(width: 200, height: 100)
+    let moved = document.moving([pen.id], by: CGPoint(x: 300, y: 0), imageSize: image)
+    #expect(AnnotationGeometry.highlighterShows(moved.annotations[0], in: CGRect(origin: .zero, size: image), style: style))
+    #expect(moved.annotations[0].points[0].x < 200)
+}
+
 @Test func pastingCopiesTakenBeforeCropMapsThemToTheSamePlaceInSourceImage() throws {
     let size = CGSize(width: 1000, height: 1000), square = CGSize(width: 200, height: 200)
     let pen = Annotation(tool: .highlighter, start: CGPoint(x: 200, y: 999), points: [CGPoint(x: 200, y: 999), CGPoint(x: 999, y: 200)])

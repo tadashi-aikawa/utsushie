@@ -110,9 +110,9 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
         #expect(empty.cursor(tool: mode) == (mode == .selection ? .arrow : mode.usesSampleCursor ? .sample : .crosshair))
     }
 }
-@Test func onlyFreehandHighlighterTextAndNumberUseSampleCursor() {
+@Test func onlyFreehandHighlighterAndNumberUseSampleCursor() {
     let sampled = AnnotationTool.allCases.filter(\.usesSampleCursor)
-    #expect(sampled == [.text, .number, .freehand, .highlighter])
+    #expect(sampled == [.number, .freehand, .highlighter])
     for tool in AnnotationTool.allCases {
         let expected: AnnotationCursor = tool == .selection ? .arrow : sampled.contains(tool) ? .sample : .crosshair
         #expect(AnnotationInteraction.create.cursor(tool: tool) == expected)

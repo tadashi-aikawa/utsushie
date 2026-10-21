@@ -35,7 +35,6 @@ enum AnnotationToolCursor {
     private static let minimumHeight = 12.0
     private static let maximumLength = 256.0
     private static let labelAlpha = 0.55
-    private static let placeholder = "入力"
     private static var cached: (sample: Sample, cursor: NSCursor)?
 
     static func cursor(_ sample: Sample) -> NSCursor? {
@@ -78,17 +77,9 @@ enum AnnotationToolCursor {
                 context.setStrokeColor(UITheme.ink.withAlphaComponent(0.55).cgColor); context.setLineWidth(1)
                 context.addPath(path); context.strokePath()
             }
-        case .number, .text:
-            let annotation: Annotation
-            if sample.tool == .number {
-                annotation = Annotation(tool: .number, start: .zero, inkColor: sample.inkColor, size: sample.size)
-            } else {
-                // 文字はクリックした点が札の左上になる。
-                let size = AnnotationRenderer.textSize(placeholder, style: style)
-                annotation = Annotation(tool: .text, start: .zero, end: CGPoint(x: size.width, y: size.height),
-                                        text: placeholder, inkColor: sample.inkColor, size: sample.size)
-            }
-            let rect = sample.tool == .number ? style.numberRect(at: .zero, number: sample.number) : annotation.rect
+        case .number:
+            let annotation = Annotation(tool: .number, start: .zero, inkColor: sample.inkColor, size: sample.size)
+            let rect = style.numberRect(at: .zero, number: sample.number)
             // 縁と番号の影の分だけ余白を取る。
             let margin = style.edge + 4 * style.scale
             let content = rect.insetBy(dx: -margin, dy: -margin)
@@ -104,7 +95,7 @@ enum AnnotationToolCursor {
                 AnnotationRenderer.draw(annotation, number: sample.number, style: style, context: context)
                 context.endTransparencyLayer()
             }
-        case .selection, .crop, .rectangle, .spotlight, .arrow, .line, .mosaic:
+        case .selection, .crop, .rectangle, .spotlight, .text, .arrow, .line, .mosaic:
             return nil
         }
     }

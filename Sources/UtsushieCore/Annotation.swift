@@ -70,7 +70,8 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     /// 注釈を作るツール。選択とトリミングは作らない。
     public var createsAnnotation: Bool { self != .selection && self != .crop }
     /// 置かれる注釈の見本をカーソルにする。始点を合わせて引く枠・矢印などは十字のまま。
-    public var usesSampleCursor: Bool { [.freehand, .highlighter, .text, .number].contains(self) }
+    /// 文字は引き出し線の起点を押した点に合わせるため十字。札の見本はドラッグで札の位置とずれる。
+    public var usesSampleCursor: Bool { [.freehand, .highlighter, .number].contains(self) }
 }
 
 public enum ColorCycleDirection: Int, Sendable {
@@ -411,7 +412,7 @@ public enum AnnotationInteraction: Equatable, Sendable {
 }
 public enum AnnotationCursor: Equatable, Sendable {
     case arrow, crosshair, move, horizontal, vertical, diagonalDown, diagonalUp
-    /// ツールの見本。手書きはインクの点、蛍光ペンは縦の帯、文字・番号は半透明の札。
+    /// ツールの見本。手書きはインクの点、蛍光ペンは縦の帯、番号は半透明の札。
     case sample
 }
 
