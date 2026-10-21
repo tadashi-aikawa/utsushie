@@ -1880,3 +1880,89 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     defer { second.window.close() }
     #expect(second.canvas.tool == .arrow)
 }
+
+@MainActor private func toolCursor(_ tool: AnnotationTool, displayScale: Double = 1, size: AnnotationSize = .normal, number: Int = 1,
+                                   ink: InkColor = .red) -> NSCursor? {
+    AnnotationToolCursor.cursor(.init(tool: tool, inkColor: ink, highlighterColor: .yellow, darkBackground: false, size: size,
+                                      scale: 1, displayScale: displayScale, number: number, backingScale: 2))
+}
+@MainActor @Test func toolCursorShowsSampleOnlyForSampleTools() {
+    for tool in AnnotationTool.allCases {
+        #expect((toolCursor(tool) != nil) == tool.usesSampleCursor)
+    }
+}
+@MainActor @Test func toolCursorMatchesDrawnSizeAndPlacesHotSpotWhereAnnotationIsPlaced() throws {
+    let style = AnnotationStyle()
+    // 手書きは線と同じ太さの点。表示倍率を掛け、中心で描き始める。
+    let pen = try #require(toolCursor(.freehand))
+    let diameter = style.lineWidth * 1.5 + style.edge * 2
+    // NSCursorの画像の寸法は浮動小数の誤差を含む。
+    func near(_ a: Double, _ b: Double) -> Bool { abs(a - b) < 0.01 }
+    #expect(near(pen.image.size.width, ceil(diameter) + 2))
+    #expect(near(pen.hotSpot.x, pen.image.size.width / 2) && near(pen.hotSpot.y, pen.image.size.height / 2))
+    let zoomed = try #require(toolCursor(.freehand, displayScale: 2))
+    #expect(near(zoomed.image.size.width, ceil(diameter * 2) + 2))
+    // 蛍光ペンは線の太さを高さにした縦の帯。
+    let highlighter = try #require(toolCursor(.highlighter))
+    #expect(near(highlighter.image.size.height, style.highlighterWidth + 2))
+    #expect(highlighter.image.size.width < highlighter.image.size.height)
+    // 番号は札の中心、文字は札の左上がクリックの点になる。
+    let margin = style.edge + 4
+    let badge = style.numberRect(at: .zero, number: 1)
+    let number = try #require(toolCursor(.number))
+    #expect(number.hotSpot == NSPoint(x: badge.width / 2 + margin, y: badge.height / 2 + margin))
+    let text = try #require(toolCursor(.text))
+    #expect(text.hotSpot == NSPoint(x: margin, y: margin))
+    #expect(text.image.size.width > text.image.size.height)
+}
+@MainActor @Test func canvasCursorFollowsToolAndKeepsDrawingToolDuringGesture() throws {
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .freehand)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    canvas.mouseMoved(with: try annotationMouseEvent(canvas, type: .mouseMoved, at: CGPoint(x: 40, y: 40)))
+    let pen = try #require(canvas.currentCursor)
+    #expect(pen !== NSCursor.crosshair && pen.image.size.width == pen.image.size.height)
+    canvas.selectTool(.rectangle)
+    #expect(canvas.currentCursor === NSCursor.crosshair)
+    // 描いている途中でツールを変えても、描いている手書きの点のまま。
+    canvas.selectTool(.freehand)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 40, y: 40)))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 60, y: 50)))
+    for next in [AnnotationTool.highlighter, .crop] {
+        canvas.selectTool(next)
+        let drawing = try #require(canvas.currentCursor)
+        #expect(drawing !== NSCursor.crosshair && drawing.image.size == pen.image.size)
+    }
+    canvas.selectTool(.highlighter)
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 60, y: 50)))
+    let highlighter = try #require(canvas.currentCursor)
+    #expect(highlighter.image.size.width < highlighter.image.size.height)
+    // 番号は置くたびに次の数字の見本になり、引き出し線を引いている間は十字にする。
+    canvas.selectTool(.number)
+    canvas.mouseMoved(with: try annotationMouseEvent(canvas, type: .mouseMoved, at: CGPoint(x: 120, y: 80)))
+    let one = try #require(canvas.currentCursor)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 120, y: 80)))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 150, y: 90)))
+    #expect(canvas.currentCursor === NSCursor.crosshair)
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 150, y: 90)))
+    canvas.mouseMoved(with: try annotationMouseEvent(canvas, type: .mouseMoved, at: CGPoint(x: 20, y: 80)))
+    #expect(try #require(canvas.currentCursor) !== one)
+}
+@MainActor @Test func toolCursorStaysVisibleWhenZoomedOutAndFollowsNumberAndColor() throws {
+    // 縮めすぎても札の高さ12ptを下回らない。
+    let margin = AnnotationStyle().edge + 4
+    let badge = AnnotationStyle().numberRect(at: .zero, number: 1)
+    let tiny = try #require(toolCursor(.number, displayScale: 0.05))
+    #expect(tiny.image.size.height >= (12 * (badge.height + margin * 2) / badge.height).rounded(.down))
+    // 2桁の番号は札が横へ伸びる。
+    let two = try #require(toolCursor(.number, number: 2)).image.size.width
+    #expect(try #require(toolCursor(.number, number: 12)).image.size.width > two)
+    // 大きすぎる見本はカーソルとして扱える大きさへ収める。
+    let huge = try #require(toolCursor(.text, displayScale: 40, size: .largest))
+    #expect(max(huge.image.size.width, huge.image.size.height) <= 256)
+    #expect(try #require(toolCursor(.freehand, displayScale: 40, size: .largest)).image.size.width <= 256)
+    #expect(try #require(toolCursor(.highlighter, displayScale: 16, size: .largest)).image.size.height <= 256)
+    // 同じ条件は作り直さず、色が変われば作り直す。
+    let first = try #require(toolCursor(.freehand, ink: .indigo))
+    #expect(try #require(toolCursor(.freehand, ink: .indigo)) === first)
+    #expect(try #require(toolCursor(.freehand, ink: .green)) !== first)
+}

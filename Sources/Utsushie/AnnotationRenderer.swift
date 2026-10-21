@@ -157,6 +157,12 @@ enum AnnotationRenderer {
         }
     }
     private static func draw(_ annotation: Annotation, document: AnnotationDocument, style: AnnotationStyle, context: CGContext) {
+        // 連番は全注釈を数えるので、番号のときだけ求める。
+        let number = annotation.tool == .number ? document.number(for: annotation.id) ?? document.nextNumber : 0
+        draw(annotation, number: number, style: style, context: context)
+    }
+    /// 編集画面のカーソルの見本も同じ描画を使う。番号はドキュメントの外から渡す。
+    static func draw(_ annotation: Annotation, number: Int, style: AnnotationStyle, context: CGContext) {
         let style = style.forAnnotation(annotation)
         context.saveGState()
         defer { context.restoreGState() }
@@ -233,7 +239,6 @@ enum AnnotationRenderer {
             (annotation.text as NSString).draw(at: CGPoint(x: rect.minX + style.horizontalPadding, y: rect.minY + style.verticalPadding),
                 withAttributes: [.font: NSFont.systemFont(ofSize: style.fontSize, weight: .bold), .foregroundColor: UITheme.inkText(annotation.inkColor)])
         case .number:
-            let number = document.number(for: annotation.id) ?? document.nextNumber
             let rect = style.numberRect(at: annotation.start, number: number)
             context.setShadow(offset: CGSize(width: 0, height: 1), blur: 3, color: CGColor(gray: 0, alpha: 0.35))
             let path = CGPath(roundedRect: rect, cornerWidth: rect.height / 2, cornerHeight: rect.height / 2, transform: nil)

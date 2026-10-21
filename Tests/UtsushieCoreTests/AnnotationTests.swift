@@ -107,7 +107,18 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
         #expect(interior == (mode == .selection ? .move(area.id) : .create))
         let empty = document.interaction(at: CGPoint(x: 250, y: 200), selected: [area.id], tool: mode, style: style, tolerance: 7)
         #expect(empty == (mode == .selection ? .none : .create))
-        #expect(empty.cursor(tool: mode) == (mode == .selection ? .arrow : .crosshair))
+        #expect(empty.cursor(tool: mode) == (mode == .selection ? .arrow : mode.usesSampleCursor ? .sample : .crosshair))
+    }
+}
+@Test func onlyFreehandHighlighterTextAndNumberUseSampleCursor() {
+    let sampled = AnnotationTool.allCases.filter(\.usesSampleCursor)
+    #expect(sampled == [.text, .number, .freehand, .highlighter])
+    for tool in AnnotationTool.allCases {
+        let expected: AnnotationCursor = tool == .selection ? .arrow : sampled.contains(tool) ? .sample : .crosshair
+        #expect(AnnotationInteraction.create.cursor(tool: tool) == expected)
+        // 端点や辺をつかむときは、見本ではなく変形のカーソルを出す。
+        #expect(AnnotationInteraction.resize(UUID(), .arrowEnd).cursor(tool: tool) == .crosshair)
+        #expect(AnnotationInteraction.resize(UUID(), .left).cursor(tool: tool) == .horizontal)
     }
 }
 @Test func annotationEdgeResizeMovesOnlySpecifiedEdge() {
@@ -133,7 +144,7 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
             for selected: Set<UUID> in [[], [id]] {
                 let action = document.interaction(at: point, selected: selected, tool: mode, style: style, tolerance: 7)
                 #expect(action == (mode == .selection ? .move(id) : .create))
-                #expect(action.cursor(tool: mode) == (mode == .selection ? .move : .crosshair))
+                #expect(action.cursor(tool: mode) == (mode == .selection ? .move : mode.usesSampleCursor ? .sample : .crosshair))
             }
         }
         #expect(document.interaction(at: arrow.start, selected: [arrow.id], tool: mode, style: style, tolerance: 7) == .resize(arrow.id, .arrowStart))

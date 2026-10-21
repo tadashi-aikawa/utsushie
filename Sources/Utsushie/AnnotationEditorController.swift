@@ -624,31 +624,53 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     override func mouseExited(with event: NSEvent) { cursorPoint = nil; if window?.isKeyWindow == true { NSCursor.arrow.set() }; needsDisplay = true }
     private func updateCursor() {
         guard window?.isKeyWindow == true, window?.attachedSheet == nil, !isEditingText else { return }
-        if case .pan = gesture { NSCursor.closedHand.set(); return }
-        if spacePressed { NSCursor.openHand.set(); return }
-        guard let cursorPoint else { return }
+        currentCursor?.set()
+    }
+    /// 今の状態で出すカーソル。nilなら今のカーソルを変えない。
+    var currentCursor: NSCursor? {
+        if case .pan = gesture { return .closedHand }
+        if spacePressed { return .openHand }
+        guard let cursorPoint else { return nil }
         // トリミングは注釈をつかまない。どこでも範囲のドラッグを始める。
-        if tool == .crop { NSCursor.crosshair.set(); return }
+        if gesture == nil, tool == .crop { return .crosshair }
         let interaction: AnnotationInteraction
         switch gesture {
+        // 引き出し線を引いている間は札が描かれる。カーソルの見本を重ねない。
+        case .label where preview != nil: return .crosshair
         case .create, .label: interaction = .create
         case .move(_, _, let id): interaction = .move(id)
         case .resize(let annotation, let handle): interaction = .resize(annotation.id, handle)
-        case .pan, .marquee, .crop: return
+        case .pan, .marquee, .crop: return nil
         case nil: interaction = document.interaction(at: cursorPoint, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
         }
-        let cursor: NSCursor
-        switch interaction.cursor(tool: tool) {
-        case .arrow: cursor = .arrow
-        case .crosshair: cursor = .crosshair
+        // 描いている途中でツールを変えても、描いている注釈の見本を出す。
+        switch interaction.cursor(tool: drawingAnnotation?.tool ?? tool) {
+        case .arrow: return .arrow
+        case .crosshair: return .crosshair
+        case .sample: return sampleCursor ?? .crosshair
         case .move:
-            if case .move = gesture { cursor = .closedHand } else { cursor = .openHand }
-        case .horizontal: cursor = .frameResize(position: .left, directions: .all)
-        case .vertical: cursor = .frameResize(position: .top, directions: .all)
-        case .diagonalDown: cursor = .frameResize(position: .topLeft, directions: .all)
-        case .diagonalUp: cursor = .frameResize(position: .topRight, directions: .all)
+            if case .move = gesture { return .closedHand } else { return .openHand }
+        case .horizontal: return .frameResize(position: .left, directions: .all)
+        case .vertical: return .frameResize(position: .top, directions: .all)
+        case .diagonalDown: return .frameResize(position: .topLeft, directions: .all)
+        case .diagonalUp: return .frameResize(position: .topRight, directions: .all)
         }
-        cursor.set()
+    }
+    private var drawingAnnotation: Annotation? {
+        switch gesture {
+        case .create(let annotation), .label(let annotation): return annotation
+        default: return nil
+        }
+    }
+    private var sampleCursor: NSCursor? {
+        // 描いている間は、押した時点のツール・色・大きさのまま見せる。
+        let initial = drawingAnnotation
+        return AnnotationToolCursor.cursor(.init(tool: initial?.tool ?? tool,
+            inkColor: initial?.inkColor ?? Self.lastInkColor,
+            highlighterColor: initial?.highlighterColor ?? Self.lastHighlighterColor,
+            darkBackground: initial?.darkBackground ?? Self.lastHighlighterDarkBackground,
+            size: initial?.size ?? defaultSize, scale: styleScale, displayScale: displayScale,
+            number: document.nextNumber, backingScale: Double(window?.backingScaleFactor ?? 2)))
     }
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
@@ -1042,16 +1064,6 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             let path = NSBezierPath(rect: viewRect(marqueeRect))
             UITheme.indigo.withAlphaComponent(0.12).setFill(); path.fill()
             UITheme.indigo.setStroke(); path.lineWidth = 1; path.stroke()
-        }
-        if tool == .number, let cursorPoint, !isEditingText, gesture == nil {
-            let style = document.style(size: defaultSize)
-            let string = String(document.nextNumber) as NSString
-            let r = viewRect(style.numberRect(at: cursorPoint, number: document.nextNumber))
-            UITheme.inkFace(Self.lastInkColor).withAlphaComponent(0.45).setFill()
-            NSBezierPath(roundedRect: r, xRadius: r.height / 2, yRadius: r.height / 2).fill()
-            let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: style.fontSize * displayScale, weight: .bold), .foregroundColor: UITheme.inkText(Self.lastInkColor).withAlphaComponent(0.6)]
-            let size = string.size(withAttributes: attributes)
-            string.draw(at: CGPoint(x: r.midX - size.width / 2, y: r.midY - size.height / 2), withAttributes: attributes)
         }
     }
     private var isPanning: Bool { if case .pan = gesture { return true }; return false }
