@@ -20,6 +20,8 @@ final class OverlayController {
     var displayedLast: CGRect? {
         state.gesture.isSelectingArea ? nil : state.gesture.lastPreview ?? last
     }
+    /// 前回枠の移動・リサイズ中だけの枠。ウィンドウの強調が消えるので、代わりに幕をくり抜く。
+    var adjustingLast: CGRect? { state.target == .element ? nil : state.gesture.lastPreview }
     private(set) var highlighted: CaptureRequest?
     private(set) var highlightedApp = ""
     private(set) var highlightedDisplay = false
@@ -522,7 +524,7 @@ final class OverlayView: NSView {
         guard let controller else { return }
         func local(_ rect: CGRect) -> CGRect { rect.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY) }
         let selected = controller.selection ?? controller.highlighted?.rect
-        UIDrawing.curtain(bounds, selection: selected.map(local))
+        UIDrawing.curtain(bounds, selection: (controller.adjustingLast ?? selected).map(local))
         if let last = controller.displayedLast {
             let rect = local(last)
             let outline = NSBezierPath(rect: rect); outline.lineWidth = 1.5
