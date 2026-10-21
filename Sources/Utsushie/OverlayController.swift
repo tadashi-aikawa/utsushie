@@ -6,21 +6,15 @@ import UtsushieCore
 final class CapturePanel: NSPanel, CaptureExcludedWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
-}
-
-/// 止めた画面を選択パネルの下へ敷く。入力は上の選択パネルが受ける。
-@MainActor
-final class FrozenPanel: NSPanel, CaptureExcludedWindow {
-    override var canBecomeKey: Bool { false }
-    override var canBecomeMain: Bool { false }
+    /// 止めた画面はcontentViewのlayerへ置き、選択の表示はその上の子ビューへ描く。
+    var overlayView: OverlayView?
 }
 
 @MainActor
 final class OverlayController {
     private(set) var state = CaptureState()
-    /// 画像の撮影だけに使う。動画へ切り替えたら今の画面へ戻し、その回は止め直さない。
+    /// 画像の撮影だけに使う。動画・要素選択へ切り替えたら今の画面へ戻し、その回は止め直さない。
     private(set) var frozen: [FrozenDisplay]?
-    private var frozenPanels: [FrozenPanel] = []
     private(set) var last: CGRect?
     var selection: CGRect? { state.target == .element ? nil : state.gesture.areaPreview }
     var displayedLast: CGRect? {
@@ -62,24 +56,6 @@ final class OverlayController {
         self.frozen = frozen
         message = ""
         refreshWindowContent()
-        for display in frozen ?? [] {
-            let panel = FrozenPanel(contentRect: display.geometry.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-            panel.setFrame(display.geometry.frame, display: false)
-            panel.isOpaque = true; panel.backgroundColor = .black
-            panel.ignoresMouseEvents = true
-            panel.hasShadow = false; panel.hidesOnDeactivate = false
-            panel.level = .screenSaver
-            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-            let view = NSView(frame: CGRect(origin: .zero, size: display.geometry.frame.size))
-            view.wantsLayer = true
-            view.layer?.contents = display.image
-            view.layer?.contentsGravity = .resize
-            view.layer?.contentsScale = display.geometry.scale
-            panel.contentView = view
-            frozenPanels.append(panel)
-            // 同じレベルでは後から前面へ出した選択パネルが上になる。
-            panel.orderFrontRegardless()
-        }
         for screen in NSScreen.screens {
             let panel = CapturePanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.setFrame(screen.frame, display: false)
@@ -90,15 +66,29 @@ final class OverlayController {
             panel.level = .screenSaver
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
             panel.acceptsMouseMovedEvents = true
-            let view = OverlayView(frame: CGRect(origin: .zero, size: screen.frame.size))
+            panel.animationBehavior = .none
+            // 止めた画面と選択の幕を同じ窓で1度に出す。別の窓に分けると、幕の下で今の画面が動いてから止めた画面へ戻って見える。
+            let container = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
+            container.wantsLayer = true
+            if let display = frozen?.first(where: { $0.geometry.frame == screen.frame }) {
+                CATransaction.begin(); CATransaction.setDisableActions(true)
+                container.layer?.contents = display.image
+                container.layer?.contentsGravity = .resize
+                container.layer?.contentsScale = display.geometry.scale
+                CATransaction.commit()
+            }
+            let view = OverlayView(frame: container.bounds)
+            view.autoresizingMask = [.width, .height]
             view.controller = self; view.screenFrame = screen.frame
-            panel.contentView = view
+            container.addSubview(view)
+            panel.contentView = container
+            panel.overlayView = view
             panels.append(panel)
             panel.orderFrontRegardless()
         }
         let underMouse = panels.first { $0.frame.contains(NSEvent.mouseLocation) } ?? panels.first
         underMouse?.makeKey()
-        if let view = underMouse?.contentView { underMouse?.makeFirstResponder(view) }
+        if let view = underMouse?.overlayView { underMouse?.makeFirstResponder(view) }
         // local monitorはIMEへ渡る前のkeyDownを受け取る。charactersは読まない。
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.isVisible else { return event }
@@ -120,14 +110,15 @@ final class OverlayController {
         keyMonitor = nil
         panels.forEach { $0.orderOut(nil) }
         panels.removeAll()
-        unfreeze()
+        frozen = nil
         registeredCursor = nil
         state.cancelGesture(); highlighted = nil; highlightedApp = ""; highlightedDisplay = false
         NSCursor.arrow.set()
     }
     private func unfreeze() {
-        frozenPanels.forEach { $0.orderOut(nil) }
-        frozenPanels.removeAll()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        panels.forEach { $0.contentView?.layer?.contents = nil }
+        CATransaction.commit()
         frozen = nil
     }
     func repeatCapture() {
@@ -165,8 +156,8 @@ final class OverlayController {
         }
         clearElements()
         perform(state.key(code, hasLast: last != nil))
-        // 録画は今の画面を撮る。止めた画面のまま範囲を選ばせない。
-        if state.output == .video, frozen != nil { unfreeze() }
+        // 録画と要素選択は今の画面を撮る・読む。止めた絵と食い違う枠を出さない。
+        if state.output == .video || state.target == .element, frozen != nil { unfreeze() }
         updateWindow()
         redraw()
     }
@@ -194,7 +185,7 @@ final class OverlayController {
         if NSEvent.pressedMouseButtons & 1 == 0,
            let panel = panels.first(where: { $0.frame.contains(NSEvent.mouseLocation) }), !panel.isKeyWindow {
             panel.makeKey()
-            if let view = panel.contentView { panel.makeFirstResponder(view) }
+            if let view = panel.overlayView { panel.makeFirstResponder(view) }
         }
         updateWindow(); redraw()
     }
@@ -463,11 +454,11 @@ final class OverlayController {
         if registeredCursor != state.cursor {
             registeredCursor = state.cursor
             for panel in panels {
-                if let view = panel.contentView { panel.invalidateCursorRects(for: view) }
+                if let view = panel.overlayView { panel.invalidateCursorRects(for: view) }
             }
         }
         updateCursor()
-        panels.forEach { $0.contentView?.needsDisplay = true }
+        panels.forEach { $0.overlayView?.needsDisplay = true }
     }
 }
 
