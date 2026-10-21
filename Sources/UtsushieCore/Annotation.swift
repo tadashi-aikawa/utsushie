@@ -3,7 +3,7 @@ import CoreGraphics
 
 public enum AnnotationTool: String, CaseIterable, Sendable {
     /// cropは注釈を作らず、ドラッグした範囲を新しい画像にする。
-    case selection, crop, rectangle, spotlight, text, number, arrow, line, highlighter, mosaic
+    case selection, crop, rectangle, spotlight, text, number, arrow, line, freehand, highlighter, mosaic
     public var label: String {
         switch self {
         case .selection: "選択"
@@ -14,6 +14,7 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
         case .number: "番号"
         case .arrow: "矢印"
         case .line: "直線"
+        case .freehand: "手書き"
         case .highlighter: "蛍光ペン"
         case .mosaic: "モザイク"
         }
@@ -29,6 +30,8 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
         case .number: "n"
         case .arrow: "a"
         case .line: "l"
+        // Pは蛍光ペン。名前を「ペン」にせず、Freehandの頭文字にする。
+        case .freehand: "f"
         case .highlighter: "p"
         case .mosaic: "m"
         }
@@ -43,6 +46,7 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
         case .number: 45
         case .arrow: 0
         case .line: 37
+        case .freehand: 3
         case .highlighter: 35
         case .mosaic: 46
         }
@@ -53,13 +57,15 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
         case .mosaic: 0
         case .spotlight: 1
         case .highlighter: 2
-        case .rectangle, .arrow, .line: 3
+        case .rectangle, .arrow, .line, .freehand: 3
         case .text: 4
         case .number: 5
         }
     }
-    public var allowsMargin: Bool { [.text, .number, .arrow, .line, .rectangle].contains(self) }
-    public var usesInkColor: Bool { [.rectangle, .spotlight, .arrow, .line, .text, .number].contains(self) }
+    public var allowsMargin: Bool { [.text, .number, .arrow, .line, .freehand, .rectangle].contains(self) }
+    public var usesInkColor: Bool { [.rectangle, .spotlight, .arrow, .line, .freehand, .text, .number].contains(self) }
+    /// 引いた点列を持つ。startとendは最初と最後の点。
+    public var usesPoints: Bool { self == .highlighter || self == .freehand }
     public var usesSize: Bool { ![.selection, .crop, .mosaic].contains(self) }
     /// 注釈を作るツール。選択とトリミングは作らない。
     public var createsAnnotation: Bool { self != .selection && self != .crop }
@@ -187,14 +193,14 @@ public struct Annotation: Equatable, Sendable, Identifiable {
                 highlighterColor: HighlighterColor = .yellow, darkBackground: Bool = false, inkColor: InkColor = .red, size: AnnotationSize = .normal) {
         self.id = id; self.tool = tool; self.start = start; self.end = end ?? start; self.text = text
         self.leaderTarget = [.text, .number].contains(tool) ? leaderTarget : nil
-        self.points = tool == .highlighter ? (points.isEmpty ? [start, end ?? start] : points) : []
+        self.points = tool.usesPoints ? (points.isEmpty ? [start, end ?? start] : points) : []
         self.highlighterColor = tool == .highlighter ? highlighterColor : .yellow
         self.darkBackground = tool == .highlighter && darkBackground
         self.inkColor = tool.usesInkColor ? inkColor : .red
         self.size = tool.usesSize ? size : .normal
     }
     public var rect: CGRect {
-        let vertices = tool == .highlighter ? points : [start, end]
+        let vertices = tool.usesPoints ? points : [start, end]
         let xs = vertices.map(\.x), ys = vertices.map(\.y)
         return CGRect(x: xs.min() ?? start.x, y: ys.min() ?? start.y,
                       width: (xs.max() ?? start.x) - (xs.min() ?? start.x),
@@ -302,9 +308,10 @@ public struct AnnotationDocument: Equatable, Sendable {
             if [.arrow, .line].contains(annotation.tool) {
                 return AnnotationGeometry.distance(point, toSegmentFrom: annotation.start, to: annotation.end) <= max(tolerance, style.lineWidth * 0.75 + style.edge)
             }
-            if annotation.tool == .highlighter {
+            if annotation.tool.usesPoints {
+                let radius = annotation.tool == .highlighter ? style.highlighterWidth / 2 : style.lineWidth * 0.75 + style.edge
                 return zip(annotation.points, annotation.points.dropFirst()).contains {
-                    AnnotationGeometry.distance(point, toSegmentFrom: $0, to: $1) <= max(tolerance, style.highlighterWidth / 2)
+                    AnnotationGeometry.distance(point, toSegmentFrom: $0, to: $1) <= max(tolerance, radius)
                 }
             }
             let rect = bounds(of: annotation, style: style)
@@ -338,16 +345,19 @@ public struct AnnotationDocument: Equatable, Sendable {
         }
         return tool == .selection ? .none : .create
     }
-    /// 余白は保存せず、外に中心がある札・枠と、外に端点がある矢印から毎回求める。
+    /// 余白は保存せず、外に中心がある札・枠と、外に端点がある矢印・外に点がある手書きから毎回求める。
     public func exportLayout(imageSize: CGSize) -> AnnotationExportLayout {
         let image = CGRect(origin: .zero, size: imageSize)
         var minX = image.minX, minY = image.minY, maxX = image.maxX, maxY = image.maxY
         for annotation in annotations where annotation.tool.allowsMargin {
             let style = self.style(size: annotation.size)
             let rect = bounds(of: annotation, style: style)
-            let isOutside = [.arrow, .line].contains(annotation.tool)
-                ? !AnnotationGeometry.contains(annotation.start, in: image) || !AnnotationGeometry.contains(annotation.end, in: image)
-                : !AnnotationGeometry.containsCenter(of: rect, in: image)
+            let isOutside: Bool
+            switch annotation.tool {
+            case .arrow, .line: isOutside = !AnnotationGeometry.contains(annotation.start, in: image) || !AnnotationGeometry.contains(annotation.end, in: image)
+            case .freehand: isOutside = annotation.points.contains { !AnnotationGeometry.contains($0, in: image) }
+            default: isOutside = !AnnotationGeometry.containsCenter(of: rect, in: image)
+            }
             guard isOutside else { continue }
             let ink = AnnotationGeometry.inkBounds(of: annotation, bounds: rect, style: style)
             if ink.minX < image.minX { minX = min(minX, floor(ink.minX - style.marginPadding)) }
@@ -403,7 +413,7 @@ public enum AnnotationCursor: Equatable, Sendable {
 public enum AnnotationGeometry {
     /// 判定は表示上のpt。縮小時も小さな誤ドラッグを注釈にしない。
     public static func isValidDrag(tool: AnnotationTool, from a: CGPoint, to b: CGPoint, displayScale: Double) -> Bool {
-        if [.arrow, .line, .highlighter, .text, .number].contains(tool) { return hypot(b.x - a.x, b.y - a.y) * displayScale > 4 }
+        if [.arrow, .line, .freehand, .highlighter, .text, .number].contains(tool) { return hypot(b.x - a.x, b.y - a.y) * displayScale > 4 }
         return abs(b.x - a.x) * displayScale > 4 && abs(b.y - a.y) * displayScale > 4
     }
     public static func handles(for annotation: Annotation) -> [CGPoint] {
@@ -413,7 +423,7 @@ public enum AnnotationGeometry {
             return [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
         case .arrow, .line: return [annotation.start, annotation.end]
         case .text, .number: return annotation.leaderTarget.map { [$0] } ?? []
-        case .selection, .crop, .highlighter: return []
+        case .selection, .crop, .freehand, .highlighter: return []
         }
     }
     public static func resizeHandle(at point: CGPoint, annotation: Annotation, tolerance: Double, edgeTolerance: Double? = nil) -> AnnotationResizeHandle? {
@@ -473,7 +483,7 @@ public enum AnnotationGeometry {
         var result = annotation
         if keepsAreaInside(annotation, imageSize: imageSize) {
             result = placingArea(annotation, imageSize: imageSize, scale: scale)
-        } else if ![.arrow, .line].contains(annotation.tool), !annotation.tool.allowsMargin || containsCenter(of: bounds, in: image) {
+        } else if ![.arrow, .line, .freehand].contains(annotation.tool), !annotation.tool.allowsMargin || containsCenter(of: bounds, in: image) {
             func offset(_ minimum: CGFloat, length: CGFloat, limit: CGFloat) -> CGFloat {
                 // トリミングで画像より大きくなった蛍光ペンは押し戻さず、画像から完全には出さない。
                 if annotation.tool == .highlighter, length > limit { return min(max(minimum, 1 - length), limit - 1) - minimum }
@@ -501,7 +511,7 @@ public enum AnnotationGeometry {
         case .spotlight: return bounds.insetBy(dx: -style.lineWidth - style.edge * 2, dy: -style.lineWidth - style.edge * 2)
         case .text: return bounds.insetBy(dx: -style.edge, dy: -style.edge)
         case .number: return bounds.insetBy(dx: -style.edge - 3, dy: -style.edge - 3).offsetBy(dx: 0, dy: 1).union(bounds)
-        case .line: return bounds.insetBy(dx: -style.lineWidth * 0.75 - style.edge, dy: -style.lineWidth * 0.75 - style.edge)
+        case .line, .freehand: return bounds.insetBy(dx: -style.lineWidth * 0.75 - style.edge, dy: -style.lineWidth * 0.75 - style.edge)
         case .highlighter: return bounds.insetBy(dx: -style.highlighterWidth / 2, dy: -style.highlighterWidth / 2)
         case .arrow:
             let a = annotation.start, b = annotation.end

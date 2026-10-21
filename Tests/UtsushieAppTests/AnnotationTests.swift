@@ -597,6 +597,30 @@ func annotationSizeToolbarSwitchClearsSelectionAndImmediatelyShowsRememberedSize
     }
 }
 
+@MainActor @Test func annotationFreehandKeepsDraggedPointsIgnoringShiftAndComposesInkWithMargin() throws {
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .freehand)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 20), flags: .shift))
+    for p in [CGPoint(x: 60, y: 40), CGPoint(x: 100, y: 30)] {
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: p, flags: .shift))
+    }
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 100, y: 30)))
+    let drawn = try #require(canvas.document.annotations.first)
+    #expect(drawn.tool == .freehand)
+    #expect(drawn.points.first == CGPoint(x: 20, y: 20) && drawn.points.contains(CGPoint(x: 60, y: 40)) && drawn.points.last == CGPoint(x: 100, y: 30))
+    canvas.undoAnnotation(); #expect(canvas.document.annotations.isEmpty)
+
+    let original = try annotationFixture()
+    let pen = Annotation(tool: .freehand, start: CGPoint(x: 10, y: 50), end: CGPoint(x: 110, y: 50),
+                         points: [CGPoint(x: 10, y: 50), CGPoint(x: 60, y: 50), CGPoint(x: 110, y: 50)])
+    let image = try AnnotationRenderer.compose(original, document: AnnotationDocument(annotations: [pen]))
+    #expect(try pixel(image, x: 60, y: 50) == [229, 53, 42, 255])
+    #expect(try pixel(image, x: 60, y: 90) == pixel(original, x: 60, y: 90))
+    let outside = Annotation(tool: .freehand, start: CGPoint(x: -30, y: 20), end: CGPoint(x: 40, y: 20),
+                             points: [CGPoint(x: -30, y: 20), CGPoint(x: 40, y: 20)])
+    #expect(try AnnotationRenderer.compose(original, document: AnnotationDocument(annotations: [outside])).width > original.width + 30)
+}
+
 @MainActor @Test func annotationHighlighterSnapsVerticallyAndKeepsAnchorAcrossDrags() throws {
     let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .highlighter)
     canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)

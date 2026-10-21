@@ -34,6 +34,46 @@ import Testing
     #expect(AnnotationTool.highlighter.keyCode == 35)
 }
 
+@Test func freehandTracksPolylineWithInkAndKeepsOutsidePointsAsMargin() {
+    let points = [CGPoint(x: 10, y: 10), CGPoint(x: 100, y: 10), CGPoint(x: 100, y: 80)]
+    let pen = Annotation(tool: .freehand, start: points[0], end: points[2], points: points, inkColor: .indigo, size: .large)
+    let size = CGSize(width: 400, height: 300)
+    let doc = AnnotationDocument(annotations: [pen])
+    let style = AnnotationStyle()
+    #expect(pen.rect == CGRect(x: 10, y: 10, width: 90, height: 70))
+    #expect(pen.inkColor == .indigo && pen.size == .large)
+    #expect(doc.hit(at: CGPoint(x: 104, y: 40), style: style, tolerance: 2) == pen.id)
+    #expect(doc.hit(at: CGPoint(x: 50, y: 40), style: style, tolerance: 2) == nil)
+    #expect(doc.intersecting(CGRect(x: 90, y: 30, width: 20, height: 20), style: style) == [pen.id])
+    #expect(doc.intersecting(CGRect(x: 30, y: 40, width: 20, height: 20), style: style).isEmpty)
+    #expect(AnnotationGeometry.handles(for: pen).isEmpty)
+    #expect(doc.exportLayout(imageSize: size).bounds == CGRect(origin: .zero, size: size))
+    // 直線と同じく押し戻さず、外へ出た点の分だけ余白を広げる。
+    let moved = pen.translated(by: CGPoint(x: -40, y: 0))
+    #expect(AnnotationGeometry.placed(moved, bounds: moved.rect, imageSize: size) == moved)
+    #expect(AnnotationDocument(annotations: [moved]).exportLayout(imageSize: size).left > 30)
+    #expect(AnnotationGeometry.creationPoint(CGPoint(x: -20, y: 50), from: .zero, tool: .freehand, shift: true, imageSize: size) == CGPoint(x: -20, y: 50))
+    #expect(AnnotationTool.freehand.layer == AnnotationTool.line.layer)
+    #expect(AnnotationTool.freehand.keyCode == 3 && AnnotationTool.freehand.key == "f")
+    #expect(AnnotationToolbarPresentation.colorControls(tool: .freehand, selectedTools: []) == .ink)
+    #expect(AnnotationToolbarPresentation.colorControls(tool: .selection, selectedTools: [.freehand]) == .ink)
+    #expect(Set(AnnotationTool.allCases.map(\.keyCode)).count == AnnotationTool.allCases.count)
+}
+
+@Test func freehandKeepsShapeWhenCroppedAndPasted() {
+    let points = [CGPoint(x: 20, y: 20), CGPoint(x: 120, y: 30), CGPoint(x: 180, y: 90)]
+    let pen = Annotation(tool: .freehand, start: points[0], end: points[2], points: points)
+    let doc = AnnotationDocument(annotations: [pen])
+    let cropped = doc.cropping(to: CGRect(x: 50, y: 0, width: 200, height: 200), imageSize: CGSize(width: 300, height: 300))
+    #expect(cropped?.annotations.first?.points == points.map { CGPoint(x: $0.x - 50, y: $0.y) })
+    var pasted = doc
+    let ids = pasted.duplicate([pen.id], imageSize: CGSize(width: 300, height: 300))
+    let copy = pasted.annotations.first { ids.contains($0.id) }
+    let offset = doc.style().pasteOffset
+    #expect(copy?.points == points.map { CGPoint(x: $0.x + offset, y: $0.y + offset) })
+    #expect(copy?.tool == .freehand && copy?.inkColor == pen.inkColor)
+}
+
 @Test func highlighterSettingsOnlyChangeSelectedHighlightersAndKeepOtherAxis() {
     let a = Annotation(tool: .highlighter, start: .zero, end: CGPoint(x: 30, y: 20), highlighterColor: .cyan)
     let b = Annotation(tool: .highlighter, start: CGPoint(x: 10, y: 50), end: CGPoint(x: 40, y: 50), highlighterColor: .green, darkBackground: true)

@@ -741,11 +741,12 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             annotation = Annotation(id: initial.id, tool: .text, start: rect.origin,
                                     end: CGPoint(x: rect.maxX, y: rect.maxY), text: "入力", leaderTarget: anchor, inkColor: initial.inkColor, size: initial.size)
         case .create(let initial):
-            annotation = initial.tool == .highlighter && !highlighterStraight ? (preview?.annotations.first { $0.id == initial.id } ?? initial) : initial
+            let straight = initial.tool == .highlighter && highlighterStraight
+            annotation = initial.tool.usesPoints && !straight ? (preview?.annotations.first { $0.id == initial.id } ?? initial) : initial
             annotation = AnnotationGeometry.creating(annotation, to: p,
                 shift: initial.tool == .highlighter ? highlighterStraight : shift, imageSize: imageSize, scale: styleScale)
-            if initial.tool == .highlighter {
-                if highlighterStraight { annotation.points = [initial.start, annotation.end] }
+            if initial.tool.usesPoints {
+                if straight { annotation.points = [initial.start, annotation.end] }
                 else { annotation.points.append(annotation.end) }
             }
         case .move(let ids, let anchor, _):
@@ -814,7 +815,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         case .move, .label, .pan, .marquee, .crop: annotation = nil
         }
         if let annotation, ![.text, .number].contains(annotation.tool),
-           !(annotation.tool == .highlighter
+           !(annotation.tool.usesPoints
              ? annotation.points.contains { hypot($0.x - annotation.start.x, $0.y - annotation.start.y) * displayScale > 4 }
              : AnnotationGeometry.isValidDrag(tool: annotation.tool, from: annotation.start, to: annotation.end, displayScale: displayScale)) {
             if case .create = gesture { selection = [] }

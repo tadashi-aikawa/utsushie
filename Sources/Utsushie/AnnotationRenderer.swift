@@ -180,6 +180,21 @@ enum AnnotationRenderer {
                 context.setLineWidth(style.lineWidth * 1.5 + (outer ? style.edge * 2 : 0))
                 context.move(to: annotation.start); context.addLine(to: annotation.end); context.strokePath()
             }
+        case .freehand:
+            guard let first = annotation.points.first else { return }
+            // 点の中点を通る2次曲線でつなぎ、マウスの刻みの角を出さない。曲線は点列の外接矩形を出ない。
+            let path = CGMutablePath()
+            path.move(to: first)
+            for (a, b) in zip(annotation.points.dropFirst(), annotation.points.dropFirst(2)) {
+                path.addQuadCurve(to: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2), control: a)
+            }
+            if let last = annotation.points.last { path.addLine(to: last) }
+            context.setLineCap(.round); context.setLineJoin(.round)
+            for outer in [true, false] {
+                context.setStrokeColor((outer ? UITheme.inkEdge(annotation.inkColor) : UITheme.ink(annotation.inkColor)).cgColor)
+                context.setLineWidth(style.lineWidth * 1.5 + (outer ? style.edge * 2 : 0))
+                context.addPath(path); context.strokePath()
+            }
         case .rectangle:
             let path = CGPath(roundedRect: annotation.rect, cornerWidth: style.radius, cornerHeight: style.radius, transform: nil)
             context.addPath(path); context.setStrokeColor(UITheme.inkEdge(annotation.inkColor).cgColor)

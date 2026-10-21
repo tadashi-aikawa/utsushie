@@ -41,8 +41,8 @@ extension AnnotationDocument {
                AnnotationGeometry.segmentIntersects(rect.insetBy(dx: -style.lineWidth / 2 - style.edge,
                                                                 dy: -style.lineWidth / 2 - style.edge),
                                                     from: leader.target, to: leader.labelEdge) { return true }
-            if [.line, .arrow, .highlighter].contains(annotation.tool) {
-                let points = annotation.tool == .highlighter ? annotation.points : [annotation.start, annotation.end]
+            if [.line, .arrow, .freehand, .highlighter].contains(annotation.tool) {
+                let points = annotation.tool.usesPoints ? annotation.points : [annotation.start, annotation.end]
                 let radius = annotation.tool == .highlighter ? style.highlighterWidth / 2 : style.lineWidth * 0.75 + style.edge
                 if zip(points, points.dropFirst()).contains(where: {
                     AnnotationGeometry.segmentIntersects(rect.insetBy(dx: -radius, dy: -radius), from: $0, to: $1)
