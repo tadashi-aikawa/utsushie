@@ -16,6 +16,23 @@ private let left = DisplayGeometry(id: 2, frame: CGRect(x: -1920, y: 0, width: 1
     let rect = CGRect(x: -300, y: 100, width: 200, height: 120)
     #expect(CaptureGeometry.localSource(rect, display: left) == CGRect(x: 1620, y: 860, width: 200, height: 120))
 }
+@Test func pixelSourceUsesDisplayScaleFromTopLeft() {
+    let rect = CGRect(x: 100, y: 700, width: 300, height: 150)
+    #expect(CaptureGeometry.pixelSource(rect, display: retina) == CGRect(x: 200, y: 100, width: 600, height: 300))
+    #expect(CaptureGeometry.pixelSource(CGRect(x: -300, y: 100, width: 200, height: 120), display: left)
+        == CGRect(x: 1620, y: 860, width: 200, height: 120))
+}
+@Test func pixelSourceRoundsToPixelEdges() {
+    let rect = CGRect(x: 10.25, y: 0, width: 20.5, height: 10)
+    #expect(CaptureGeometry.pixelSource(rect, display: retina) == CGRect(x: 21, y: 1780, width: 41, height: 20))
+}
+@Test func visibleBoundsClipsWindowOutsideDisplays() {
+    let offRight = CGRect(x: 1300, y: 100, width: 400, height: 300)
+    #expect(CaptureGeometry.visibleBounds(offRight, displays: [retina]) == CGRect(x: 1300, y: 100, width: 140, height: 300))
+    let spanning = CGRect(x: -200, y: 800, width: 400, height: 400)
+    #expect(CaptureGeometry.visibleBounds(spanning, displays: [retina, left]) == CGRect(x: -200, y: 800, width: 400, height: 280))
+    #expect(CaptureGeometry.visibleBounds(CGRect(x: 2000, y: 0, width: 10, height: 10), displays: [retina, left]) == nil)
+}
 @Test func retinaOneXAndNativeDimensions() {
     let points = CGSize(width: 1280, height: 720)
     let oneX = CaptureGeometry.outputSize(points: points, scale: 2, downscale: true)

@@ -22,6 +22,19 @@ public enum CaptureGeometry {
     public static func localSource(_ rect: CGRect, display: DisplayGeometry) -> CGRect {
         CGRect(x: rect.minX - display.frame.minX, y: display.frame.maxY - rect.maxY, width: rect.width, height: rect.height)
     }
+    /// 止めた画面の画像は左上原点・ディスプレイの倍率のピクセル。端は画素の境界へ丸める。
+    public static func pixelSource(_ rect: CGRect, display: DisplayGeometry) -> CGRect {
+        let local = localSource(rect, display: display)
+        let minX = (local.minX * display.scale).rounded(), minY = (local.minY * display.scale).rounded()
+        return CGRect(x: minX, y: minY, width: (local.maxX * display.scale).rounded() - minX,
+                      height: (local.maxY * display.scale).rounded() - minY)
+    }
+    /// 画面外へはみ出たウィンドウを、映っている部分の外接矩形へ切り詰める。
+    public static func visibleBounds(_ rect: CGRect, displays: [DisplayGeometry]) -> CGRect? {
+        let parts = displays.map { rect.intersection($0.frame) }.filter { !$0.isNull && $0.width > 0 && $0.height > 0 }
+        guard let first = parts.first else { return nil }
+        return parts.dropFirst().reduce(first) { $0.union($1) }
+    }
     /// ディスプレイの隙間を含む範囲は有効。出力の隙間は黒にする。
     /// 一部が画面外になった前回範囲は無効。単一画面containsでは跨ぎを失う。
     public static func isVisible(_ rect: CGRect, displays: [DisplayGeometry]) -> Bool {

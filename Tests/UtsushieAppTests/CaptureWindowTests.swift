@@ -7,6 +7,7 @@ import Testing
     let rect = CGRect(x: 0, y: 0, width: 100, height: 100)
     let windows: [NSWindow] = [
         CapturePanel(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false),
+        FrozenPanel(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false),
         RecordingBorderPanel(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false),
         ThumbnailPanel(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false),
         AnnotationEditorWindow(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false),
@@ -16,10 +17,10 @@ import Testing
     for window in windows { window.isReleasedWhenClosed = false }
     defer { windows.forEach { $0.close() } }
     let excluded = CaptureWindowExclusion.windows()
-    for window in windows.prefix(3) { #expect(excluded.contains { $0 === window }) }
+    for window in windows.prefix(4) { #expect(excluded.contains { $0 === window }) }
     for window in windows.suffix(3) { #expect(!excluded.contains { $0 === window }) }
     let policy = CaptureWindowExclusion.policy(for: excluded)
-    for window in windows.prefix(3) {
+    for window in windows.prefix(4) {
         #expect(policy.excludes(windowID: try #require(UInt32(exactly: window.windowNumber))))
     }
 }

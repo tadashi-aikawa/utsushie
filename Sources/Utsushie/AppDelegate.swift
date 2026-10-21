@@ -33,6 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var libraryItem: NSMenuItem!
     private var lastArea: LastArea?
     private var busy = false
+    /// 選択画面を出す前に全画面を撮っている間。ホットキーの連打で二重に開かない。
+    private var freezing = false
     private var warningItem: NSMenuItem!
     private var configURL: URL { ConfigLoader.defaultPath() }
     private var lastURL: URL { ConfigLoader.directory().appendingPathComponent("last-area.json") }
@@ -151,7 +153,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc private func shoot() {
         if recordingState.phase == .recording { stopRecording(); return }
-        guard !busy else { return }
+        guard !busy, !freezing else { return }
         if overlay.isVisible { overlay.repeatCapture(); return }
         reloadConfig()
         guard CGPreflightScreenCaptureAccess() else {
@@ -163,7 +165,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let last = lastArea.flatMap { CaptureGeometry.isVisible($0.rect, displays: ScreenGeometry.displays) ? $0.rect : nil }
         thumbnails.setSuspended(true)
         overlay.config = config
-        overlay.show(last: last)
+        freezing = true
+        Task {
+            // 撮れなければ止めずに今の画面で選ばせる。
+            let frozen = try? await capture.freeze(excluding: CaptureWindowExclusion.windows())
+            freezing = false
+            overlay.show(last: last, frozen: frozen)
+        }
     }
     private func startRecording(_ request: CaptureRequest, remember: Bool) {
         guard !busy else { return }
@@ -329,11 +337,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let excluded = CaptureWindowExclusion.windows()
         let snapshot = config
         let downscale = overlay.state.effectiveDownscale(config: snapshot)
+        let frozen = overlay.frozen
         overlay.close()
         let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: request.rect.midX, y: request.rect.midY)) }
         Task {
             do {
-                let image = try await capture.image(for: request, downscale: downscale, excluding: excluded)
+                let image = if let frozen {
+                    try await Task.detached(priority: .userInitiated) {
+                        try CaptureService.image(for: request, downscale: downscale, frozen: frozen)
+                    }.value
+                } else {
+                    try await capture.image(for: request, downscale: downscale, excluding: excluded)
+                }
                 // エンコードとディスク書き込みはメインスレッドを塞がない。
                 let (data, url) = try await Task.detached(priority: .userInitiated) {
                     let data = try WebPEncoder.encode(image, quality: snapshot.quality, lossless: snapshot.lossless)

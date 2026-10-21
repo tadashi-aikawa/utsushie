@@ -8,9 +8,19 @@ final class CapturePanel: NSPanel, CaptureExcludedWindow {
     override var canBecomeMain: Bool { false }
 }
 
+/// 止めた画面を選択パネルの下へ敷く。入力は上の選択パネルが受ける。
+@MainActor
+final class FrozenPanel: NSPanel, CaptureExcludedWindow {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
 @MainActor
 final class OverlayController {
     private(set) var state = CaptureState()
+    /// 画像の撮影だけに使う。動画へ切り替えたら今の画面へ戻し、その回は止め直さない。
+    private(set) var frozen: [FrozenDisplay]?
+    private var frozenPanels: [FrozenPanel] = []
     private(set) var last: CGRect?
     var selection: CGRect? { state.target == .element ? nil : state.gesture.areaPreview }
     var displayedLast: CGRect? {
@@ -44,13 +54,32 @@ final class OverlayController {
 
     init(state: CaptureState = CaptureState()) { self.state = state }
 
-    func show(last: CGRect?) {
+    func show(last: CGRect?, frozen: [FrozenDisplay]? = nil) {
         close()
         state = CaptureState(audio: config.video.audio)
         state.modifiersChanged(shift: NSEvent.modifierFlags.contains(.shift))
         self.last = last
+        self.frozen = frozen
         message = ""
         refreshWindowContent()
+        for display in frozen ?? [] {
+            let panel = FrozenPanel(contentRect: display.geometry.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.setFrame(display.geometry.frame, display: false)
+            panel.isOpaque = true; panel.backgroundColor = .black
+            panel.ignoresMouseEvents = true
+            panel.hasShadow = false; panel.hidesOnDeactivate = false
+            panel.level = .screenSaver
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+            let view = NSView(frame: CGRect(origin: .zero, size: display.geometry.frame.size))
+            view.wantsLayer = true
+            view.layer?.contents = display.image
+            view.layer?.contentsGravity = .resize
+            view.layer?.contentsScale = display.geometry.scale
+            panel.contentView = view
+            frozenPanels.append(panel)
+            // 同じレベルでは後から前面へ出した選択パネルが上になる。
+            panel.orderFrontRegardless()
+        }
         for screen in NSScreen.screens {
             let panel = CapturePanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.setFrame(screen.frame, display: false)
@@ -91,9 +120,15 @@ final class OverlayController {
         keyMonitor = nil
         panels.forEach { $0.orderOut(nil) }
         panels.removeAll()
+        unfreeze()
         registeredCursor = nil
         state.cancelGesture(); highlighted = nil; highlightedApp = ""; highlightedDisplay = false
         NSCursor.arrow.set()
+    }
+    private func unfreeze() {
+        frozenPanels.forEach { $0.orderOut(nil) }
+        frozenPanels.removeAll()
+        frozen = nil
     }
     func repeatCapture() {
         elementClick = nil; clearElements()
@@ -130,6 +165,8 @@ final class OverlayController {
         }
         clearElements()
         perform(state.key(code, hasLast: last != nil))
+        // 録画は今の画面を撮る。止めた画面のまま範囲を選ばせない。
+        if state.output == .video, frozen != nil { unfreeze() }
         updateWindow()
         redraw()
     }
@@ -409,7 +446,12 @@ final class OverlayController {
         let downscale = state.effectiveDownscale(config: config)
         var points = rect.size
         var scale = CaptureGeometry.scale(for: rect, displays: ScreenGeometry.displays, downscale: downscale)
-        if window, case let .window(id, _) = highlighted,
+        // 止めた画面ではウィンドウも枠で切り出し、画面外の部分は切り詰める。保存と同じ計算にする。
+        if window, let frozen, case .window = highlighted {
+            let displays = frozen.map(\.geometry)
+            let visible = CaptureGeometry.visibleBounds(rect, displays: displays) ?? rect
+            points = visible.size; scale = CaptureGeometry.scale(for: visible, displays: displays, downscale: downscale)
+        } else if window, case let .window(id, _) = highlighted,
            let selected = windowContent?.windows.first(where: { $0.windowID == id }),
            ScreenGeometry.appKit(selected.frame) == rect {
             let filter = SCContentFilter(desktopIndependentWindow: selected)
