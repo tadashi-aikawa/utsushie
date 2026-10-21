@@ -1963,14 +1963,42 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     canvas.selectTool(.text)
     #expect(canvas.currentCursor === NSCursor.crosshair)
 }
-@MainActor @Test func annotationHighlighterStartsAtPressedPointWithoutRoundCap() throws {
+@MainActor @Test func annotationHighlighterPaintsTraceOfTipBar() throws {
+    // 1xの×1でペン先は幅6.75px・高さ22.5px。
+    let white: [Int] = [255, 255, 255, 255]
     let pen = Annotation(tool: .highlighter, start: CGPoint(x: 40, y: 50), end: CGPoint(x: 120, y: 50))
     let image = try AnnotationRenderer.compose(annotationFixture(), document: AnnotationDocument(annotations: [pen]))
-    // 線の太さの半分だけ手前まで丸く塗らず、押した点で平らに切る。
-    #expect(try pixel(image, x: 36, y: 50) == [255, 255, 255, 255])
-    #expect(try pixel(image, x: 124, y: 50) == [255, 255, 255, 255])
-    #expect(try pixel(image, x: 42, y: 50) != [255, 255, 255, 255])
-    #expect(try pixel(image, x: 42, y: 59) != [255, 255, 255, 255])
+    // 帯の左端から右端まで塗り、丸い端で外へはみ出さない。
+    #expect(try pixel(image, x: 35, y: 50) == white)
+    #expect(try pixel(image, x: 37, y: 50) != white)
+    #expect(try pixel(image, x: 123, y: 50) == white || pixel(image, x: 124, y: 50) == white)
+    #expect(try pixel(image, x: 125, y: 50) == white)
+    #expect(try pixel(image, x: 37, y: 60) != white)
+    // 縦に引くと帯の幅だけの細い線になる。
+    let down = Annotation(tool: .highlighter, start: CGPoint(x: 80, y: 10), points: [CGPoint(x: 80, y: 10), CGPoint(x: 80, y: 90)])
+    let vertical = try AnnotationRenderer.compose(annotationFixture(), document: AnnotationDocument(annotations: [down]))
+    #expect(try pixel(vertical, x: 80, y: 50) != white)
+    #expect(try pixel(vertical, x: 85, y: 50) == white)
+    #expect(try pixel(vertical, x: 75, y: 50) == white)
+}
+@MainActor @Test(arguments: [false, true]) func annotationHighlighterPaintsOverlapsOfOneStrokeOnce(darkBackground: Bool) throws {
+    let source = try AnnotationRenderer.bitmap(width: 160, height: 100)
+    source.setFillColor(darkBackground ? NSColor.black.cgColor : NSColor.white.cgColor)
+    source.fill(CGRect(x: 0, y: 0, width: 160, height: 100))
+    let original = try #require(source.makeImage())
+    func render(_ points: [CGPoint]) throws -> CGImage {
+        let pen = Annotation(tool: .highlighter, start: points[0], points: points, darkBackground: darkBackground)
+        return try AnnotationRenderer.compose(original, document: AnnotationDocument(annotations: [pen]))
+    }
+    let single = try pixel(render([CGPoint(x: 40, y: 50), CGPoint(x: 120, y: 50)]), x: 80, y: 50)
+    #expect(single != (darkBackground ? [0, 0, 0, 255] : [255, 255, 255, 255]))
+    // 往復した部分も、交差した部分も、1回だけ塗ったときと同じ色。折り返しの点でも抜けない。
+    let back = try render([CGPoint(x: 40, y: 50), CGPoint(x: 120, y: 50), CGPoint(x: 60, y: 50)])
+    #expect(try pixel(back, x: 80, y: 50) == single)
+    #expect(try pixel(back, x: 119, y: 50) == single)
+    let cross = try render([CGPoint(x: 40, y: 20), CGPoint(x: 120, y: 80), CGPoint(x: 120, y: 20), CGPoint(x: 40, y: 80)])
+    #expect(try pixel(cross, x: 80, y: 50) == single)
+    #expect(try pixel(cross, x: 120, y: 50) == single)
 }
 @MainActor @Test func toolCursorStaysVisibleWhenZoomedOutAndFollowsNumberAndColor() throws {
     // 縮めすぎても札の高さ12ptを下回らない。

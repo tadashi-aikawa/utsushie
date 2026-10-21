@@ -312,8 +312,11 @@ public struct AnnotationDocument: Equatable, Sendable {
             if [.arrow, .line].contains(annotation.tool) {
                 return AnnotationGeometry.distance(point, toSegmentFrom: annotation.start, to: annotation.end) <= max(tolerance, style.lineWidth * 0.75 + style.edge)
             }
+            if annotation.tool == .highlighter {
+                return AnnotationGeometry.highlighterContains(point, annotation: annotation, style: style, tolerance: tolerance)
+            }
             if annotation.tool.usesPoints {
-                let radius = annotation.tool == .highlighter ? style.highlighterWidth / 2 : style.lineWidth * 0.75 + style.edge
+                let radius = style.lineWidth * 0.75 + style.edge
                 return zip(annotation.points, annotation.points.dropFirst()).contains {
                     AnnotationGeometry.distance(point, toSegmentFrom: $0, to: $1) <= max(tolerance, radius)
                 }
@@ -518,7 +521,7 @@ public enum AnnotationGeometry {
         case .text: return bounds.insetBy(dx: -style.edge, dy: -style.edge)
         case .number: return bounds.insetBy(dx: -style.edge - 3, dy: -style.edge - 3).offsetBy(dx: 0, dy: 1).union(bounds)
         case .line, .freehand: return bounds.insetBy(dx: -style.lineWidth * 0.75 - style.edge, dy: -style.lineWidth * 0.75 - style.edge)
-        case .highlighter: return bounds.insetBy(dx: -style.highlighterWidth / 2, dy: -style.highlighterWidth / 2)
+        case .highlighter: return bounds.insetBy(dx: -style.highlighterTip.width / 2, dy: -style.highlighterTip.height / 2)
         case .arrow:
             let a = annotation.start, b = annotation.end
             let angle = atan2(b.y - a.y, b.x - a.x)

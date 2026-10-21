@@ -169,17 +169,16 @@ enum AnnotationRenderer {
         switch annotation.tool {
         case .selection, .crop, .mosaic, .spotlight: break
         case .highlighter:
-            guard let first = annotation.points.first else { return }
             // 太い線の端も元画像内で切る。余白へ蛍光色を描かない。
-            // 端は丸めず平らに切る。本物の蛍光ペンのように、押した点より手前へ塗らない。
-            context.setLineCap(.butt); context.setLineJoin(.round)
+            // 平らなペン先の縦の帯を動かした跡で塗る。カーソルの帯の左端から塗り、引く向きで端が傾かない。
+            let trace = AnnotationGeometry.highlighterTrace(annotation.points, tip: style.highlighterTip)
+            guard !trace.isEmpty else { return }
             context.setBlendMode(annotation.darkBackground ? .screen : .multiply)
             let color = UITheme.highlighter(annotation.highlighterColor)
-            context.setStrokeColor((annotation.darkBackground ? color.withAlphaComponent(0.75) : color).cgColor)
-            context.setLineWidth(style.highlighterWidth)
-            context.move(to: first)
-            for point in annotation.points.dropFirst() { context.addLine(to: point) }
-            context.strokePath()
+            context.setFillColor((annotation.darkBackground ? color.withAlphaComponent(0.75) : color).cgColor)
+            // 区間の跡は同じ向きに回るので、nonzeroで1回だけ塗る。重なりを二重に掛けない。
+            for polygon in trace { context.addLines(between: polygon); context.closePath() }
+            context.fillPath(using: .winding)
         case .line:
             context.setLineCap(.round)
             for outer in [true, false] {

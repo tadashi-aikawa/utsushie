@@ -37,7 +37,10 @@ import Testing
     #expect(doc.intersecting(CGRect(x: 145, y: 145, width: 5, height: 5), style: style) == [line.id])
     #expect(doc.intersecting(CGRect(x: 100, y: 180, width: 10, height: 10), style: style).isEmpty)
     #expect(doc.intersecting(CGRect(x: 230, y: 140, width: 10, height: 10), style: style).isEmpty)
-    #expect(doc.intersecting(CGRect(x: 284, y: 140, width: 2, height: 10), style: style) == [pen.id])
+    #expect(doc.intersecting(CGRect(x: 282, y: 140, width: 2, height: 10), style: style) == [pen.id])
+    // 蛍光ペンを縦に引いた部分はペン先の帯の幅だけ。
+    #expect(doc.intersecting(CGRect(x: 280 + style.highlighterTip.width / 2 + 1, y: 140, width: 2, height: 10), style: style).isEmpty)
+    #expect(doc.intersecting(CGRect(x: 250, y: 100 + style.highlighterTip.height / 2 - 2, width: 2, height: 2), style: style) == [pen.id])
 }
 
 @Test func multipleSelectionMovesTogetherDeletesAndUndoesAsOneOperation() {

@@ -63,9 +63,9 @@ enum AnnotationToolCursor {
                 }
             }
         case .highlighter:
-            // 線の太さを高さにした細い縦の帯。横へ引いたときに塗られる幅が分かる。
-            let height = min(max(style.highlighterWidth * ds, minimumHeight), maximumLength - 2)
-            let width = max((height * 0.3).rounded(), 4)
+            // 塗るときのペン先と同じ縦の帯。この帯を動かした跡が塗られる。
+            let height = min(max(style.highlighterTip.height * ds, minimumHeight), maximumLength - 2)
+            let width = max(height * style.highlighterTip.width / style.highlighterTip.height, 4)
             let canvas = CGSize(width: width + 2, height: height + 2)
             return render(canvas, hotSpot: CGPoint(x: canvas.width / 2, y: canvas.height / 2), backingScale: sample.backingScale, cursorScale: sample.cursorScale) { context in
                 let rect = CGRect(x: 1, y: 1, width: width, height: height)

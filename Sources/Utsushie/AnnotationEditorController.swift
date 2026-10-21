@@ -1035,8 +1035,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             let bounds = document.bounds(of: selected, style: style)
             var inkBounds = AnnotationGeometry.inkBounds(of: selected, bounds: bounds, style: style)
             if selected.tool == .highlighter {
-                inkBounds = bounds.insetBy(dx: -style.highlighterWidth * 0.8, dy: -style.highlighterWidth * 0.8)
-                    .intersection(CGRect(origin: .zero, size: imageSize))
+                // 塗りは画像の中で切るので、選択枠も画像の中に収める。
+                inkBounds = inkBounds.intersection(CGRect(origin: .zero, size: imageSize))
             }
             let rect = viewRect(inkBounds).insetBy(dx: -4, dy: -4)
             selectionBounds = selectionBounds.map { $0.union(rect) } ?? rect
