@@ -47,7 +47,7 @@ extension AnnotationDocument {
             var annotation = result.annotations[index]
             let previous = annotation.size
             annotation.size = size
-            let style = AnnotationStyle(imageSize: imageSize, size: size)
+            let style = self.style(imageSize: imageSize, size: size)
             if annotation.tool == .text {
                 let center = CGPoint(x: annotation.rect.midX, y: annotation.rect.midY)
                 let ratio = size.multiplier / previous.multiplier
@@ -56,7 +56,9 @@ extension AnnotationDocument {
                 annotation.start = CGPoint(x: center.x - measured.width / 2, y: center.y - measured.height / 2)
                 annotation.end = CGPoint(x: annotation.start.x + measured.width, y: annotation.start.y + measured.height)
             }
-            result.annotations[index] = AnnotationGeometry.placed(annotation, bounds: result.bounds(of: annotation, style: style), imageSize: imageSize)
+            // 蛍光ペンは太さだけ変わり点は動かない。トリミングで外へ出た点を押し戻さない。
+            result.annotations[index] = annotation.tool == .highlighter ? annotation
+                : AnnotationGeometry.placed(annotation, bounds: result.bounds(of: annotation, style: style), imageSize: imageSize, basis: styleBasis)
         }
         return result
     }

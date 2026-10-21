@@ -10,6 +10,8 @@ import Testing
     #expect(AnnotationToolbarPresentation.hint(tool: .text, nextNumber: 4).text == "クリックで文字 ・ 指す点からドラッグで引き出し線")
     let editing = AnnotationToolbarPresentation.hint(tool: .text, nextNumber: 4, editingText: true)
     #expect(editing.text == "⏎で確定 ・ ⇧⏎で改行" && editing.keys == ["⇧⏎", "⏎"])
+    let crop = AnnotationToolbarPresentation.hint(tool: .crop, nextNumber: 4)
+    #expect(crop.text == "ドラッグした範囲を新しい画像にする ・ ⌘Zで戻す" && crop.keys == ["⌘Z"])
 }
 
 @Test func colorControlsFollowToolAndGiveInkPriorityInMixedSelection() {
@@ -20,7 +22,7 @@ import Testing
             let expected: AnnotationColorControls
             switch tool {
             case .highlighter: expected = .highlighter
-            case .mosaic: expected = .none
+            case .mosaic, .crop: expected = .none
             case .selection:
                 expected = selected.contains(where: { inkTools.contains($0) }) ? .ink : selected.contains(.highlighter) ? .highlighter : .none
             default: expected = .ink

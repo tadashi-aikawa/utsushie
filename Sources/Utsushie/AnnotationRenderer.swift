@@ -14,11 +14,12 @@ enum AnnotationRenderer {
         let size = (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: style.fontSize, weight: .bold)])
         return CGSize(width: ceil(size.width) + style.horizontalPadding * 2, height: ceil(size.height) + style.verticalPadding * 2)
     }
+    /// トリミング後は切り出した画像を渡す。注釈の座標はその左上が原点。
     static func compose(_ original: CGImage, document: AnnotationDocument) throws -> CGImage {
         guard !document.annotations.isEmpty else { return original }
         let width = original.width, height = original.height
         let full = CGRect(x: 0, y: 0, width: width, height: height)
-        let style = AnnotationStyle(imageSize: full.size)
+        let style = document.style(imageSize: full.size)
         let layout = document.exportLayout(imageSize: full.size)
         // モザイクの生バイト処理は元画像の寸法と行幅のまま行う。
         let source = try bitmap(width: width, height: height)
@@ -160,7 +161,7 @@ enum AnnotationRenderer {
         context.saveGState()
         defer { context.restoreGState() }
         switch annotation.tool {
-        case .selection, .mosaic, .spotlight: break
+        case .selection, .crop, .mosaic, .spotlight: break
         case .highlighter:
             guard let first = annotation.points.first else { return }
             // 太い線の端も元画像内で切る。余白へ蛍光色を描かない。

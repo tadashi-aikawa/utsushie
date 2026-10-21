@@ -60,22 +60,27 @@ extension AnnotationDocument {
 
     /// 全体へ同じ移動量を適用し、画像内に留める道具との相対位置も保つ。
     public func moving(_ ids: Set<UUID>, by delta: CGPoint, imageSize: CGSize) -> AnnotationDocument {
-        let style = AnnotationStyle(imageSize: imageSize)
+        let style = self.style(imageSize: imageSize)
         var movement = delta
         for annotation in annotations where ids.contains(annotation.id) {
             let proposed = annotation.translated(by: delta)
-            let placed = AnnotationGeometry.placed(proposed, bounds: bounds(of: proposed, style: style), imageSize: imageSize)
+            let placed = AnnotationGeometry.placed(proposed, bounds: bounds(of: proposed, style: style), imageSize: imageSize, basis: styleBasis)
             let allowed = CGPoint(x: placed.start.x - annotation.start.x, y: placed.start.y - annotation.start.y)
             if delta.x > 0 { movement.x = min(movement.x, max(0, allowed.x)) }
             if delta.x < 0 { movement.x = max(movement.x, min(0, allowed.x)) }
             if delta.y > 0 { movement.y = min(movement.y, max(0, allowed.y)) }
             if delta.y < 0 { movement.y = max(movement.y, min(0, allowed.y)) }
         }
-        return AnnotationDocument(annotations: annotations.map { annotation in
+        // トリミングで画像より大きくなった蛍光ペンは、外接矩形が重なっても線が画像から外れ得る。
+        movement = AnnotationGeometry.visibleHighlighterMovement(movement, highlighters: annotations.filter { ids.contains($0.id) },
+                                                                 image: CGRect(origin: .zero, size: imageSize), style: style)
+        var result = self
+        result.annotations = annotations.map { annotation in
             guard ids.contains(annotation.id) else { return annotation }
             let moved = annotation.translated(by: movement)
-            return AnnotationGeometry.placed(moved, bounds: bounds(of: moved, style: style), imageSize: imageSize)
-        })
+            return AnnotationGeometry.placed(moved, bounds: bounds(of: moved, style: style), imageSize: imageSize, basis: styleBasis)
+        }
+        return result
     }
 }
 
@@ -108,9 +113,9 @@ extension AnnotationGeometry {
     }
 
     public static func creationPoint(_ point: CGPoint, from anchor: CGPoint, tool: AnnotationTool,
-                                     shift: Bool, imageSize: CGSize, size: AnnotationSize = .normal) -> CGPoint {
+                                     shift: Bool, imageSize: CGSize, size: AnnotationSize = .normal, basis: Double? = nil) -> CGPoint {
         if [.rectangle, .spotlight].contains(tool) {
-            return creating(Annotation(tool: tool, start: anchor, size: size), to: point, shift: shift, imageSize: imageSize).end
+            return creating(Annotation(tool: tool, start: anchor, size: size), to: point, shift: shift, imageSize: imageSize, basis: basis).end
         }
         if tool == .highlighter && shift { return highlighterEndpoint(point, from: anchor, imageSize: imageSize) }
         let point = tool.allowsMargin ? point : clamped(point, to: imageSize)
@@ -123,12 +128,12 @@ extension AnnotationGeometry {
     }
 
     public static func resized(_ annotation: Annotation, handle: AnnotationResizeHandle, to point: CGPoint,
-                               shift: Bool, imageSize: CGSize) -> Annotation {
+                               shift: Bool, imageSize: CGSize, basis: Double? = nil) -> Annotation {
         if [.rectangle, .spotlight].contains(annotation.tool) {
             var result = resized(annotation, handle: handle, to: point)
             let corner = [.topLeft, .topRight, .bottomRight, .bottomLeft].contains(handle)
             if shift && corner { result.end = squareConstrained(point, from: result.start) }
-            return clampingAreaPoints(result, square: shift && corner, imageSize: imageSize)
+            return clampingAreaPoints(result, square: shift && corner, imageSize: imageSize, basis: basis)
         }
         var point = handle == .leaderTarget || !annotation.tool.allowsMargin ? clamped(point, to: imageSize) : point
         if shift {

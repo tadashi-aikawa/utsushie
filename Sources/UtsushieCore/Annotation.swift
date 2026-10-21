@@ -2,10 +2,12 @@ import Foundation
 import CoreGraphics
 
 public enum AnnotationTool: String, CaseIterable, Sendable {
-    case selection, rectangle, spotlight, text, number, arrow, line, highlighter, mosaic
+    /// cropは注釈を作らず、ドラッグした範囲を新しい画像にする。
+    case selection, crop, rectangle, spotlight, text, number, arrow, line, highlighter, mosaic
     public var label: String {
         switch self {
         case .selection: "選択"
+        case .crop: "トリミング"
         case .rectangle: "枠"
         case .spotlight: "スポット"
         case .text: "文字"
@@ -19,6 +21,8 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     public var key: String {
         switch self {
         case .selection: "v"
+        // プレビューのトリミング⌘Kと同じ刻印。Cは色の順送りに使う。
+        case .crop: "k"
         case .rectangle: "r"
         case .spotlight: "s"
         case .text: "t"
@@ -32,6 +36,7 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     public var keyCode: UInt16 {
         switch self {
         case .selection: 9
+        case .crop: 40
         case .rectangle: 15
         case .spotlight: 1
         case .text: 17
@@ -44,7 +49,7 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     }
     public var layer: Int {
         switch self {
-        case .selection: -1
+        case .selection, .crop: -1
         case .mosaic: 0
         case .spotlight: 1
         case .highlighter: 2
@@ -55,7 +60,9 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     }
     public var allowsMargin: Bool { [.text, .number, .arrow, .line, .rectangle].contains(self) }
     public var usesInkColor: Bool { [.rectangle, .spotlight, .arrow, .line, .text, .number].contains(self) }
-    public var usesSize: Bool { self != .selection && self != .mosaic }
+    public var usesSize: Bool { ![.selection, .crop, .mosaic].contains(self) }
+    /// 注釈を作るツール。選択とトリミングは作らない。
+    public var createsAnnotation: Bool { self != .selection && self != .crop }
 }
 
 public enum ColorCycleDirection: Int, Sendable {
@@ -214,10 +221,13 @@ public struct AnnotationStyle: Equatable, Sendable {
     public let verticalPadding: Double
     public let marginPadding: Double
     public let leaderDotDiameter: Double
+    /// 太さと文字の基準にする長辺。トリミング後もトリミング前の長辺を保つ。
+    public let length: Double
     public var highlighterWidth: Double { lineWidth * 5 }
-    public init(imageSize: CGSize, size: AnnotationSize = .normal) {
+    public init(imageSize: CGSize, size: AnnotationSize = .normal, basis: Double? = nil) {
         self.imageSize = imageSize
-        let length = max(imageSize.width, imageSize.height)
+        let length = basis ?? max(imageSize.width, imageSize.height)
+        self.length = length
         fontSize = max(16, length / 50) * size.multiplier
         lineWidth = max(3, length / 400) * size.multiplier
         numberDiameter = fontSize * 1.5
@@ -230,7 +240,7 @@ public struct AnnotationStyle: Equatable, Sendable {
     }
     /// すでに倍率付きのスタイルを渡しても二重に拡大しない。
     public func forAnnotation(_ annotation: Annotation) -> AnnotationStyle {
-        AnnotationStyle(imageSize: imageSize, size: annotation.size)
+        AnnotationStyle(imageSize: imageSize, size: annotation.size, basis: length)
     }
     public func numberRect(at point: CGPoint, number: Int) -> CGRect {
         let width = numberDiameter + Double(max(0, String(number).count - 1)) * fontSize * 0.6
@@ -240,7 +250,14 @@ public struct AnnotationStyle: Equatable, Sendable {
 
 public struct AnnotationDocument: Equatable, Sendable {
     public var annotations: [Annotation]
-    public init(annotations: [Annotation] = []) { self.annotations = annotations }
+    /// 元画像のどこを今の画像にしているか。注釈の座標は今の画像の左上が原点。
+    public var crop: AnnotationCrop?
+    public init(annotations: [Annotation] = [], crop: AnnotationCrop? = nil) { self.annotations = annotations; self.crop = crop }
+    /// 太さと文字の基準。トリミングしても変えない。
+    public var styleBasis: Double? { crop?.styleLength }
+    public func style(imageSize: CGSize, size: AnnotationSize = .normal) -> AnnotationStyle {
+        AnnotationStyle(imageSize: imageSize, size: size, basis: styleBasis)
+    }
     public var nextNumber: Int { annotations.filter { $0.tool == .number }.count + 1 }
     public func number(for id: UUID) -> Int? {
         let numbers = annotations.filter { $0.tool == .number }
@@ -323,7 +340,7 @@ public struct AnnotationDocument: Equatable, Sendable {
         let image = CGRect(origin: .zero, size: imageSize)
         var minX = image.minX, minY = image.minY, maxX = image.maxX, maxY = image.maxY
         for annotation in annotations where annotation.tool.allowsMargin {
-            let style = AnnotationStyle(imageSize: imageSize, size: annotation.size)
+            let style = self.style(imageSize: imageSize, size: annotation.size)
             let rect = bounds(of: annotation, style: style)
             let isOutside = [.arrow, .line].contains(annotation.tool)
                 ? !AnnotationGeometry.contains(annotation.start, in: image) || !AnnotationGeometry.contains(annotation.end, in: image)
@@ -393,7 +410,7 @@ public enum AnnotationGeometry {
             return [CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY), CGPoint(x: r.minX, y: r.maxY)]
         case .arrow, .line: return [annotation.start, annotation.end]
         case .text, .number: return annotation.leaderTarget.map { [$0] } ?? []
-        case .selection, .highlighter: return []
+        case .selection, .crop, .highlighter: return []
         }
     }
     public static func resizeHandle(at point: CGPoint, annotation: Annotation, tolerance: Double, edgeTolerance: Double? = nil) -> AnnotationResizeHandle? {
@@ -448,21 +465,27 @@ public enum AnnotationGeometry {
         CGPoint(x: max(0, min(imageSize.width, point.x)), y: max(0, min(imageSize.height, point.y)))
     }
     /// 制限前の中心で外への配置を判定する。札の移動で指す点は変えない。
-    public static func placed(_ annotation: Annotation, bounds: CGRect, imageSize: CGSize) -> Annotation {
+    public static func placed(_ annotation: Annotation, bounds: CGRect, imageSize: CGSize, basis: Double? = nil) -> Annotation {
         let image = CGRect(origin: .zero, size: imageSize)
         var result = annotation
         if keepsAreaInside(annotation, imageSize: imageSize) {
-            result = placingArea(annotation, imageSize: imageSize)
+            result = placingArea(annotation, imageSize: imageSize, basis: basis)
         } else if ![.arrow, .line].contains(annotation.tool), !annotation.tool.allowsMargin || containsCenter(of: bounds, in: image) {
-            let x = max(0, min(max(0, imageSize.width - bounds.width), bounds.minX)) - bounds.minX
-            let y = max(0, min(max(0, imageSize.height - bounds.height), bounds.minY)) - bounds.minY
+            func offset(_ minimum: CGFloat, length: CGFloat, limit: CGFloat) -> CGFloat {
+                // トリミングで画像より大きくなった蛍光ペンは押し戻さず、画像から完全には出さない。
+                if annotation.tool == .highlighter, length > limit { return min(max(minimum, 1 - length), limit - 1) - minimum }
+                return max(0, min(max(0, limit - length), minimum)) - minimum
+            }
+            let x = offset(bounds.minX, length: bounds.width, limit: imageSize.width)
+            let y = offset(bounds.minY, length: bounds.height, limit: imageSize.height)
             result = result.translated(by: CGPoint(x: x, y: y))
             if [.rectangle, .spotlight, .mosaic].contains(annotation.tool), bounds.width > imageSize.width || bounds.height > imageSize.height {
                 result.start = clamped(result.start, to: imageSize)
                 result.end = clamped(result.end, to: imageSize)
             }
         }
-        if annotation.tool == .highlighter {
+        // 外に点を持つ蛍光ペンは描画で画像の中へ切る。点を縁へ寄せると線の形が変わる。
+        if annotation.tool == .highlighter, bounds.width <= imageSize.width, bounds.height <= imageSize.height {
             result.points = result.points.map { clamped($0, to: imageSize) }
         }
         if let target = result.leaderTarget { result.leaderTarget = clamped(target, to: imageSize) }
@@ -487,7 +510,7 @@ public enum AnnotationGeometry {
             let q = CGPoint(x: back.x + sin(angle) * length * 0.45, y: back.y - cos(angle) * length * 0.45)
             let head = CGRect(x: min(b.x, p.x, q.x), y: min(b.y, p.y, q.y), width: max(b.x, p.x, q.x) - min(b.x, p.x, q.x), height: max(b.y, p.y, q.y) - min(b.y, p.y, q.y))
             return bounds.insetBy(dx: -line / 2 - style.edge, dy: -line / 2 - style.edge).union(head.insetBy(dx: -style.edge, dy: -style.edge))
-        case .selection, .mosaic: return bounds
+        case .selection, .crop, .mosaic: return bounds
         }
     }
     /// 中心に向かう直線と角丸札の交点。札の中に指す点があれば描かない。

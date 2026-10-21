@@ -360,3 +360,103 @@ func previousAreaMovesOnlyWithOptionForBothOutputs(_ video: Bool, _ option: Bool
     _ = state.pointerDown(at: .zero, last: last, movingLast: option)
     #expect(state.pointerUp(at: CGPoint(x: 20, y: 40)) == .captureArea(CGRect(x: 0, y: 0, width: 20, height: 40)))
 }
+
+@Test func previousAreaGripUsesBandAroundBorder() {
+    let last = CGRect(x: 100, y: 100, width: 400, height: 300)
+    #expect(LastFrameGrip.at(CGPoint(x: 300, y: 250), in: last) == .move)
+    #expect(LastFrameGrip.at(CGPoint(x: 94, y: 250), in: last) == .resize(.minX))
+    #expect(LastFrameGrip.at(CGPoint(x: 106, y: 250), in: last) == .resize(.minX))
+    #expect(LastFrameGrip.at(CGPoint(x: 107, y: 250), in: last) == .move)
+    #expect(LastFrameGrip.at(CGPoint(x: 503, y: 250), in: last) == .resize(.maxX))
+    #expect(LastFrameGrip.at(CGPoint(x: 300, y: 98), in: last) == .resize(.minY))
+    #expect(LastFrameGrip.at(CGPoint(x: 300, y: 402), in: last) == .resize(.maxY))
+    #expect(LastFrameGrip.at(CGPoint(x: 96, y: 404), in: last) == .resize([.minX, .maxY]))
+    #expect(LastFrameGrip.at(CGPoint(x: 502, y: 101), in: last) == .resize([.maxX, .minY]))
+    #expect(LastFrameGrip.at(CGPoint(x: 93, y: 250), in: last) == nil)
+    // 細い枠は内側の帯を縮めて移動の面を残し、両方の帯に入れば近い辺を選ぶ。
+    let thin = CGRect(x: 0, y: 0, width: 12, height: 100)
+    #expect(LastFrameGrip.at(CGPoint(x: 6, y: 50), in: thin) == .move)
+    #expect(LastFrameGrip.at(CGPoint(x: 2, y: 50), in: thin) == .resize(.minX))
+    #expect(LastFrameGrip.at(CGPoint(x: 11, y: 50), in: thin) == .resize(.maxX))
+    let tiny = CGRect(x: 0, y: 0, width: 4, height: 100)
+    #expect(LastFrameGrip.at(CGPoint(x: -3, y: 50), in: tiny) == .resize(.minX))
+    #expect(LastFrameGrip.at(CGPoint(x: 8, y: 50), in: tiny) == .resize(.maxX))
+}
+
+@Test(arguments: [false, true])
+func optionDragOnPreviousBorderResizesOnlyGrabbedEdges(_ video: Bool) {
+    var state = CaptureState()
+    if video { _ = state.key(48, hasLast: true) }
+    let last = CGRect(x: 100, y: 100, width: 400, height: 300)
+    _ = state.pointerDown(at: CGPoint(x: 500, y: 250), last: last, movingLast: true)
+    state.pointerDragged(to: CGPoint(x: 560.4, y: 300))
+    #expect(state.gesture.lastPreview == CGRect(x: 100, y: 100, width: 460, height: 300))
+    #expect(state.pointerUp(at: CGPoint(x: 560.4, y: 300)) == .moveLast(CGRect(x: 100, y: 100, width: 460, height: 300)))
+
+    _ = state.pointerDown(at: CGPoint(x: 100, y: 400), last: last, movingLast: true)
+    #expect(state.pointerUp(at: CGPoint(x: 50, y: 450)) == .moveLast(CGRect(x: 50, y: 100, width: 450, height: 350)))
+}
+
+@Test func previousAreaResizeStopsAtMinimumWithoutFlipping() {
+    var state = CaptureState()
+    let last = CGRect(x: 100, y: 100, width: 400, height: 300)
+    _ = state.pointerDown(at: CGPoint(x: 100, y: 100), last: last, movingLast: true)
+    #expect(state.pointerUp(at: CGPoint(x: 900, y: 900)) == .moveLast(CGRect(x: 492, y: 392, width: 8, height: 8)))
+}
+
+@Test func narrowVideoPreviousAreaDoesNotGrowPastDisplayWhenResized() {
+    var state = CaptureState()
+    _ = state.key(48, hasLast: true)
+    let display = CGRect(x: 0, y: 0, width: 1400, height: 900)
+    let last = CGRect(x: 1396, y: 100, width: 4, height: 100)
+    _ = state.pointerDown(at: CGPoint(x: 1399, y: 150), last: last, movingLast: true, displayFrames: [display])
+    #expect(state.gesture.lastGrip == .resize(.maxX))
+    #expect(state.pointerUp(at: CGPoint(x: 1389, y: 150)) == .moveLast(last))
+}
+
+@Test func videoPreviousAreaResizeStopsAtItsCenterDisplay() {
+    var state = CaptureState()
+    _ = state.key(48, hasLast: true)
+    let displays = [CGRect(x: 0, y: 0, width: 600, height: 800), CGRect(x: 600, y: 0, width: 800, height: 800)]
+    let last = CGRect(x: 100, y: 100, width: 400, height: 300)
+    _ = state.pointerDown(at: CGPoint(x: 500, y: 400), last: last, movingLast: true, displayFrames: displays)
+    #expect(state.pointerUp(at: CGPoint(x: 1000, y: 1000)) == .moveLast(CGRect(x: 100, y: 100, width: 500, height: 700)))
+    // 画像は画面を跨いで広げられる。
+    _ = state.key(48, hasLast: true)
+    _ = state.pointerDown(at: CGPoint(x: 500, y: 400), last: last, movingLast: true, displayFrames: displays)
+    #expect(state.pointerUp(at: CGPoint(x: 1000, y: 1000)) == .moveLast(CGRect(x: 100, y: 100, width: 900, height: 900)))
+}
+
+@Test func optionShowsMoveAndResizeCursorsOnlyAroundPreviousArea() {
+    var state = CaptureState()
+    let last = CGRect(x: 100, y: 100, width: 400, height: 300)
+    #expect(state.cursor(at: CGPoint(x: 300, y: 250), last: last) == .crosshair)
+    state.modifiersChanged(shift: false, option: true)
+    #expect(state.cursor(at: CGPoint(x: 300, y: 250), last: last) == .openHand)
+    #expect(state.cursor(at: CGPoint(x: 100, y: 250), last: last) == .resize(.minX))
+    #expect(state.cursor(at: CGPoint(x: 500, y: 400), last: last) == .resize([.maxX, .maxY]))
+    #expect(state.cursor(at: CGPoint(x: 50, y: 50), last: last) == .crosshair)
+    #expect(state.cursor(at: CGPoint(x: 300, y: 250), last: nil) == .crosshair)
+    // ⇧の画面撮影が優先する。
+    state.modifiersChanged(shift: true, option: true)
+    #expect(state.cursor(at: CGPoint(x: 300, y: 250), last: last) == .crosshair)
+
+    // つかんだ後は⌥を離してもmouseUpまで同じつかみ方を示す。
+    state.modifiersChanged(shift: false, option: true)
+    _ = state.pointerDown(at: CGPoint(x: 300, y: 250), last: last, movingLast: true)
+    state.modifiersChanged(shift: false, option: false)
+    #expect(state.cursor(at: CGPoint(x: 300, y: 250), last: last) == .closedHand)
+    state.pointerDragged(to: CGPoint(x: 900, y: 900))
+    #expect(state.cursor(at: CGPoint(x: 900, y: 900), last: last) == .closedHand)
+    _ = state.pointerUp(at: CGPoint(x: 900, y: 900))
+    #expect(state.cursor(at: CGPoint(x: 300, y: 250), last: last) == .crosshair)
+
+    _ = state.pointerDown(at: CGPoint(x: 500, y: 250), last: last, movingLast: true)
+    #expect(state.cursor(at: CGPoint(x: 700, y: 250), last: last) == .resize(.maxX))
+    _ = state.key(53, hasLast: true)
+    #expect(state.cursor(at: CGPoint(x: 700, y: 250), last: last) == .crosshair)
+
+    _ = state.key(14, hasLast: true)
+    state.modifiersChanged(shift: false, option: true)
+    #expect(state.cursor(at: CGPoint(x: 300, y: 250), last: last) == .arrow)
+}

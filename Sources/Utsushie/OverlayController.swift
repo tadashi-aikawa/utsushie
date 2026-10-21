@@ -39,7 +39,30 @@ final class OverlayController {
     private var confirmingElement = false
     private(set) var elementHint = ""
     private let elementHelp = "⏎ クリックで撮影 · ↑ 親へ · ↓ 戻る · Eで要素選択を終了"
-    var cursor: NSCursor { state.cursor == .crosshair ? .crosshair : .arrow }
+    /// ⌥で前回枠をつかめる場所はカーソル位置で変わる。今のカーソル位置で求める。
+    private var captureCursor: CaptureCursor { state.cursor(at: NSEvent.mouseLocation, last: last) }
+    var cursor: NSCursor {
+        switch captureCursor {
+        case .crosshair: .crosshair
+        case .arrow: .arrow
+        case .openHand: .openHand
+        case .closedHand: .closedHand
+        case let .resize(edges): .frameResize(position: Self.resizePosition(edges), directions: .all)
+        }
+    }
+    private static func resizePosition(_ edges: LastFrameEdges) -> NSCursor.FrameResizePosition {
+        // AppKitの座標なのでmaxYが上。
+        switch (edges.contains(.minX) ? -1 : edges.contains(.maxX) ? 1 : 0, edges.contains(.minY) ? -1 : edges.contains(.maxY) ? 1 : 0) {
+        case (-1, 1): .topLeft
+        case (1, 1): .topRight
+        case (-1, -1): .bottomLeft
+        case (1, -1): .bottomRight
+        case (-1, _): .left
+        case (1, _): .right
+        case (_, 1): .top
+        default: .bottom
+        }
+    }
     var onCapture: ((CaptureRequest, Bool, CaptureOutput) -> Void)?
     var onMoveLast: ((CGRect) -> Void)?
     var onCancel: (() -> Void)?
@@ -51,7 +74,7 @@ final class OverlayController {
     func show(last: CGRect?, frozen: [FrozenDisplay]? = nil) {
         close()
         state = CaptureState(audio: config.video.audio)
-        state.modifiersChanged(shift: NSEvent.modifierFlags.contains(.shift))
+        state.modifiersChanged(shift: NSEvent.modifierFlags.contains(.shift), option: NSEvent.modifierFlags.contains(.option))
         self.last = last
         // 撮った後にディスプレイが変わったら、止めた画面と選択画面の画面がずれる。外した画面の絵も撮らせない。今の画面で開く。
         let displays = ScreenGeometry.displays
@@ -182,8 +205,8 @@ final class OverlayController {
     }
     func mouseMoved() {
         guard isVisible else { return }
-        // flagsChangedを取りこぼしても、移動・別画面への進入で現在の⇧状態へ戻す。
-        state.modifiersChanged(shift: NSEvent.modifierFlags.contains(.shift))
+        // flagsChangedを取りこぼしても、移動・別画面への進入で現在の⇧・⌥状態へ戻す。
+        state.modifiersChanged(shift: NSEvent.modifierFlags.contains(.shift), option: NSEvent.modifierFlags.contains(.option))
         // cursorUpdateとカーソル矩形はキーウィンドウで有効になる。
         // 別画面へ移ったら非アクティブのまま受け手を移す。ドラッグの配送先は変えない。
         if NSEvent.pressedMouseButtons & 1 == 0,
@@ -197,9 +220,9 @@ final class OverlayController {
         guard isVisible else { return }
         cursor.set()
     }
-    func flagsChanged(shift: Bool) {
+    func flagsChanged(shift: Bool, option: Bool) {
         if confirmingElement { clearElements() }
-        state.modifiersChanged(shift: shift)
+        state.modifiersChanged(shift: shift, option: option)
         updateWindow(); redraw()
     }
     private func updateWindow(windowOnly: Bool = false) {
@@ -393,7 +416,7 @@ final class OverlayController {
         if elementTask != nil { clearElements() }
         updateWindow()
         elementClick = click
-        state.modifiersChanged(shift: selectingDisplay)
+        state.modifiersChanged(shift: selectingDisplay, option: movingLast)
         performPointer(state.pointerDown(at: NSEvent.mouseLocation, last: last, movingLast: movingLast,
                                          displayFrames: ScreenGeometry.displays.map(\.frame), selectingDisplay: selectingDisplay))
     }
@@ -455,8 +478,8 @@ final class OverlayController {
         return OverlayPresentation.dimensions(points: points, scale: scale, output: state.output, downscale: downscale)
     }
     private func redraw() {
-        if registeredCursor != state.cursor {
-            registeredCursor = state.cursor
+        if registeredCursor != captureCursor {
+            registeredCursor = captureCursor
             for panel in panels {
                 if let view = panel.overlayView { panel.invalidateCursorRects(for: view) }
             }
@@ -486,7 +509,9 @@ final class OverlayView: NSView {
     }
     override func cursorUpdate(with event: NSEvent) { controller?.updateCursor() }
     override func mouseEntered(with event: NSEvent) { controller?.mouseMoved() }
-    override func flagsChanged(with event: NSEvent) { controller?.flagsChanged(shift: event.modifierFlags.contains(.shift)) }
+    override func flagsChanged(with event: NSEvent) {
+        controller?.flagsChanged(shift: event.modifierFlags.contains(.shift), option: event.modifierFlags.contains(.option))
+    }
     override func mouseDown(with event: NSEvent) {
         controller?.mouseDown(movingLast: event.modifierFlags.contains(.option), selectingDisplay: event.modifierFlags.contains(.shift))
     }

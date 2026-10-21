@@ -40,6 +40,7 @@ public enum AnnotationToolbarPresentation {
         // 探索の状態はAIボタンに出す。手引きの行には重ねない。
         if findingPrivacy { return ToolbarHint() }
         switch tool {
+        case .crop: return ToolbarHint("ドラッグした範囲を新しい画像にする ・ ⌘Zで戻す", keys: ["⌘Z"])
         case .text: return ToolbarHint("クリックで文字 ・ 指す点からドラッグで引き出し線")
         case .number: return ToolbarHint("クリックで\(nextNumber) ・ 指す点からドラッグで引き出し線")
         default: return ToolbarHint()

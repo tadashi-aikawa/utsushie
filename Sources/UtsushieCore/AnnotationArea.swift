@@ -12,8 +12,8 @@ extension AnnotationStyle {
 }
 
 extension AnnotationGeometry {
-    public static func areaDrawingRect(tool: AnnotationTool, imageSize: CGSize, size: AnnotationSize = .normal) -> CGRect {
-        let inset = AnnotationStyle(imageSize: imageSize, size: size).areaInset(for: tool)
+    public static func areaDrawingRect(tool: AnnotationTool, imageSize: CGSize, size: AnnotationSize = .normal, basis: Double? = nil) -> CGRect {
+        let inset = AnnotationStyle(imageSize: imageSize, size: size, basis: basis).areaInset(for: tool)
         // 線幅より小さな画像でも負の寸法を作らず、作成可能な面積をゼロへ畳む。
         let x = min(inset, imageSize.width / 2), y = min(inset, imageSize.height / 2)
         return CGRect(x: x, y: y, width: max(0, imageSize.width - x * 2), height: max(0, imageSize.height - y * 2))
@@ -29,9 +29,9 @@ extension AnnotationGeometry {
     }
 
     /// 作成と角のリサイズは点を制限する。反対の点を移動させる平行移動はしない。
-    static func clampingAreaPoints(_ annotation: Annotation, square: Bool, imageSize: CGSize) -> Annotation {
+    static func clampingAreaPoints(_ annotation: Annotation, square: Bool, imageSize: CGSize, basis: Double? = nil) -> Annotation {
         guard keepsAreaInside(annotation, imageSize: imageSize) else { return annotation }
-        let area = areaDrawingRect(tool: annotation.tool, imageSize: imageSize, size: annotation.size)
+        let area = areaDrawingRect(tool: annotation.tool, imageSize: imageSize, size: annotation.size, basis: basis)
         var result = annotation
         result.start = clamped(annotation.start, to: area)
         result.end = clamped(annotation.end, to: area)
@@ -44,24 +44,25 @@ extension AnnotationGeometry {
         return result
     }
 
-    public static func creationStart(_ point: CGPoint, tool: AnnotationTool, imageSize: CGSize, size: AnnotationSize = .normal) -> CGPoint {
+    public static func creationStart(_ point: CGPoint, tool: AnnotationTool, imageSize: CGSize, size: AnnotationSize = .normal,
+                                     basis: Double? = nil) -> CGPoint {
         guard tool == .spotlight || tool == .rectangle && contains(point, in: CGRect(origin: .zero, size: imageSize)) else { return point }
-        return clamped(point, to: areaDrawingRect(tool: tool, imageSize: imageSize, size: size))
+        return clamped(point, to: areaDrawingRect(tool: tool, imageSize: imageSize, size: size, basis: basis))
     }
 
-    public static func creating(_ annotation: Annotation, to point: CGPoint, shift: Bool, imageSize: CGSize) -> Annotation {
+    public static func creating(_ annotation: Annotation, to point: CGPoint, shift: Bool, imageSize: CGSize, basis: Double? = nil) -> Annotation {
         var result = annotation
         if [.rectangle, .spotlight].contains(annotation.tool) {
             result.end = shift ? squareConstrained(point, from: annotation.start) : point
-            return clampingAreaPoints(result, square: shift, imageSize: imageSize)
+            return clampingAreaPoints(result, square: shift, imageSize: imageSize, basis: basis)
         }
-        result.end = creationPoint(point, from: annotation.start, tool: annotation.tool, shift: shift, imageSize: imageSize)
+        result.end = creationPoint(point, from: annotation.start, tool: annotation.tool, shift: shift, imageSize: imageSize, basis: basis)
         return result
     }
 
     /// 移動・貼り付け・太さの変更は寸法を保って押し戻す。収まらない寸法だけ縮める。
-    static func placingArea(_ annotation: Annotation, imageSize: CGSize) -> Annotation {
-        let area = areaDrawingRect(tool: annotation.tool, imageSize: imageSize, size: annotation.size)
+    static func placingArea(_ annotation: Annotation, imageSize: CGSize, basis: Double? = nil) -> Annotation {
+        let area = areaDrawingRect(tool: annotation.tool, imageSize: imageSize, size: annotation.size, basis: basis)
         let rect = annotation.rect
         let width = min(rect.width, area.width), height = min(rect.height, area.height)
         let x = max(area.minX, min(area.maxX - width, rect.minX))

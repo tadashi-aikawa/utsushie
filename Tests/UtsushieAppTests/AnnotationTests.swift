@@ -1788,3 +1788,70 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     #expect(canvas.imageRect.origin == CGPoint(x: zoomed.minX + 30, y: zoomed.minY - 20))
     #expect(canvas.imageRect.size == zoomed.size && !canvas.history.canUndo)
 }
+
+@MainActor @Test func annotationCropKeyDragMakesNewImageKeepsEditingAndUndoes() throws {
+    let source = try annotationFixture(patterned: true)
+    let outside = Annotation(tool: .rectangle, start: CGPoint(x: 5, y: 85), end: CGPoint(x: 30, y: 95))
+    let inside = Annotation(tool: .arrow, start: CGPoint(x: 60, y: 30), end: CGPoint(x: 100, y: 60))
+    let initial = AnnotationDocument(annotations: [outside, inside])
+    let canvas = AnnotationCanvas(image: source, document: initial, tool: .rectangle)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 40, characters: "の", flags: .function))
+    #expect(canvas.tool == .crop)
+
+    // 手ぶれとEscでは切らない。
+    let start = CGPoint(x: 40, y: 20), end = CGPoint(x: 120, y: 80)
+    let shake = CGPoint(x: start.x + 1 / canvas.displayScale, y: start.y + 1 / canvas.displayScale)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: start))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: shake))
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: start))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: end))
+    #expect(canvas.isInteracting)
+    canvas.escape()
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: end))
+    #expect(canvas.document == initial && !canvas.history.canUndo && canvas.tool == .crop)
+
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: start))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: end))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: end))
+    #expect(canvas.tool == .selection && canvas.selection.isEmpty)
+    #expect(canvas.document.crop?.rect == CGRect(x: 40, y: 20, width: 80, height: 60))
+    #expect(canvas.document.annotations.map(\.id) == [inside.id])
+    #expect(canvas.document.annotations.first?.start == CGPoint(x: 20, y: 10))
+    #expect(canvas.original.width == 80 && canvas.original.height == 60)
+    #expect(canvas.exportLayout.bounds == CGRect(x: 0, y: 0, width: 80, height: 60))
+    let composed = try AnnotationRenderer.compose(canvas.original, document: AnnotationDocument(crop: canvas.document.crop))
+    #expect(try pixel(composed, x: 0, y: 0) == pixel(source, x: 40, y: 20))
+    #expect(try pixel(composed, x: 79, y: 59) == pixel(source, x: 119, y: 79))
+
+    // 切った後もそのまま描ける。
+    canvas.tool = .rectangle
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 5, y: 5)))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 40, y: 30)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 40, y: 30)))
+    #expect(canvas.document.annotations.count == 2 && canvas.document.crop != nil)
+
+    canvas.undoAnnotation()
+    canvas.undoAnnotation()
+    #expect(canvas.document == initial && canvas.original.width == 160)
+    canvas.redoAnnotation()
+    #expect(canvas.original.width == 80 && canvas.document.annotations.count == 1)
+
+    // 余白や画像の外から始めても範囲は画像の中へ収める。
+    canvas.undoAnnotation()
+    canvas.tool = .crop
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: -30, y: -30)))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 50, y: 40)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 50, y: 40)))
+    #expect(canvas.document.crop?.rect == CGRect(x: 0, y: 0, width: 50, height: 40))
+}
+
+@MainActor @Test func annotationEditorDoesNotReopenWithCropTool() throws {
+    let first = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil)
+    defer { first.window.close() }
+    first.canvas.selectTool(.arrow)
+    first.canvas.selectTool(.crop)
+    let second = AnnotationEditorController(image: try annotationFixture(), document: AnnotationDocument(), screen: nil)
+    defer { second.window.close() }
+    #expect(second.canvas.tool == .arrow)
+}

@@ -90,7 +90,7 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     let bar = editor.toolbar
     bar.frame = CGRect(x: 0, y: 0, width: editor.window.minSize.width, height: 75)
     bar.layoutSubtreeIfNeeded()
-    #expect(bar.trays.map { $0.buttons.map(\.title) } == [["選択"], ["枠", "スポット", "矢印", "直線", "蛍光ペン"], ["文字", "番号"], ["モザイク", "AIで隠す"]])
+    #expect(bar.trays.map { $0.buttons.map(\.title) } == [["選択", "トリミング"], ["枠", "スポット", "矢印", "直線", "蛍光ペン"], ["文字", "番号"], ["モザイク", "AIで隠す"]])
     #expect(bar.trays.last!.frame.maxX + 10 <= bar.undoButton.frame.minX)
     #expect(bar.finishButton.frame.maxX <= bar.bounds.maxX - 14)
     #expect(bar.hintView.frame.maxX < bar.dimensions.frame.minX)
@@ -99,6 +99,7 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
         #expect(button.acceptsFirstMouse(for: nil) && button.needsPanelToBecomeKey)
     }}
     #expect(bar.toolButtons[.selection]?.key == "V")
+    #expect(bar.toolButtons[.crop]?.key == "K")
     #expect(bar.aiButton.face == .outline && bar.aiButton.dimmed && bar.aiButton.isEnabled)
     let root = try #require(editor.window.contentView)
     root.frame.size = CGSize(width: 1200, height: 915)

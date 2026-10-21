@@ -96,7 +96,8 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
             if !isFindingPrivacy { privacyMessage = nil }
             update()
         }
-        canvas.onToolChange = { tool in Self.lastTool = tool }
+        // トリミングは開き直した画像へ持ち越さない。
+        canvas.onToolChange = { tool in if tool != .crop { Self.lastTool = tool } }
         canvas.onFinish = { [weak self] in self?.finish() }
         canvas.onPrivacy = { [weak self] in self?.findPrivacy() }
         canvas.onCancelPrivacy = { [weak self] in self?.cancelPrivacy() ?? false }
@@ -194,6 +195,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         }
         let operation = UUID()
         privacyOperation = operation; privacyMessage = nil; update()
+        let crop = canvas.history.document.crop
         privacyTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -202,6 +204,8 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
                 while canvas.isInteracting { try await Task.sleep(for: .milliseconds(50)) }
                 try Task.checkCancellation()
                 guard privacyOperation == operation, !closing, !saving else { return }
+                // 探している間のトリミングや取り消しで画像が変わったら、前の画像の座標を置かない。
+                guard canvas.history.document.crop == crop else { throw CancellationError() }
                 canvas.appendPrivacyAnnotations(result.annotations)
                 privacyMessage = ToolbarHint(result.message, isError: result.warning != nil)
             } catch is CancellationError {
@@ -357,7 +361,17 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private static var lastInkColor: InkColor = .red
     // 各ツールの大きさを、編集画面を開き直しても同じプロセス内で保つ。
     private static var lastSizes: [AnnotationTool: AnnotationSize] = [:]
-    let original: CGImage
+    /// 撮影時の画像。トリミングしても切り詰めず、履歴の範囲から今の画像を切り出す。
+    let source: CGImage
+    private var cropped: (rect: CGRect, image: CGImage)?
+    /// 今の画像。注釈の座標はこの左上が原点。
+    var original: CGImage {
+        guard let rect = document.crop?.rect else { return source }
+        if let cropped, cropped.rect == rect { return cropped.image }
+        let image = source.cropping(to: rect) ?? source
+        cropped = (rect, image)
+        return image
+    }
     private(set) var history: AnnotationHistory
     var tool: AnnotationTool { didSet { updateCursor(); needsDisplay = true } }
     var onChange: (() -> Void)?
@@ -390,8 +404,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         case resize(Annotation, AnnotationResizeHandle)
         case marquee(CGPoint, Set<UUID>)
         case pan(AnnotationViewport, CGPoint)
+        case crop(CGPoint)
     }
     private var marqueeRect: CGRect?
+    private var cropRect: CGRect?
     private var marqueeSelection: Set<UUID>?
     var displayedSelection: Set<UUID> {
         switch gesture {
@@ -487,7 +503,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         history.commit(next); changed()
     }
     private var imageSize: CGSize { CGSize(width: original.width, height: original.height) }
-    private var style: AnnotationStyle { AnnotationStyle(imageSize: imageSize) }
+    private var style: AnnotationStyle { document.style(imageSize: imageSize) }
+    private var styleBasis: Double? { document.styleBasis }
     private func style(for annotation: Annotation) -> AnnotationStyle { style.forAnnotation(annotation) }
     var exportLayout: AnnotationExportLayout { document.exportLayout(imageSize: imageSize) }
     private var viewport: AnnotationViewport {
@@ -503,7 +520,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     init(image: CGImage, document: AnnotationDocument, tool: AnnotationTool, history: AnnotationHistory? = nil) {
-        original = image; self.history = history ?? AnnotationHistory(document); self.tool = tool
+        source = image; self.history = history ?? AnnotationHistory(document); self.tool = tool
         super.init(frame: .zero)
         // macOS 14以降のNSViewは既定でクリップしない。文字入力の子ビューも領域内に留める。
         clipsToBounds = true
@@ -581,13 +598,22 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         if case .pan = gesture { cancelGesture() }
         updateCursor()
     }
-    private func cancelGesture() { gesture = nil; preview = nil; frozenImageRect = nil; marqueeRect = nil; marqueeSelection = nil; toggleOnClick = nil }
+    private func cancelGesture() {
+        gesture = nil; preview = nil; frozenImageRect = nil; marqueeRect = nil; marqueeSelection = nil; toggleOnClick = nil; cropRect = nil
+    }
     func finishGesture() {
         if let preview { history.commit(preview) }
         cancelGesture(); changed()
     }
-    func undoAnnotation() { cancelGesture(); history.undo(); selection = []; changed() }
-    func redoAnnotation() { cancelGesture(); history.redo(); selection = []; changed() }
+    func undoAnnotation() { cancelGesture(); changingHistory { $0.undo() } }
+    func redoAnnotation() { cancelGesture(); changingHistory { $0.redo() } }
+    /// 画像の範囲が変わったら、前の画像に合わせた倍率と原点を捨てて全体を収める。
+    private func changingHistory(_ change: (inout AnnotationHistory) -> Void) {
+        let crop = history.document.crop
+        change(&history)
+        if history.document.crop != crop { manualViewport = nil }
+        selection = []; changed()
+    }
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         cursorPoint = bounds.contains(p) ? point(event) : nil
@@ -601,12 +627,14 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         if case .pan = gesture { NSCursor.closedHand.set(); return }
         if spacePressed { NSCursor.openHand.set(); return }
         guard let cursorPoint else { return }
+        // トリミングは注釈をつかまない。どこでも範囲のドラッグを始める。
+        if tool == .crop { NSCursor.crosshair.set(); return }
         let interaction: AnnotationInteraction
         switch gesture {
         case .create, .label: interaction = .create
         case .move(_, _, let id): interaction = .move(id)
         case .resize(let annotation, let handle): interaction = .resize(annotation.id, handle)
-        case .pan, .marquee: return
+        case .pan, .marquee, .crop: return
         case nil: interaction = document.interaction(at: cursorPoint, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
         }
         let cursor: NSCursor
@@ -634,6 +662,12 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         let p = point(event)
         cursorPoint = p
         toggleOnClick = nil
+        if tool == .crop {
+            // 範囲は元画像の中だけ。余白からドラッグしても画像の端から始める。
+            selection = []; frozenImageRect = imageRect
+            gesture = .crop(AnnotationGeometry.clamped(p, to: imageSize))
+            changed(); return
+        }
         if event.modifierFlags.contains(.shift),
            let id = document.hit(at: p, style: style, tolerance: 7 / displayScale, includeAreaInterior: true) {
             toggleOnClick = (id, selection)
@@ -664,7 +698,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         }
         selection = []
         guard tool.allowsMargin || tool == .spotlight || CGRect(origin: .zero, size: imageSize).contains(p) else { changed(); return }
-        let start = AnnotationGeometry.creationStart(p, tool: tool, imageSize: imageSize, size: defaultSize)
+        let start = AnnotationGeometry.creationStart(p, tool: tool, imageSize: imageSize, size: defaultSize, basis: styleBasis)
         let annotation = Annotation(tool: tool, start: start, highlighterColor: Self.lastHighlighterColor,
                                     darkBackground: Self.lastHighlighterDarkBackground, inkColor: Self.lastInkColor, size: defaultSize)
         highlighterStraight = event.modifierFlags.contains(.shift)
@@ -673,7 +707,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         changed()
     }
     private func placed(_ annotation: Annotation) -> Annotation {
-        AnnotationGeometry.placed(annotation, bounds: history.document.bounds(of: annotation, style: style), imageSize: imageSize)
+        AnnotationGeometry.placed(annotation, bounds: history.document.bounds(of: annotation, style: style), imageSize: imageSize, basis: styleBasis)
     }
     override func mouseDragged(with event: NSEvent) {
         guard isEnabled, let gesture else { return }
@@ -687,6 +721,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         let shift = event.modifierFlags.contains(.shift)
         var annotation: Annotation
         switch gesture {
+        case .crop(let anchor):
+            cropRect = Annotation(tool: .rectangle, start: anchor, end: AnnotationGeometry.clamped(p, to: imageSize)).rect
+            needsDisplay = true; return
         case .marquee(let anchor, let previous):
             let rect = Annotation(tool: .rectangle, start: anchor, end: p).rect
             marqueeRect = rect
@@ -706,7 +743,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         case .create(let initial):
             annotation = initial.tool == .highlighter && !highlighterStraight ? (preview?.annotations.first { $0.id == initial.id } ?? initial) : initial
             annotation = AnnotationGeometry.creating(annotation, to: p,
-                shift: initial.tool == .highlighter ? highlighterStraight : shift, imageSize: imageSize)
+                shift: initial.tool == .highlighter ? highlighterStraight : shift, imageSize: imageSize, basis: styleBasis)
             if initial.tool == .highlighter {
                 if highlighterStraight { annotation.points = [initial.start, annotation.end] }
                 else { annotation.points.append(annotation.end) }
@@ -717,7 +754,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             preview = history.document.moving(ids, by: delta, imageSize: imageSize)
             changed(); return
         case .resize(let initial, let handle):
-            annotation = AnnotationGeometry.resized(initial, handle: handle, to: p, shift: shift, imageSize: imageSize)
+            annotation = AnnotationGeometry.resized(initial, handle: handle, to: p, shift: shift, imageSize: imageSize, basis: styleBasis)
         case .pan: return
         }
         annotation = placed(annotation)
@@ -727,6 +764,18 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     override func mouseUp(with event: NSEvent) {
         guard let gesture else { return }
         if case .pan = gesture { cancelGesture(); viewChanged(); return }
+        if case .crop(let anchor) = gesture {
+            let end = AnnotationGeometry.clamped(point(event), to: imageSize)
+            let rect = Annotation(tool: .rectangle, start: anchor, end: end).rect
+            cancelGesture()
+            // 小さな手ぶれでは切らない。切ったら選択ツールへ戻り、新しい画像の全体を収める。
+            if AnnotationGeometry.isValidDrag(tool: .crop, from: anchor, to: end, displayScale: displayScale),
+               let next = history.document.cropping(to: rect, imageSize: imageSize) {
+                history.commit(next); manualViewport = nil
+                selectTool(.selection)
+            }
+            changed(); return
+        }
         if let toggleOnClick, preview == nil {
             selection = toggleOnClick.previous
             if !selection.insert(toggleOnClick.id).inserted { selection.remove(toggleOnClick.id) }
@@ -762,7 +811,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         let annotation: Annotation?
         switch gesture {
         case .create(let initial), .resize(let initial, _): annotation = next.annotations.first { $0.id == initial.id }
-        case .move, .label, .pan, .marquee: annotation = nil
+        case .move, .label, .pan, .marquee, .crop: annotation = nil
         }
         if let annotation, ![.text, .number].contains(annotation.tool),
            !(annotation.tool == .highlighter
@@ -980,13 +1029,21 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             UITheme.indigo.setStroke(); border.lineWidth = 1
             border.setLineDash([4, 3], count: 2, phase: 0); border.stroke()
         }
+        if let cropRect {
+            // 余白も切った後には残らないので、画像と余白の全体を暗くする。
+            let shade = NSBezierPath(rect: outputRect)
+            shade.append(NSBezierPath(rect: viewRect(cropRect))); shade.windingRule = .evenOdd
+            NSColor.black.withAlphaComponent(0.5).setFill(); shade.fill()
+            let border = NSBezierPath(rect: viewRect(cropRect)); border.lineWidth = 1.5
+            NSColor.white.setStroke(); border.stroke()
+        }
         if let marqueeRect {
             let path = NSBezierPath(rect: viewRect(marqueeRect))
             UITheme.indigo.withAlphaComponent(0.12).setFill(); path.fill()
             UITheme.indigo.setStroke(); path.lineWidth = 1; path.stroke()
         }
         if tool == .number, let cursorPoint, !isEditingText, gesture == nil {
-            let style = AnnotationStyle(imageSize: imageSize, size: defaultSize)
+            let style = document.style(imageSize: imageSize, size: defaultSize)
             let string = String(document.nextNumber) as NSString
             let r = viewRect(style.numberRect(at: cursorPoint, number: document.nextNumber))
             UITheme.inkFace(Self.lastInkColor).withAlphaComponent(0.45).setFill()
