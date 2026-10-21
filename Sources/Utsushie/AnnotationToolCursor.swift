@@ -16,6 +16,20 @@ enum AnnotationToolCursor {
         var displayScale: Double
         var number: Int
         var backingScale: Double
+        /// アクセシビリティのポインタの大きさ。OSはカーソルの画像もこの倍率で引き伸ばす。
+        var cursorScale: Double
+    }
+    /// 読めなければ等倍。設定の範囲は1〜4倍。
+    private(set) static var systemCursorScale = readSystemCursorScale()
+    /// 他アプリの設定は読み取りがキャッシュされる。マウスの移動ごとではなく、編集画面がキーになったときに同期して読み直す。
+    static func reloadSystemCursorScale() {
+        CFPreferencesAppSynchronize(accessibilityDomain)
+        systemCursorScale = readSystemCursorScale()
+    }
+    private static let accessibilityDomain = "com.apple.universalaccess" as CFString
+    private static func readSystemCursorScale() -> Double {
+        let value = CFPreferencesCopyAppValue("mouseDriverCursorSize" as CFString, accessibilityDomain)
+        return min(max((value as? NSNumber)?.doubleValue ?? 1, 1), 4)
     }
     /// 縮小しても見本が消えない大きさと、カーソルとして扱える大きさの範囲。単位は表示pt。
     private static let minimumHeight = 12.0
@@ -42,7 +56,7 @@ enum AnnotationToolCursor {
             ink *= fit; edge *= fit
             let diameter = ink + edge * 2
             let side = ceil(diameter) + 2
-            return render(CGSize(width: side, height: side), hotSpot: CGPoint(x: side / 2, y: side / 2), backingScale: sample.backingScale) { context in
+            return render(CGSize(width: side, height: side), hotSpot: CGPoint(x: side / 2, y: side / 2), backingScale: sample.backingScale, cursorScale: sample.cursorScale) { context in
                 let center = CGPoint(x: side / 2, y: side / 2)
                 for (radius, color) in [(diameter / 2, UITheme.inkEdge(sample.inkColor)), (ink / 2, UITheme.ink(sample.inkColor))] {
                     context.setFillColor(color.cgColor)
@@ -54,7 +68,7 @@ enum AnnotationToolCursor {
             let height = min(max(style.highlighterWidth * ds, minimumHeight), maximumLength - 2)
             let width = max((height * 0.3).rounded(), 4)
             let canvas = CGSize(width: width + 2, height: height + 2)
-            return render(canvas, hotSpot: CGPoint(x: canvas.width / 2, y: canvas.height / 2), backingScale: sample.backingScale) { context in
+            return render(canvas, hotSpot: CGPoint(x: canvas.width / 2, y: canvas.height / 2), backingScale: sample.backingScale, cursorScale: sample.cursorScale) { context in
                 let rect = CGRect(x: 1, y: 1, width: width, height: height)
                 let path = CGPath(roundedRect: rect, cornerWidth: width * 0.3, cornerHeight: width * 0.3, transform: nil)
                 let color = UITheme.highlighter(sample.highlighterColor)
@@ -81,7 +95,7 @@ enum AnnotationToolCursor {
             let factor = min(max(ds, minimumHeight / rect.height), maximumLength / max(content.width, content.height))
             let canvas = CGSize(width: ceil(content.width * factor), height: ceil(content.height * factor))
             let hotSpot = CGPoint(x: -content.minX * factor, y: -content.minY * factor)
-            return render(canvas, hotSpot: hotSpot, backingScale: sample.backingScale) { context in
+            return render(canvas, hotSpot: hotSpot, backingScale: sample.backingScale, cursorScale: sample.cursorScale) { context in
                 context.scaleBy(x: factor, y: factor)
                 context.translateBy(x: -content.minX, y: -content.minY)
                 // 縁と面を1枚にまとめてから透かし、重なった部分だけ濃くならないようにする。
@@ -95,8 +109,9 @@ enum AnnotationToolCursor {
         }
     }
 
-    /// 左上原点のptで描き、画面の倍率の画素で持つ。
-    private static func render(_ size: CGSize, hotSpot: CGPoint, backingScale: Double, draw: (CGContext) -> Void) -> NSCursor? {
+    /// 左上原点の表示ptで描き、画面の倍率の画素で持つ。
+    /// 画像の寸法はポインタの倍率で割り、OSが引き伸ばした後に表示ptの大きさと画素の細かさへ戻るようにする。
+    private static func render(_ size: CGSize, hotSpot: CGPoint, backingScale: Double, cursorScale: Double, draw: (CGContext) -> Void) -> NSCursor? {
         let width = Int(ceil(size.width * backingScale)), height = Int(ceil(size.height * backingScale))
         guard width > 0, height > 0, let context = try? AnnotationRenderer.bitmap(width: width, height: height) else { return nil }
         context.translateBy(x: 0, y: CGFloat(height)); context.scaleBy(x: backingScale, y: -backingScale)
@@ -105,6 +120,10 @@ enum AnnotationToolCursor {
         draw(context)
         NSGraphicsContext.restoreGraphicsState()
         guard let image = context.makeImage() else { return nil }
-        return NSCursor(image: NSImage(cgImage: image, size: size), hotSpot: NSPoint(x: hotSpot.x, y: hotSpot.y))
+        let rep = NSBitmapImageRep(cgImage: image)
+        rep.size = CGSize(width: size.width / cursorScale, height: size.height / cursorScale)
+        let result = NSImage(size: rep.size)
+        result.addRepresentation(rep)
+        return NSCursor(image: result, hotSpot: NSPoint(x: hotSpot.x / cursorScale, y: hotSpot.y / cursorScale))
     }
 }

@@ -301,6 +301,8 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         onClose?(); onClose = nil; onComplete = nil
     }
     func windowDidResignKey(_ notification: Notification) { canvas.releaseSpace() }
+    // システム設定でポインタの大きさを変えて戻ったときも、見本の大きさを合わせる。
+    func windowDidBecomeKey(_ notification: Notification) { AnnotationToolCursor.reloadSystemCursorScale() }
 }
 
 @MainActor
@@ -670,7 +672,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             highlighterColor: initial?.highlighterColor ?? Self.lastHighlighterColor,
             darkBackground: initial?.darkBackground ?? Self.lastHighlighterDarkBackground,
             size: initial?.size ?? defaultSize, scale: styleScale, displayScale: displayScale,
-            number: document.nextNumber, backingScale: Double(window?.backingScaleFactor ?? 2)))
+            number: document.nextNumber, backingScale: Double(window?.backingScaleFactor ?? 2),
+            cursorScale: AnnotationToolCursor.systemCursorScale))
     }
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }

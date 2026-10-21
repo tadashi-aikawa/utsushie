@@ -233,7 +233,8 @@ public struct AnnotationStyle: Equatable, Sendable {
     public let pasteOffset: Double
     /// 撮影時の1ptあたりの画素数。Rで2xにした画像は2。
     public let scale: Double
-    public var highlighterWidth: Double { lineWidth * 5 }
+    /// 1xの×1で22.5px。文字の行を1本で覆える高さにする。
+    public var highlighterWidth: Double { lineWidth * 7.5 }
     public init(size: AnnotationSize = .normal, scale: Double = 1) {
         self.scale = scale
         fontSize = 18 * scale * size.multiplier

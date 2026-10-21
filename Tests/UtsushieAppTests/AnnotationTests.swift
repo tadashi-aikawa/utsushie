@@ -663,7 +663,7 @@ func annotationSizeToolbarSwitchClearsSelectionAndImmediatelyShowsRememberedSize
     let yellow = try pixel(image, x: 60, y: 60)
     // 黄90%の本線を暗幕の灰色128へ乗算する。
     #expect(abs(yellow[0] - 128) <= 2 && abs(yellow[1] - 122) <= 2 && abs(yellow[2] - 13) <= 2)
-    #expect(try pixel(image, x: 60, y: 69) == pixel(image, x: 60, y: 90))
+    #expect(try pixel(image, x: 60, y: 73) == pixel(image, x: 60, y: 90))
     #expect(try pixel(image, x: 80, y: 60) == [229, 53, 42, 255])
 }
 
@@ -687,7 +687,7 @@ func annotationSizeToolbarSwitchClearsSelectionAndImmediatelyShowsRememberedSize
     for channel in 0..<3 { #expect(abs(colored[channel] - expected[channel]) <= 1) }
     #expect(colored[3] == 255)
     #expect(try pixel(image, x: 80, y: 50) == [0, 0, 0, 255])
-    #expect(try pixel(image, x: 40, y: 59) == [255, 255, 255, 255])
+    #expect(try pixel(image, x: 40, y: 63) == [255, 255, 255, 255])
     #expect(image.width == original.width && image.height == original.height)
 }
 
@@ -711,7 +711,7 @@ func annotationSizeToolbarSwitchClearsSelectionAndImmediatelyShowsRememberedSize
     for channel in 0..<3 { #expect(abs(colored[channel] - expected[channel]) <= 1) }
     #expect(colored[3] == 255)
     #expect(try pixel(image, x: 80, y: 50) == [255, 255, 255, 255])
-    #expect(try pixel(image, x: 40, y: 59) == [0, 0, 0, 255])
+    #expect(try pixel(image, x: 40, y: 63) == [0, 0, 0, 255])
     #expect(image.width == original.width && image.height == original.height)
 }
 
@@ -1884,7 +1884,23 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
 @MainActor private func toolCursor(_ tool: AnnotationTool, displayScale: Double = 1, size: AnnotationSize = .normal, number: Int = 1,
                                    ink: InkColor = .red) -> NSCursor? {
     AnnotationToolCursor.cursor(.init(tool: tool, inkColor: ink, highlighterColor: .yellow, darkBackground: false, size: size,
-                                      scale: 1, displayScale: displayScale, number: number, backingScale: 2))
+                                      scale: 1, displayScale: displayScale, number: number, backingScale: 2, cursorScale: 1))
+}
+@MainActor @Test func toolCursorDividesBySystemPointerSizeAndKeepsPixels() throws {
+    // ポインタを1.5倍にしていると、OSが引き伸ばした後に描いたときと同じ大きさになるよう縮めておく。
+    for tool in [AnnotationTool.freehand, .highlighter, .number, .text] {
+        let base = try #require(toolCursor(tool))
+        let sample = AnnotationToolCursor.Sample(tool: tool, inkColor: .red, highlighterColor: .yellow, darkBackground: false, size: .normal,
+                                                 scale: 1, displayScale: 1, number: 1, backingScale: 2, cursorScale: 1.5)
+        let scaled = try #require(AnnotationToolCursor.cursor(sample))
+        #expect(abs(scaled.image.size.width * 1.5 - base.image.size.width) < 0.01)
+        #expect(abs(scaled.image.size.height * 1.5 - base.image.size.height) < 0.01)
+        #expect(abs(scaled.hotSpot.x * 1.5 - base.hotSpot.x) < 0.01)
+        #expect(abs(scaled.hotSpot.y * 1.5 - base.hotSpot.y) < 0.01)
+        // 画素数は変えず、引き伸ばされても荒くしない。
+        let pixels = { (cursor: NSCursor) in cursor.image.representations.first.map { [$0.pixelsWide, $0.pixelsHigh] } }
+        #expect(pixels(scaled) != nil && pixels(scaled) == pixels(base))
+    }
 }
 @MainActor @Test func toolCursorShowsSampleOnlyForSampleTools() {
     for tool in AnnotationTool.allCases {
