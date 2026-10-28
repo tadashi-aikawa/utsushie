@@ -14,6 +14,8 @@ public struct VideoConfig: Equatable, Sendable {
     public var downscale = true
     public var showsCursor = true
     public var audio: VideoAudio = .none
+    /// 設定ファイルでは決めない。範囲選択のSでその回だけ大へ切り替える。
+    public var compression: VideoCompression = .compact
     public init() {}
 }
 public struct Hotkey: Equatable, Sendable {

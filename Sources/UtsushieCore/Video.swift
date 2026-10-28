@@ -28,6 +28,13 @@ public enum VideoAudio: String, CaseIterable, Sendable {
     }
 }
 
+/// 録画と編集の書き出しのH.264。小は画質一定と長いキーフレーム間隔、大は従来の平均ビットレート。
+public enum VideoCompression: Sendable {
+    case compact, standard
+    public var title: String { self == .compact ? "容量 小" : "容量 大" }
+    public var toggled: VideoCompression { self == .compact ? .standard : .compact }
+}
+
 public enum RecordingPhase:Equatable, Sendable { case idle, starting, recording, finalizing }
 public struct RecordingState: Sendable {
     public private(set) var phase: RecordingPhase = .idle

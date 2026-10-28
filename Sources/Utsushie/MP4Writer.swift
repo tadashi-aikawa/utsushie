@@ -31,11 +31,13 @@ final class MP4Writer: @unchecked Sendable {
     /// 音源ごとに1トラック。2つあれば完成後に1トラックへ混ぜる。
     private let audioTracks: [AudioSource: AudioTrackWriter]
 
-    init(url: URL, width: Int, height: Int, fps: Int, audio: [AudioSource] = [], onFailure: @escaping @Sendable () -> Void = {}) throws {
+    init(url: URL, width: Int, height: Int, fps: Int, compression: VideoCompression = .compact, audio: [AudioSource] = [],
+         onFailure: @escaping @Sendable () -> Void = {}) throws {
         self.url = url; self.width = width; self.height = height; self.fps = fps; self.onFailure = onFailure
         writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         writer.shouldOptimizeForNetworkUse = true
-        input = AVAssetWriterInput(mediaType: .video, outputSettings: VideoEncoding.settings(width: width, height: height, fps: fps))
+        input = AVAssetWriterInput(mediaType: .video,
+                                   outputSettings: VideoEncoding.settings(width: width, height: height, fps: fps, compression: compression))
         input.expectsMediaDataInRealTime = true
         guard writer.canAdd(input) else { throw CaptureError.unavailable("H.264の録画設定を作れません") }
         writer.add(input)

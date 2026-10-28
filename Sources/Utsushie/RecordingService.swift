@@ -68,7 +68,10 @@ final class RecordingService {
         let notify: @Sendable () -> Void = { Task { @MainActor in onStop() } }
         let writer: MP4Writer
         let sources = AudioSource.allCases.filter { $0 == .system ? audio.capturesSystem : audio.capturesMicrophone }
-        do { writer = try MP4Writer(url: temporaryURL, width: size.width, height: size.height, fps: config.fps, audio: sources, onFailure: notify) }
+        do {
+            writer = try MP4Writer(url: temporaryURL, width: size.width, height: size.height, fps: config.fps,
+                                   compression: config.compression, audio: sources, onFailure: notify)
+        }
         catch { try? FileManager.default.removeItem(at: temporaryURL); throw error }
         let sink = RecordingSink(writer: writer, onStop: notify)
         let stream = SCStream(filter: filter, configuration: streamConfig, delegate: sink)

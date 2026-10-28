@@ -18,6 +18,8 @@ struct SharedArtifact: Sendable {
     var byteCount: Int
     var duration: Double? = nil
     var videoFPS: Int? = nil
+    /// 録画時の容量。編集の書き出しも同じにする。保存済みファイルから読んだものはnilで、小として扱う。
+    var videoCompression: VideoCompression? = nil
     /// 撮影時の1ptあたりの画素数。保存済みファイルから読んだものは分からないのでnil。
     var pixelScale: Double? = nil
 }

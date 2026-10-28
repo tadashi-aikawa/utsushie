@@ -3,13 +3,15 @@
 import ScreenCaptureKit
 import ImageIO
 import Testing
+import VideoToolbox
 import UtsushieCore
 @testable import Utsushie
 
 // サンプルは作成後に変更しない。SCStream同様、保持してwriterの専用キューへ渡す。
 private struct ImmutableSample: @unchecked Sendable { let buffer: CMSampleBuffer }
 
-private func sample(time: Double, status: SCFrameStatus = .complete, gray: UInt8 = 255, width: Int = 64, height: Int = 48) throws -> ImmutableSample {
+private func sample(time: Double, status: SCFrameStatus = .complete, gray: UInt8 = 255, width: Int = 64, height: Int = 48,
+                    noise: Bool = false) throws -> ImmutableSample {
     var pixels: CVPixelBuffer?
     let created = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
         [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &pixels)
@@ -21,6 +23,16 @@ private func sample(time: Double, status: SCFrameStatus = .complete, gray: UInt8
         for y in 0..<height { for x in 0..<width {
             let offset = y * CVPixelBufferGetBytesPerRow(image) + x * 4
             for channel in 0..<3 { base.storeBytes(of: gray, toByteOffset: offset + channel, as: UInt8.self) }
+        } }
+    }
+    // 画面の文字のように細かい模様。同じ時刻なら同じ画素になる。
+    if noise, let base = CVPixelBufferGetBaseAddress(image) {
+        var seed: UInt32 = 1
+        for y in 0..<height { for x in 0..<width {
+            seed = seed &* 1_103_515_245 &+ 12345
+            let value = UInt8(truncatingIfNeeded: seed >> 16)
+            let offset = y * CVPixelBufferGetBytesPerRow(image) + x * 4
+            for channel in 0..<3 { base.storeBytes(of: value, toByteOffset: offset + channel, as: UInt8.self) }
         } }
     }
     CVPixelBufferUnlockBaseAddress(image, [])
@@ -61,6 +73,68 @@ private func feed(_ writer: MP4Writer, sample: ImmutableSample, host: Double) as
     #expect(CMFormatDescriptionGetMediaSubType(try #require(formats.first)) == kCMVideoCodecType_H264)
     #expect(try await asset.loadTracks(withMediaType: .audio).isEmpty)
     #expect(try await asset.load(.isPlayable))
+}
+
+@Test func compressionSettingsUseQualityOnlyWhenEncoderSupportsIt() throws {
+    func properties(_ compression: VideoCompression) throws -> NSDictionary {
+        let settings = VideoEncoding.settings(width: 320, height: 240, fps: 30, compression: compression)
+        return try #require(settings[AVVideoCompressionPropertiesKey] as? [String: Any]) as NSDictionary
+    }
+    let compact = try properties(.compact), standard = try properties(.standard)
+    #expect(standard[AVVideoAverageBitRateKey] as? Int == 500_000 && standard[AVVideoMaxKeyFrameIntervalKey] as? Int == 60)
+    #expect(standard[kVTCompressionPropertyKey_Quality as String] == nil)
+    guard VideoEncoding.supportsQuality else {
+        // 画質を指定できないエンコーダーでは、小も大と同じ設定で書く。
+        #expect(compact == standard)
+        return
+    }
+    #expect(compact[kVTCompressionPropertyKey_Quality as String] as? Double == VideoEncoding.compactQuality)
+    #expect(compact[AVVideoMaxKeyFrameIntervalKey] as? Int == 300 && compact[AVVideoMaxKeyFrameIntervalDurationKey] as? Int == 10)
+    #expect(compact[AVVideoAverageBitRateKey] == nil)
+}
+
+@Test func compactCompressionWritesStaticScreenSmallerWithFewerKeyFrames() async throws {
+    // 画質を指定できないエンコーダーでは小と大が同じ設定になり、比べる意味がない。
+    guard VideoEncoding.supportsQuality else { return }
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    var results: [VideoCompression: (bytes: Int, keyFrames: Int)] = [:]
+    for compression in [VideoCompression.compact, .standard] {
+        // 録画用Writerは追いつかないコマを落とすため、全コマを受け取るWriterで設定だけを比べる。
+        let url = dir.appendingPathComponent("\(compression).mp4")
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        let input = AVAssetWriterInput(mediaType: .video,
+                                       outputSettings: VideoEncoding.settings(width: 320, height: 240, fps: 30, compression: compression))
+        input.expectsMediaDataInRealTime = false; writer.add(input)
+        #expect(writer.startWriting()); writer.startSession(atSourceTime: .zero)
+        // 静止した画面を30fpsで4.5秒。大は60コマごとにキーフレームを置く。
+        for index in 0..<135 {
+            while !input.isReadyForMoreMediaData {
+                if writer.status == .failed { throw try #require(writer.error) }
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            #expect(input.append(try sample(time: Double(index) / 30, width: 320, height: 240, noise: true).buffer))
+        }
+        input.markAsFinished(); await writer.finishWriting()
+        #expect(writer.status == .completed)
+        let bytes = try #require(try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int)
+        let asset = AVURLAsset(url: url)
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: try #require(try await asset.loadTracks(withMediaType: .video).first), outputSettings: nil)
+        reader.add(output); reader.startReading()
+        var keyFrames = 0
+        while let buffer = output.copyNextSampleBuffer() {
+            guard CMSampleBufferGetNumSamples(buffer) > 0 else { continue }
+            let attachments = CMSampleBufferGetSampleAttachmentsArray(buffer, createIfNecessary: false) as? [[CFString: Any]]
+            if !(attachments?.first?[kCMSampleAttachmentKey_NotSync] as? Bool ?? false) { keyFrames += 1 }
+        }
+        results[compression] = (bytes, keyFrames)
+    }
+    // 最大間隔はエンコーダーの追加のキーフレームを禁じないため、個数と容量は大との大小だけを見る。
+    let compact = try #require(results[.compact]), standard = try #require(results[.standard])
+    #expect(compact.keyFrames < standard.keyFrames)
+    #expect(compact.bytes < standard.bytes)
 }
 
 @Test func incompleteFramesAreIgnoredAndEmptyRecordingIsRemoved() async throws {
@@ -144,7 +218,7 @@ private func editableVideo(in directory: URL, width: Int = 64, height: Int = 48)
     // 録画用Writerのリアルタイム間引きを避け、全コマを確実に用意する。
     let source = dir.appendingPathComponent("dense.mp4")
     let writer = try AVAssetWriter(outputURL: source, fileType: .mp4)
-    let input = AVAssetWriterInput(mediaType: .video, outputSettings: VideoEncoding.settings(width: 64, height: 48, fps: 30))
+    let input = AVAssetWriterInput(mediaType: .video, outputSettings: VideoEncoding.settings(width: 64, height: 48, fps: 30, compression: .compact))
     input.expectsMediaDataInRealTime = false; writer.add(input)
     #expect(writer.startWriting()); writer.startSession(atSourceTime: .zero)
     for index in 0..<90 {

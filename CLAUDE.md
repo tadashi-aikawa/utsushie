@@ -15,7 +15,7 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
   - `FileNaming.swift`: ファイル名と前回範囲の永続化。
   - `RecentCaptures.swift`: 保存ファイルの除外・並べ替え、元画像の記憶に使う最新10件。
   - `CaptureLibrary.swift`: 日付の区切り、グリッドの移動、URLによる複数選択、削除の確認と選択の移り先、ドラッグの許可操作、項目の文字。
-  - `Video.swift`: 動画の偶数寸法・単一画面判定・録画状態・VFRの時間計算・録る音の種類・表示文言。
+  - `Video.swift`: 動画の偶数寸法・単一画面判定・録画状態・VFRの時間計算・録る音の種類・容量・表示文言。
   - `VideoEdit.swift`: 動画の区間・境界・選択判定、時刻の写し替え、再生スキップ、静止画の印、履歴、映像と音の書き出し計画。
   - `Annotation.swift`: 画像ピクセル座標の注釈モデル、余白の計算、引き出し線、連番、スタイル、ヒットテスト、変形と履歴。
   - `AnnotationSize.swift`: 注釈ごとの5段階の大きさ、配列別の物理キー、複数選択への変更。
@@ -39,7 +39,7 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
   - `RecordingService.swift`: SCStreamの構成、単一画面の領域録画、移動を追うウィンドウ録画。
   - `MP4Writer.swift`: 専用キューでcompleteフレームをH.264/MP4へ書く。末尾保持とfinalize。
   - `RecordingAudio.swift`: 音源ごとのAACトラック、無音の穴埋め、2トラックの混ぜ合わせ。
-  - `VideoEncoding.swift`: 録画と編集で共有するH.264の設定。
+  - `VideoEncoding.swift`: 録画と編集で共有するH.264の設定。容量の小・大で分ける。
   - `VideoEditorController.swift`: 動画の編集ウィンドウ、元の縮尺を保つ時間軸、再生と物理キー。
   - `VideoEditExporter.swift`: Readerの2コマ先読み、VFRの表示時間の交差、Writerへの時刻を詰めた再エンコード。
   - `VideoTransitionRenderer.swift`: PixelBufferPoolとCIContextによる早送りの印・暗転・ディゾルブの合成。
@@ -82,6 +82,22 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
   - 動画: 2xは60fps、1xは設定のfpsです。編集カードにも実効fpsを保持します。
   - 表示: Tabと音の間へ「1x R」か「2x R」の札を置き、2xだけ白い選択の面にします。
     - 寸法: 実効downscaleでその場で更新し、非Retinaの画面でも解像度の札を出します。
+
+- 動画の容量は`VideoCompression`の小・大で、範囲選択の修飾なしSがその回だけ大へ切り替えます。
+  - 小: 既定です。H.264の`kVTCompressionPropertyKey_Quality`による画質一定と、10秒・fps×10コマのキーフレーム間隔です。
+    - 理由: 画面録画の実測では、平均ビットレートの指定より画質一定のほうが静止した画面を小さく書けたためです。
+    - 実測: 602×504・7.9秒の画面録画で、大の418KBに対し0.65で88KB・0.75で138KBでした。
+    - 確認: `AVVideoQualityKey`のH.264での扱いは公開仕様にありません。`VideoEncoding.supportsQuality`がVideoToolboxのH.264の対応プロパティを一度だけ確かめ、無ければ小も大の設定で書きます。
+      - キー: 確かめたVideoToolboxのキーを圧縮設定へそのまま渡します。`AVVideoQualityKey`と同じ`Quality`の文字列です。
+    - 間隔: VFRでは静止中のコマが少ないので、コマ数と秒の両方で区切ります。
+    - 代償: ゼロ許容誤差のコマ取得は直前のキーフレームから復号します。2x全画面の実測では、平均64msから約125ms、最悪96msから約300msへ延びました。
+  - 大: 従来の平均ビットレート`幅×高さ×fps×0.12`とfps×2コマのキーフレーム間隔です。秒では区切らないため、VFRの静止中は2秒より長くなります。
+  - 外部: ffmpegやlibx264へ依存しません。
+    - 理由: 画質をそろえたlibx264との差は約1.3倍に収まり、後段の変換は撮ってすぐ貼るまでの待ちを足すためです。libx264の同梱はGPLの配布条件になります。
+  - 寿命: 開くたびに小へ戻し、設定ファイルへ書き戻しません。音のAと同じく画像では受けません。
+  - 経路: `effectiveVideoConfig`から録画のMP4Writerへ渡し、`SharedArtifact.videoCompression`で編集の書き出しへ引き継ぎます。
+    - 不明: 保存済みファイルから開いた動画は小で書き出します。
+  - 表示: 音の右へ「容量 小 S」か「容量 大 S」の札を置き、大だけ白い選択の面にします。
 
 - 要素選択はEで切り替える試作です。
   - 対象: 各アプリの公開AXに現れるウィンドウ内の要素です。DOM一致は保証せず、AXの有効化属性やJavaScriptは書き込みません。

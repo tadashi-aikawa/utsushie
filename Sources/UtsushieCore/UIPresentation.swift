@@ -31,6 +31,11 @@ public enum OverlayPresentation {
         guard output == .video else { return nil }
         return HUDItem(title: audio.title, key: "A", selected: audio != .none, recording: false, enabled: true)
     }
+    /// 画像では出さない。既定の小から外したときだけ選択の面にする。
+    public static func compressionItem(output: CaptureOutput, compression: VideoCompression) -> HUDItem? {
+        guard output == .video else { return nil }
+        return HUDItem(title: compression.title, key: "S", selected: compression != .compact, recording: false, enabled: true)
+    }
     /// AppKit座標。上端に置けない札は範囲内へ戻し、画面の左右へも収める。
     public static func dimensionLabel(selection: CGRect, screen: CGRect, size: CGSize) -> CGRect {
         let width = min(size.width, max(0, screen.width - 8))

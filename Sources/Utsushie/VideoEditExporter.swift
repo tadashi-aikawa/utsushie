@@ -4,7 +4,8 @@ import CoreImage
 import UtsushieCore
 
 enum VideoEditExporter {
-    static func export(source: URL, destination: URL, document: VideoEditDocument, fps: Int) async throws -> RecordedVideo {
+    static func export(source: URL, destination: URL, document: VideoEditDocument, fps: Int,
+                       compression: VideoCompression = .compact) async throws -> RecordedVideo {
         let asset = AVURLAsset(url: source)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else {
             throw CaptureError.unavailable("元の動画を読めません")
@@ -21,7 +22,8 @@ enum VideoEditExporter {
         }
         let job = try VideoExportJob(asset: asset, track: track, audio: audio, destination: destination,
                                      plan: plan, sourceDuration: document.duration,
-                                     width: Int(size.width), height: Int(size.height), fps: fps, transform: transform)
+                                     width: Int(size.width), height: Int(size.height), fps: fps, compression: compression,
+                                     transform: transform)
         return try await job.run()
     }
 }
@@ -114,7 +116,7 @@ private final class VideoExportJob: @unchecked Sendable {
     private var audioFinished: Bool
 
     init(asset: AVAsset, track: AVAssetTrack, audio: VideoEditAudio?, destination: URL, plan: VideoExportPlan, sourceDuration: Double,
-         width: Int, height: Int, fps: Int, transform: CGAffineTransform) throws {
+         width: Int, height: Int, fps: Int, compression: VideoCompression, transform: CGAffineTransform) throws {
         guard plan.duration > 0 else { throw CaptureError.unavailable("残す範囲がありません") }
         self.destination = destination; self.plan = plan; self.sourceDuration = sourceDuration
         self.width = width; self.height = height
@@ -126,7 +128,8 @@ private final class VideoExportJob: @unchecked Sendable {
         reader.add(output)
         writer = try AVAssetWriter(outputURL: destination, fileType: .mp4)
         writer.shouldOptimizeForNetworkUse = true; writer.movieTimeScale = 60000
-        input = AVAssetWriterInput(mediaType: .video, outputSettings: VideoEncoding.settings(width: width, height: height, fps: fps))
+        input = AVAssetWriterInput(mediaType: .video,
+                                   outputSettings: VideoEncoding.settings(width: width, height: height, fps: fps, compression: compression))
         input.expectsMediaDataInRealTime = false; input.transform = transform; input.mediaTimeScale = 60000
         guard writer.canAdd(input) else { throw CaptureError.unavailable("H.264の書き出し設定を作れません") }
         writer.add(input)

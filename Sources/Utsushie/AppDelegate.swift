@@ -323,7 +323,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 temporary = nil
                 let bytes = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
                 let artifact = SharedArtifact(url: url, kind: .mp4, width: result.width, height: result.height,
-                    byteCount: bytes, duration: result.duration, videoFPS: recordingConfig.video.fps, pixelScale: session.pixelScale)
+                    byteCount: bytes, duration: result.duration, videoFPS: recordingConfig.video.fps,
+                    videoCompression: recordingConfig.video.compression, pixelScale: session.pixelScale)
                 let copied = ClipboardWriter.copy(artifact, mode: recordingConfig.clipboard)
                 thumbnails.complete(cardID, artifact: artifact, image: result.image, copied: copied)
             } catch {

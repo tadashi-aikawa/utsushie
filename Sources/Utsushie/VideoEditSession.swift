@@ -9,10 +9,11 @@ final class VideoEditSession {
     var needsExport: Bool { document.kept != savedDocument.kept || document.transitions != savedDocument.transitions }
     private let url: URL
     private let fps: Int
+    private let compression: VideoCompression
     private let rememberDirectory: @MainActor (URL) -> Void
     var sourceURL: URL { originalURL ?? url }
     init(artifact: SharedArtifact, fps: Int, rememberDirectory: @escaping @MainActor (URL) -> Void = VideoEditStore.rememberDirectory) {
-        url = artifact.url; self.fps = artifact.videoFPS ?? fps
+        url = artifact.url; self.fps = artifact.videoFPS ?? fps; compression = artifact.videoCompression ?? .compact
         self.rememberDirectory = rememberDirectory
         document = VideoEditDocument(duration: artifact.duration ?? 0)
         savedDocument = document
@@ -25,7 +26,8 @@ final class VideoEditSession {
             try? FileManager.default.removeItem(at: rollback)
         }
         rememberDirectory(url.deletingLastPathComponent())
-        let result = try await VideoEditExporter.export(source: sourceURL, destination: temporary, document: document, fps: fps)
+        let result = try await VideoEditExporter.export(source: sourceURL, destination: temporary, document: document, fps: fps,
+                                                         compression: compression)
         let bytes = try FileManager.default.attributesOfItem(atPath: temporary.path)[.size] as? NSNumber
         var updated = artifact
         updated.duration = document.outputDuration; updated.byteCount = bytes?.intValue ?? 0

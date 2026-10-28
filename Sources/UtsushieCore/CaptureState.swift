@@ -13,6 +13,8 @@ public struct CaptureState: Sendable {
     public private(set) var audio: VideoAudio
     /// 出力ごとの既定を反転する。その回の選択を開き直すと戻る。
     public private(set) var resolutionInverted = false
+    /// 動画の容量。その回の選択を開き直すと小へ戻る。
+    public private(set) var compression: VideoCompression = .compact
     private var shiftPressed = false
     private var optionPressed = false
     public var cursor: CaptureCursor { target == .element ? .arrow : .crosshair }
@@ -32,9 +34,9 @@ public struct CaptureState: Sendable {
     public var highlightsWindow: Bool { !gesture.isDragging && !shiftPressed }
     public var highlightsDisplay: Bool { target != .element && !gesture.isDragging && shiftPressed }
     public init(audio: VideoAudio = .none) { self.audio = audio }
-    /// 動画のときだけ受けるキー。画像のAは他のアプリへ渡す。
+    /// 動画のときだけ受けるキー。画像のA・Sは他のアプリへ渡す。
     public func handles(_ code: UInt16) -> Bool {
-        [UInt16(53), 48, 8, 14, 15, 36, 76].contains(code) || code == 0 && output == .video
+        [UInt16(53), 48, 8, 14, 15, 36, 76].contains(code) || [UInt16(0), 1].contains(code) && output == .video
     }
     public func effectiveDownscale(config: UtsushieConfig) -> Bool {
         (output == .video ? config.video.downscale : config.downscale) != resolutionInverted
@@ -44,17 +46,22 @@ public struct CaptureState: Sendable {
         var result = defaults
         result.downscale = defaults.downscale != resolutionInverted
         result.fps = result.downscale ? defaults.fps : 60
+        result.compression = compression
         return result
     }
     /// 文字やIMEの変換結果に依存しない物理keyCodeで判断する。
     public mutating func key(_ code: UInt16, hasLast: Bool) -> CaptureAction {
-        // 音と解像度の切り替えは範囲の選び方を変えないため、ドラッグ中でも続ける。
+        // 音・解像度・容量の切り替えは範囲の選び方を変えないため、ドラッグ中でも続ける。
         if code == 15 {
             resolutionInverted.toggle()
             return .none
         }
         if code == 0 {
             if output == .video { audio = audio.next }
+            return .none
+        }
+        if code == 1 {
+            if output == .video { compression = compression.toggled }
             return .none
         }
         guard [UInt16(53), 48, 8, 14, 36, 76].contains(code) else { return .none }

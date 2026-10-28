@@ -157,8 +157,8 @@ final class OverlayController {
     }
     private func key(_ code: UInt16) {
         message = ""
-        // 音と解像度の切り替えは要素の候補や取得中の確認を保つ。
-        if code == 0 || code == 15 { _ = state.key(code, hasLast: last != nil); redraw(); return }
+        // 音・解像度・容量の切り替えは要素の候補や取得中の確認を保つ。
+        if [UInt16(0), 1, 15].contains(code) { _ = state.key(code, hasLast: last != nil); redraw(); return }
         elementClick = nil
         if state.target == .element, code == 36 || code == 76 {
             state.cancelGesture()
@@ -564,10 +564,12 @@ final class OverlayView: NSView {
             ToolbarDrawing.itemWidth(title: item.title, key: item.key, recording: item.recording, face: item.title == "やめる" ? .secondary : .tool)
         }
         let audio = OverlayPresentation.audioItem(output: controller.state.output, audio: controller.state.audio)
+        let compression = OverlayPresentation.compressionItem(output: controller.state.output, compression: controller.state.compression)
         let resolution = OverlayPresentation.resolutionItem(downscale: controller.state.effectiveDownscale(config: controller.config))
         let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: ToolbarDrawing.keyWidth("Tab"),
             resolutionWidth: ToolbarDrawing.itemWidth(title: resolution.title, key: resolution.key, recording: false, face: .tool),
-            audioWidth: audio.map { ToolbarDrawing.itemWidth(title: $0.title, key: $0.key, recording: false, face: .tool) })
+            audioWidth: audio.map { ToolbarDrawing.itemWidth(title: $0.title, key: $0.key, recording: false, face: .tool) },
+            compressionWidth: compression.map { ToolbarDrawing.itemWidth(title: $0.title, key: $0.key, recording: false, face: .tool) })
         let stripWidth = layout.width
         let factor = min(1, (visible.width - 24) / stripWidth)
         let hasError = !controller.message.isEmpty
@@ -588,6 +590,10 @@ final class OverlayView: NSView {
         }
         if let audio, let frame = layout.audio {
             ToolbarDrawing.item(title: audio.title, key: audio.key, in: frame, style: .tool, selected: audio.selected, recording: false, dimmed: false)
+        }
+        if let compression, let frame = layout.compression {
+            ToolbarDrawing.item(title: compression.title, key: compression.key, in: frame, style: .tool,
+                                selected: compression.selected, recording: false, dimmed: false)
         }
         for (index, item) in items.enumerated() {
             ToolbarDrawing.item(title: item.title, key: item.key, in: layout.items[index],
