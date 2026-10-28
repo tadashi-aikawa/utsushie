@@ -1,8 +1,91 @@
 import AppKit
 import ApplicationServices
+import os
 import Testing
 import UtsushieCore
 @testable import Utsushie
+
+/// 戻らないAX呼び出しが1回あっても、キューを作り直して以後の問い合わせを塞がない。
+@MainActor @Test func elementReaderRecoversFromStalledRead() async {
+    let gate = DispatchSemaphore(value: 0)
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let reader = AccessibilityElementReader(stallLimit: .milliseconds(100)) { query, _ in
+        if calls.withLock({ $0 += 1; return $0 }) == 1 { gate.wait() }
+        return ElementSelection(nodes: [CaptureElementNode(rect: CGRect(x: 0, y: 0, width: 10, height: 10), label: "ボタン")],
+                                point: query.point, visibleBounds: query.visibleBounds)
+    }
+    defer { gate.signal() }
+    let query = AccessibilityElementReader.Query(point: CGPoint(x: 5, y: 5), windowID: 1, processID: 1,
+                                                 windowBounds: CGRect(x: 0, y: 0, width: 100, height: 100))
+    #expect(await reader.selection(for: query).selected == nil)
+    #expect(await reader.selection(for: query).selected?.label == "ボタン")
+}
+
+/// 読み取りが戻らなくても、取り消した問い合わせは見張りを待たずに返る。
+@MainActor @Test func elementReaderReturnsCancelledReadImmediately() async throws {
+    let gate = DispatchSemaphore(value: 0)
+    let started = DispatchSemaphore(value: 0)
+    let reader = AccessibilityElementReader(stallLimit: .seconds(30)) { _, _ in
+        started.signal(); gate.wait()
+        return ElementSelection()
+    }
+    defer { gate.signal() }
+    let query = AccessibilityElementReader.Query(point: CGPoint(x: 5, y: 5), windowID: 1, processID: 1,
+                                                 windowBounds: CGRect(x: 0, y: 0, width: 100, height: 100))
+    let stalled = Task { await reader.selection(for: query) }
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global().async { started.wait(); continuation.resume() }
+    }
+    let clock = ContinuousClock()
+    let start = clock.now
+    stalled.cancel()
+    #expect(await stalled.value.selected == nil)
+    // 見張りの30秒より十分短ければよい。並列実行の混雑で揺れる数百msは許す。
+    #expect(start.duration(to: clock.now) < .seconds(5))
+}
+
+/// 時間切れにした要求は、見捨てたキューが後で動き出してもAXを読み始めない。
+@MainActor @Test func elementReaderSkipsTimedOutRequestOnAbandonedQueue() async throws {
+    let gate = DispatchSemaphore(value: 0)
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let readsAfterRelease = OSAllocatedUnfairLock(initialState: [Bool]())
+    let reader = AccessibilityElementReader(stallLimit: .milliseconds(100)) { _, request in
+        if calls.withLock({ $0 += 1; return $0 }) == 1 { gate.wait(); return ElementSelection() }
+        readsAfterRelease.withLock { $0.append(request.isCancelled) }
+        return ElementSelection()
+    }
+    let query = AccessibilityElementReader.Query(point: CGPoint(x: 5, y: 5), windowID: 1, processID: 1,
+                                                 windowBounds: CGRect(x: 0, y: 0, width: 100, height: 100))
+    async let first = reader.selection(for: query)
+    async let queued = reader.selection(for: query)
+    _ = await (first, queued)
+    gate.signal()
+    for _ in 0..<100 where readsAfterRelease.withLock({ $0.isEmpty }) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(readsAfterRelease.withLock { $0 } == [true])
+}
+
+/// 取り消した問い合わせの読み取りが戻らなくても、見張りがキューを作り直す。
+@MainActor @Test func elementReaderDetectsStallOfCancelledRead() async throws {
+    let gate = DispatchSemaphore(value: 0)
+    let calls = OSAllocatedUnfairLock(initialState: 0)
+    let reader = AccessibilityElementReader(stallLimit: .milliseconds(100)) { query, request in
+        if calls.withLock({ $0 += 1; return $0 }) == 1 { gate.wait() }
+        guard !request.isCancelled else { return ElementSelection() }
+        return ElementSelection(nodes: [CaptureElementNode(rect: CGRect(x: 0, y: 0, width: 10, height: 10), label: "ボタン")],
+                                point: query.point, visibleBounds: query.visibleBounds)
+    }
+    defer { gate.signal() }
+    let query = AccessibilityElementReader.Query(point: CGPoint(x: 5, y: 5), windowID: 1, processID: 1,
+                                                 windowBounds: CGRect(x: 0, y: 0, width: 100, height: 100))
+    let stalled = Task { await reader.selection(for: query) }
+    try await Task.sleep(for: .milliseconds(20))
+    stalled.cancel()
+    #expect(await stalled.value.selected == nil)
+    try await Task.sleep(for: .milliseconds(300))
+    #expect(await reader.selection(for: query).selected?.label == "ボタン")
+}
 
 /// Tests/Fixtures/NativeElements.swiftをコンパイルした実行ファイルを指定して検証する。
 @MainActor @Test func nativeAccessibilityElementProbe() async throws {
