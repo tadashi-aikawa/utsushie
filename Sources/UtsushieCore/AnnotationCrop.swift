@@ -70,13 +70,8 @@ extension AnnotationGeometry {
 
     /// 蛍光ペンが画像に見える所まで移動量を縮める。今見えていない線は制限しない。
     static func visibleHighlighterMovement(_ delta: CGPoint, highlighters: [Annotation], image: CGRect, style: AnnotationStyle) -> CGPoint {
-        // 跡は一度だけ作り、線を動かす代わりに画像を逆向きへずらして測る。
-        let traces = highlighters.filter { $0.tool == .highlighter && highlighterShows($0, in: image, style: style) }
-            .map { highlighterVisibleTrace($0, style: style) }
-        func shows(_ scale: Double) -> Bool {
-            let moved = image.offsetBy(dx: -delta.x * scale, dy: -delta.y * scale)
-            return traces.allSatisfy { $0.contains { convexPolygon($0, overlaps: moved) } }
-        }
+        let stays = highlightersStayVisible(highlighters, image: image, style: style)
+        func shows(_ scale: Double) -> Bool { stays(CGPoint(x: delta.x * scale, y: delta.y * scale)) }
         guard !shows(1) else { return delta }
         var low = 0.0, high = 1.0
         for _ in 0..<24 {
@@ -84,5 +79,16 @@ extension AnnotationGeometry {
             if shows(middle) { low = middle } else { high = middle }
         }
         return CGPoint(x: delta.x * low, y: delta.y * low)
+    }
+
+    /// 移動量を受け、今見えている蛍光ペンがその移動の後も見えるかを返す。今見えていない線は制限しない。
+    static func highlightersStayVisible(_ highlighters: [Annotation], image: CGRect, style: AnnotationStyle) -> (CGPoint) -> Bool {
+        // 跡は一度だけ作り、線を動かす代わりに画像を逆向きへずらして測る。
+        let traces = highlighters.filter { $0.tool == .highlighter && highlighterShows($0, in: image, style: style) }
+            .map { highlighterVisibleTrace($0, style: style) }
+        return { delta in
+            let moved = image.offsetBy(dx: -delta.x, dy: -delta.y)
+            return traces.allSatisfy { $0.contains { convexPolygon($0, overlaps: moved) } }
+        }
     }
 }

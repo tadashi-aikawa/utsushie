@@ -335,3 +335,61 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
     let overLine = Annotation(tool: .text, start: CGPoint(x: 80, y: 100), end: CGPoint(x: 120, y: 140), text: "札")
     #expect(AnnotationDocument(annotations: [overLine, label]).hit(at: CGPoint(x: 100, y: 120), style: style, tolerance: 7) == overLine.id)
 }
+
+@Test func annotationLeaderLineDragMovesLabelWithTarget() throws {
+    let image = CGSize(width: 960, height: 600)
+    let label = Annotation(tool: .text, start: CGPoint(x: 200, y: 100), end: CGPoint(x: 300, y: 140), text: "説明", leaderTarget: CGPoint(x: 20, y: 120))
+    let document = AnnotationDocument(annotations: [label])
+    let style = AnnotationStyle()
+    let line = CGPoint(x: 100, y: 120), body = CGPoint(x: 250, y: 120)
+    for selected: Set<UUID> in [[], [label.id]] {
+        #expect(document.interaction(at: line, selected: selected, tool: .selection, style: style, tolerance: 7) == .move(label.id, leader: true))
+        #expect(document.interaction(at: body, selected: selected, tool: .selection, style: style, tolerance: 7) == .move(label.id, leader: false))
+    }
+    #expect(document.interaction(at: line, selected: [], tool: .text, style: style, tolerance: 7) == .create)
+    let delta = CGPoint(x: 30, y: 40)
+    let whole = document.moving([label.id], by: delta, imageSize: image, grabbedLeader: true).annotations[0]
+    #expect(whole.start == CGPoint(x: 230, y: 140) && whole.leaderTarget == CGPoint(x: 50, y: 160))
+    let labelOnly = document.moving([label.id], by: delta, imageSize: image).annotations[0]
+    #expect(labelOnly.start == CGPoint(x: 230, y: 140) && labelOnly.leaderTarget == label.leaderTarget)
+    // 指す点が画像の端に着いたら、札も同じ所で止めて形を保つ。
+    let edge = document.moving([label.id], by: CGPoint(x: -50, y: 0), imageSize: image, grabbedLeader: true).annotations[0]
+    #expect(edge.leaderTarget == CGPoint(x: 0, y: 120) && edge.start == CGPoint(x: 180, y: 100))
+    // 余白の札が画像へ押し戻されても、指す点は札と同じ量だけ動く。
+    let small = CGSize(width: 400, height: 300)
+    let outside = Annotation(tool: .text, start: CGPoint(x: -100, y: 100), end: CGPoint(x: -20, y: 140), text: "外", leaderTarget: CGPoint(x: 100, y: 120))
+    let mosaic = Annotation(tool: .mosaic, start: CGPoint(x: 200, y: 200), end: CGPoint(x: 240, y: 240))
+    let margin = AnnotationDocument(annotations: [outside, mosaic])
+    for (ids, grabbed) in [([outside.id], true), ([outside.id, mosaic.id], false)] as [(Set<UUID>, Bool)] {
+        let back = margin.moving(ids, by: CGPoint(x: 60, y: 0), imageSize: small, grabbedLeader: grabbed).annotations[0]
+        #expect(back.start == CGPoint(x: 0, y: 100) && back.leaderTarget == CGPoint(x: 200, y: 120))
+    }
+    // 押し戻すと指す点が画像から出る形は、札を余白に残したまま手前で止める。
+    var far = outside; far.leaderTarget = CGPoint(x: 330, y: 120)
+    let farDocument = AnnotationDocument(annotations: [far, mosaic])
+    for (ids, grabbed) in [([far.id], true), ([far.id, mosaic.id], false)] as [(Set<UUID>, Bool)] {
+        let stopped = farDocument.moving(ids, by: CGPoint(x: 60, y: 0), imageSize: small, grabbedLeader: grabbed).annotations[0]
+        let target = try #require(stopped.leaderTarget)
+        #expect(stopped.start.x < -39.9 && stopped.start.x > -40.1)
+        #expect(abs((target.x - stopped.start.x) - 430) < 1e-6 && target.y == 120)
+    }
+    // 縮めた移動でも、今見えている蛍光ペンを画像から消さない。
+    let near = Annotation(tool: .text, start: CGPoint(x: -120, y: 100), end: CGPoint(x: -40, y: 140), text: "外", leaderTarget: CGPoint(x: 300, y: 120))
+    let pen = Annotation(tool: .highlighter, start: CGPoint(x: 350, y: 100),
+                         points: [CGPoint(x: 350, y: 100), CGPoint(x: 350, y: 1000), CGPoint(x: -100, y: 1000), CGPoint(x: -100, y: 100)])
+    let withPen = AnnotationDocument(annotations: [near, pen])
+    let penMoved = withPen.moving([near.id, pen.id], by: CGPoint(x: 100, y: 0), imageSize: small)
+    let nearMoved = penMoved.annotations[0], nearTarget = try #require(penMoved.annotations[0].leaderTarget)
+    #expect(AnnotationGeometry.highlighterShows(penMoved.annotations[1], in: CGRect(origin: .zero, size: small), style: penMoved.style()))
+    #expect(abs((nearTarget.x - nearMoved.start.x) - 420) < 1e-6)
+    // 札の中心が縁を跨ぐと収まる倍率が飛び飛びになる。後半の収まる区間まで探す。
+    let a = Annotation(tool: .text, start: CGPoint(x: 100, y: -184), end: CGPoint(x: 180, y: -104), text: "A", leaderTarget: CGPoint(x: 200, y: 120))
+    let b = Annotation(tool: .text, start: CGPoint(x: 350, y: -120), end: CGPoint(x: 430, y: -40), text: "B", leaderTarget: CGPoint(x: 10, y: 50))
+    let gapped = AnnotationDocument(annotations: [a, b]).moving([a.id, b.id], by: CGPoint(x: 20, y: 180), imageSize: small)
+    for (original, moved) in zip([a, b], gapped.annotations) {
+        let target = try #require(moved.leaderTarget), before = try #require(original.leaderTarget)
+        #expect(abs((target.x - moved.start.x) - (before.x - original.start.x)) < 1e-6)
+        #expect(abs((target.y - moved.start.y) - (before.y - original.start.y)) < 1e-6)
+    }
+    #expect(gapped.annotations[1].leaderTarget!.y - 50 > 180 * 0.7)
+}

@@ -51,7 +51,8 @@ import Testing
     let moved = doc.moving(ids, by: CGPoint(x: -40, y: 20), imageSize: CGSize(width: 400, height: 300))
     #expect(moved.annotations[0].start == CGPoint(x: 0, y: 30))
     #expect(moved.annotations[1].start == CGPoint(x: 90, y: 100))
-    #expect(moved.annotations[1].leaderTarget == label.leaderTarget)
+    // 複数選択では指す点も同じ量だけ動く。モザイクが端で止めた分、全体の移動量も止まる。
+    #expect(moved.annotations[1].leaderTarget == CGPoint(x: 40, y: 70))
     var history = AnnotationHistory(doc)
     history.commit(moved); history.undo()
     #expect(history.document == doc)

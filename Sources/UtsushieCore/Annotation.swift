@@ -209,11 +209,13 @@ public struct Annotation: Equatable, Sendable, Identifiable {
                       width: (xs.max() ?? start.x) - (xs.min() ?? start.x),
                       height: (ys.max() ?? start.y) - (ys.min() ?? start.y))
     }
-    public func translated(by delta: CGPoint) -> Annotation {
+    /// 札だけの移動では指す点を残す。線や複数選択で動かすときだけ指す点も動かす。
+    public func translated(by delta: CGPoint, movingLeader: Bool = false) -> Annotation {
         var result = self
         result.start.x += delta.x; result.start.y += delta.y
         result.end.x += delta.x; result.end.y += delta.y
         result.points = points.map { CGPoint(x: $0.x + delta.x, y: $0.y + delta.y) }
+        if movingLeader { result.leaderTarget = leaderTarget.map { CGPoint(x: $0.x + delta.x, y: $0.y + delta.y) } }
         return result
     }
 }
@@ -295,6 +297,13 @@ public struct AnnotationDocument: Equatable, Sendable {
         let rect = bounds(of: annotation, style: style)
         return AnnotationGeometry.leaderSegment(for: annotation, radius: annotation.tool == .number ? rect.height / 2 : style.radius, bounds: rect)
     }
+    /// 札の上は札として扱う。線の途中だけを、指す点ごと動かす場所にする。
+    public func hitsLeaderLine(_ annotation: Annotation, at point: CGPoint, style: AnnotationStyle, tolerance: Double) -> Bool {
+        let style = style.forAnnotation(annotation)
+        guard let segment = leaderSegment(for: annotation, style: style),
+              !bounds(of: annotation, style: style).insetBy(dx: -style.edge, dy: -style.edge).contains(point) else { return false }
+        return AnnotationGeometry.distance(point, toSegmentFrom: segment.target, to: segment.labelEdge) <= max(tolerance, style.lineWidth / 2 + style.edge)
+    }
     public func hit(at point: CGPoint, style: AnnotationStyle, tolerance: Double, includeAreaInterior: Bool = false) -> UUID? {
         // 札を線より先に判定する。別の札の上を通る線が入力を奪わない。
         if let label = ordered.reversed().first(where: { annotation in
@@ -304,7 +313,7 @@ public struct AnnotationDocument: Equatable, Sendable {
         if let leader = ordered.reversed().first(where: { annotation in
             let style = style.forAnnotation(annotation)
             guard let segment = leaderSegment(for: annotation, style: style) else { return false }
-            return AnnotationGeometry.distance(point, toSegmentFrom: segment.target, to: segment.labelEdge) <= max(tolerance, style.lineWidth / 2 + style.edge)
+            return hitsLeaderLine(annotation, at: point, style: style, tolerance: tolerance)
                 || hypot(point.x - segment.target.x, point.y - segment.target.y) <= max(tolerance, style.leaderDotDiameter / 2 + style.edge)
         }) { return leader.id }
         return ordered.reversed().first { annotation in
@@ -348,7 +357,8 @@ public struct AnnotationDocument: Equatable, Sendable {
                     return .resize(id, handle)
                 }
             }
-            return tool == .selection || selected.count > 1 ? .move(id) : .create
+            guard tool == .selection || selected.count > 1 else { return .create }
+            return .move(id, leader: hitsLeaderLine(annotation, at: point, style: style, tolerance: tolerance))
         }
         return tool == .selection ? .none : .create
     }
@@ -396,7 +406,8 @@ public enum AnnotationResizeHandle: Equatable, Sendable {
     case topLeft, topRight, bottomRight, bottomLeft, top, right, bottom, left, arrowStart, arrowEnd, leaderTarget
 }
 public enum AnnotationInteraction: Equatable, Sendable {
-    case none, create, move(UUID), resize(UUID, AnnotationResizeHandle)
+    /// leaderは引き出し線の途中をつかんだこと。札と指す点をまとめて動かす。
+    case none, create, move(UUID, leader: Bool = false), resize(UUID, AnnotationResizeHandle)
     public func cursor(tool: AnnotationTool) -> AnnotationCursor {
         switch self {
         case .none: return .arrow

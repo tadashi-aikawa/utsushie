@@ -402,7 +402,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private enum Gesture {
         case create(Annotation)
         case label(Annotation)
-        case move(Set<UUID>, CGPoint, UUID)
+        case move(Set<UUID>, CGPoint, UUID, leader: Bool)
         case resize(Annotation, AnnotationResizeHandle)
         case marquee(CGPoint, Set<UUID>)
         case pan(AnnotationViewport, CGPoint)
@@ -640,7 +640,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         // 引き出し線を引いている間は札が描かれる。カーソルの見本を重ねない。
         case .label where preview != nil: return .crosshair
         case .create, .label: interaction = .create
-        case .move(_, _, let id): interaction = .move(id)
+        case .move(_, _, let id, let leader): interaction = .move(id, leader: leader)
         case .resize(let annotation, let handle): interaction = .resize(annotation.id, handle)
         case .pan, .marquee, .crop: return nil
         case nil: interaction = document.interaction(at: cursorPoint, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
@@ -702,13 +702,13 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         case .resize(let id, let handle):
             guard let annotation = document.annotations.first(where: { $0.id == id }) else { return }
             selection = [id]; frozenImageRect = imageRect; gesture = .resize(annotation, handle); changed(); return
-        case .move(let id):
+        case .move(let id, let leader):
             guard let annotation = document.annotations.first(where: { $0.id == id }) else { return }
             if !selection.contains(id) {
                 if toggleOnClick != nil { selection.insert(id) } else { selection = [id] }
             }
             if selection.count == 1, event.clickCount == 2, annotation.tool == .text { beginText(annotation); return }
-            frozenImageRect = imageRect; gesture = .move(selection, p, id); changed(); return
+            frozenImageRect = imageRect; gesture = .move(selection, p, id, leader: leader); changed(); return
         case .none:
             let previous = event.modifierFlags.contains(.shift) ? selection : []
             selection = previous; frozenImageRect = imageRect; gesture = .marquee(p, previous)
@@ -774,10 +774,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
                 if straight { annotation.points = [initial.start, annotation.end] }
                 else { annotation.points.append(annotation.end) }
             }
-        case .move(let ids, let anchor, _):
+        case .move(let ids, let anchor, _, let leader):
             var delta = CGPoint(x: p.x - anchor.x, y: p.y - anchor.y)
             if shift { delta = AnnotationGeometry.axisConstrained(delta) }
-            preview = history.document.moving(ids, by: delta, imageSize: imageSize)
+            preview = history.document.moving(ids, by: delta, imageSize: imageSize, grabbedLeader: leader)
             changed(); return
         case .resize(let initial, let handle):
             annotation = AnnotationGeometry.resized(initial, handle: handle, to: p, shift: shift, imageSize: imageSize, scale: styleScale)
@@ -812,7 +812,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             selection = previous.union(history.document.intersecting(rect, style: style))
             cancelGesture(); changed(); return
         }
-        if case .move(_, let anchor, let id) = gesture, preview == nil,
+        if case .move(_, let anchor, let id, _) = gesture, preview == nil,
            hypot(point(event).x - anchor.x, point(event).y - anchor.y) * displayScale <= 4 {
             selection = [id]
         }

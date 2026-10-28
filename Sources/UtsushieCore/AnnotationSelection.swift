@@ -60,27 +60,61 @@ extension AnnotationDocument {
     }
 
     /// 全体へ同じ移動量を適用し、画像内に留める道具との相対位置も保つ。
-    public func moving(_ ids: Set<UUID>, by delta: CGPoint, imageSize: CGSize) -> AnnotationDocument {
+    /// 指す点は、引き出し線をつかんだときか複数選択のときだけ札と一緒に動かす。
+    public func moving(_ ids: Set<UUID>, by delta: CGPoint, imageSize: CGSize, grabbedLeader: Bool = false) -> AnnotationDocument {
         let style = self.style()
+        let movingLeader = grabbedLeader || ids.count > 1
         var movement = delta
-        for annotation in annotations where ids.contains(annotation.id) {
-            let proposed = annotation.translated(by: delta)
-            let placed = AnnotationGeometry.placed(proposed, bounds: bounds(of: proposed, style: style), imageSize: imageSize, scale: scale)
-            let allowed = CGPoint(x: placed.start.x - annotation.start.x, y: placed.start.y - annotation.start.y)
+        func limit(_ from: CGPoint, _ to: CGPoint) {
+            let allowed = CGPoint(x: to.x - from.x, y: to.y - from.y)
             if delta.x > 0 { movement.x = min(movement.x, max(0, allowed.x)) }
             if delta.x < 0 { movement.x = max(movement.x, min(0, allowed.x)) }
             if delta.y > 0 { movement.y = min(movement.y, max(0, allowed.y)) }
             if delta.y < 0 { movement.y = max(movement.y, min(0, allowed.y)) }
         }
-        // トリミングで画像より大きくなった蛍光ペンは、外接矩形が重なっても線が画像から外れ得る。
-        movement = AnnotationGeometry.visibleHighlighterMovement(movement, highlighters: annotations.filter { ids.contains($0.id) },
-                                                                 image: CGRect(origin: .zero, size: imageSize), style: style)
-        var result = self
-        result.annotations = annotations.map { annotation in
-            guard ids.contains(annotation.id) else { return annotation }
-            let moved = annotation.translated(by: movement)
-            return AnnotationGeometry.placed(moved, bounds: bounds(of: moved, style: style), imageSize: imageSize, scale: scale)
+        for annotation in annotations where ids.contains(annotation.id) {
+            let proposed = annotation.translated(by: delta, movingLeader: movingLeader)
+            let placed = AnnotationGeometry.placed(proposed, bounds: bounds(of: proposed, style: style), imageSize: imageSize, scale: scale)
+            limit(annotation.start, placed.start)
+            // 指す点は画像の中に留まる。札との相対位置を保つため、端で全体を止める。
+            if movingLeader, let target = annotation.leaderTarget, let placedTarget = placed.leaderTarget { limit(target, placedTarget) }
         }
+        // トリミングで画像より大きくなった蛍光ペンは、外接矩形が重なっても線が画像から外れ得る。
+        let selected = annotations.filter { ids.contains($0.id) }
+        movement = AnnotationGeometry.visibleHighlighterMovement(movement, highlighters: selected,
+                                                                 image: CGRect(origin: .zero, size: imageSize), style: style)
+        let highlightersShow = AnnotationGeometry.highlightersStayVisible(selected, image: CGRect(origin: .zero, size: imageSize), style: style)
+        let image = CGRect(origin: .zero, size: imageSize).insetBy(dx: -1e-6, dy: -1e-6)
+        func placing(_ movement: CGPoint) -> [Annotation]? {
+            guard highlightersShow(movement) else { return nil }
+            var fits = true
+            let placedAnnotations = annotations.map { annotation in
+                guard ids.contains(annotation.id) else { return annotation }
+                let moved = annotation.translated(by: movement)
+                var placed = AnnotationGeometry.placed(moved, bounds: bounds(of: moved, style: style), imageSize: imageSize, scale: scale)
+                // 余白の札は中心が画像へ入ると押し戻される。指す点も札が実際に動いた量だけ動かす。
+                if movingLeader, let target = annotation.leaderTarget {
+                    let followed = CGPoint(x: target.x + placed.start.x - annotation.start.x, y: target.y + placed.start.y - annotation.start.y)
+                    fits = fits && AnnotationGeometry.contains(followed, in: image)
+                    placed.leaderTarget = AnnotationGeometry.clamped(followed, to: imageSize)
+                }
+                return placed
+            }
+            return fits ? placedAnnotations : nil
+        }
+        var result = self
+        if let placed = placing(movement) { result.annotations = placed; return result }
+        // 押し戻した分で指す点が画像から出るなら、収まる所まで全体の移動を縮める。
+        // 札の中心が画像の縁を跨ぐと押し戻しの有無が変わり、収まる倍率は1つの区間にならない。刻んで探してから詰める。
+        func scaled(_ t: Double) -> CGPoint { CGPoint(x: movement.x * t, y: movement.y * t) }
+        let steps = 64
+        guard let step = (0..<steps).reversed().first(where: { placing(scaled(Double($0) / Double(steps))) != nil }) else { return self }
+        var low = Double(step) / Double(steps), high = Double(step + 1) / Double(steps)
+        for _ in 0..<24 {
+            let t = (low + high) / 2
+            if placing(scaled(t)) != nil { low = t } else { high = t }
+        }
+        result.annotations = placing(scaled(low)) ?? annotations
         return result
     }
 }

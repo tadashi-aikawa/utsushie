@@ -280,6 +280,37 @@ private func annotationMouseEvent(_ canvas: AnnotationCanvas, type: NSEvent.Even
     #expect(canvas.document.annotations.first?.rect == CGRect(x: 20, y: 10, width: 120, height: 70))
 }
 
+@MainActor @Test func annotationLeaderDragMovesTargetOnlyFromLineOrMultipleSelection() throws {
+    let first = Annotation(tool: .number, start: CGPoint(x: 100, y: 30), leaderTarget: CGPoint(x: 20, y: 30))
+    let second = Annotation(tool: .number, start: CGPoint(x: 100, y: 70), leaderTarget: CGPoint(x: 20, y: 70))
+    func drag(_ canvas: AnnotationCanvas, from start: CGPoint, by delta: CGPoint, flags: NSEvent.ModifierFlags = []) throws {
+        let end = CGPoint(x: start.x + delta.x, y: start.y + delta.y)
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: start, flags: flags))
+        canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: end, flags: flags))
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: end, flags: flags))
+    }
+    let delta = CGPoint(x: 10, y: 5)
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [first, second]), tool: .selection)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    // 札: 指す点は残る。
+    try drag(canvas, from: first.start, by: delta)
+    #expect(canvas.document.annotations[0].start == CGPoint(x: 110, y: 35) && canvas.document.annotations[0].leaderTarget == first.leaderTarget)
+    // 線の途中: 札と指す点がまとめて動き、選択はその1件。
+    try drag(canvas, from: CGPoint(x: 50, y: 70), by: delta)
+    #expect(canvas.selection == [second.id])
+    #expect(canvas.document.annotations[1].start == CGPoint(x: 110, y: 75) && canvas.document.annotations[1].leaderTarget == CGPoint(x: 30, y: 75))
+    // 複数選択: 札をつかんでも全件の指す点が動く。1回の取り消しで戻る。
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 110, y: 35), flags: .shift))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 110, y: 35), flags: .shift))
+    #expect(canvas.selection == [first.id, second.id])
+    let before = canvas.document
+    try drag(canvas, from: CGPoint(x: 110, y: 35), by: delta)
+    #expect(canvas.document.annotations.map(\.leaderTarget) == [CGPoint(x: 30, y: 35), CGPoint(x: 40, y: 80)])
+    #expect(canvas.document.annotations.map(\.start) == [CGPoint(x: 120, y: 40), CGPoint(x: 120, y: 80)])
+    canvas.undoAnnotation()
+    #expect(canvas.document == before)
+}
+
 @MainActor
 private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags: NSEvent.ModifierFlags = [], repeating: Bool = false) throws -> NSEvent {
     try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
