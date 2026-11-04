@@ -21,7 +21,7 @@ enum CaptureLibraryFileActions {
     static func clipboardEntries(_ urls: [URL], mode: ClipboardMode) throws -> [ClipboardEntry] {
         try urls.map { url in
             let kind: ArtifactKind = url.pathExtension.lowercased() == "webp" ? .webP : .mp4
-            let data = kind == .webP && mode != .file ? try Data(contentsOf: url) : nil
+            let data = kind == .webP && mode.format != .file ? try Data(contentsOf: url) : nil
             return ClipboardEntry(artifact: SharedArtifact(url: url, kind: kind, width: 0, height: 0,
                 byteCount: data?.count ?? 0), data: data)
         }

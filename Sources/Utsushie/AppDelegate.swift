@@ -325,7 +325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let artifact = SharedArtifact(url: url, kind: .mp4, width: result.width, height: result.height,
                     byteCount: bytes, duration: result.duration, videoFPS: recordingConfig.video.fps,
                     videoCompression: recordingConfig.video.compression, pixelScale: session.pixelScale)
-                let copied = ClipboardWriter.copy(artifact, mode: recordingConfig.clipboard)
+                let copied = recordingConfig.clipboard.copiesAutomatically && ClipboardWriter.copy(artifact, mode: recordingConfig.clipboard)
                 thumbnails.complete(cardID, artifact: artifact, image: result.image, copied: copied)
             } catch {
                 if let temporary { try? FileManager.default.removeItem(at: temporary) }
@@ -364,7 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }.value
                 let artifact = SharedArtifact(url: url, kind: .webP, width: image.width, height: image.height, byteCount: data.count,
                     pixelScale: captured.scale)
-                let copied = ClipboardWriter.copy(artifact, data: data, mode: snapshot.clipboard)
+                let copied = snapshot.clipboard.copiesAutomatically && ClipboardWriter.copy(artifact, data: data, mode: snapshot.clipboard)
                 if remember { persistLast(request.rect) }
                 thumbnails.setSuspended(false)
                 thumbnails.add(artifact, image: image, copied: copied, seconds: snapshot.thumbnailSeconds, screen: screen)

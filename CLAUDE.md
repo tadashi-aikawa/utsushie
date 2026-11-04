@@ -669,6 +669,10 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
   - 注意: NSImageをpasteboardへ渡すとPNG/TIFFなどが追加されます。
 - 動画は設定によらずファイルURLだけを載せます。
   - 理由: MP4のバイト列をクリップボードへ載せても対応アプリが少なく、メモリを消費します。
+- `[clipboard] mode = "none"`は、撮影直後・注釈の完了・動画の完了・動画の静止画で載せません。
+  - 判定: `ClipboardMode.copiesAutomatically`です。カードは「保存のみ」にします。
+  - 失敗時の復元: コピーを成功扱いで省くので、注釈と動画の置換を戻しません。
+  - 例外: 一覧の⌘Cとドラッグは自分で選ぶ操作なので載せます。形式は`ClipboardMode.format`の既定のbothです。
 - SCStreamとAVAssetWriterの可変状態は専用のシリアルキューで扱います。
   - 注意: SwiftのSendableを付けるだけで任意スレッドから操作してよい訳ではありません。
 - complete以外のSCStreamフレームは書きません。

@@ -1,7 +1,13 @@
 import Foundation
 import TOMLKit
 
-public enum ClipboardMode: String, Sendable, CaseIterable { case both, file, data }
+public enum ClipboardMode: String, Sendable, CaseIterable {
+    case both, file, data, none
+    /// 撮影・編集の完了で載せるか。noneでも一覧の⌘Cとドラッグは自分で選ぶ操作なので載せる。
+    public var copiesAutomatically: Bool { self != .none }
+    /// 実際に載せる形式。noneで自分から載せる操作は既定のbothにする。
+    public var format: ClipboardMode { self == .none ? .both : self }
+}
 public struct PrivacyConfig: Equatable, Sendable {
     public var ai = false
     public var claude = ""
@@ -194,7 +200,7 @@ public enum ConfigLoader {
     audio = "none" # none / system / mic / both。範囲選択中のAでその回だけ切り替え
 
     [clipboard]
-    mode = "both" # both / file / data
+    mode = "both" # both / file / data / none。noneは撮影と編集の完了で載せない
 
     [thumbnail]
     seconds = 5 # 0.1〜300。ホバー中は停止

@@ -50,16 +50,18 @@ final class VideoEditSession {
     }
     /// 静止画を先に用意し、動画とコピーまで成功した後だけカードへ公開する。
     func finish(artifact: SharedArtifact, config: UtsushieConfig, copy: ([ClipboardEntry]) -> Bool) async throws -> Result {
+        // noneはコピーを成功扱いで省き、失敗時の復元にも入らない。
+        func copyIfNeeded(_ entries: [ClipboardEntry]) -> Bool { config.clipboard.copiesAutomatically ? copy(entries) : true }
         let stills = try await VideoStillExporter.save(source: sourceURL, marks: document.stills,
             directory: url.deletingLastPathComponent(), quality: config.quality, lossless: config.lossless, pixelScale: artifact.pixelScale)
         do {
             if needsExport {
                 let (video, image) = try await save(artifact: artifact) { updated in
-                    copy(stills.isEmpty ? [ClipboardEntry(artifact: updated)] : stills.map(\.clipboardEntry))
+                    copyIfNeeded(stills.isEmpty ? [ClipboardEntry(artifact: updated)] : stills.map(\.clipboardEntry))
                 }
                 return Result(video: video, image: image, stills: stills)
             }
-            guard copy(stills.isEmpty ? [ClipboardEntry(artifact: artifact)] : stills.map(\.clipboardEntry)) else {
+            guard copyIfNeeded(stills.isEmpty ? [ClipboardEntry(artifact: artifact)] : stills.map(\.clipboardEntry)) else {
                 throw CaptureError.unavailable("クリップボードへコピーできませんでした")
             }
             return Result(video: artifact, image: nil, stills: stills)

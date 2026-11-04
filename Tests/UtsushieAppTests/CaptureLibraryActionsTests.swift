@@ -61,10 +61,12 @@ func libraryCopiesAllImagesAndVideosInDisplayOrderWithoutGeneralPasteboard(_ mod
     let items = try #require(board.pasteboardItems)
     #expect(items.count == 3)
     for index in [0, 2] {
-        let expected: Set<NSPasteboard.PasteboardType> = mode == .file ? [.fileURL]
-            : mode == .data ? [.init("org.webmproject.webp")] : [.fileURL, .init("org.webmproject.webp")]
+        // noneでも一覧の⌘Cは自分で選ぶ操作なので、既定のbothで載せる。
+        let format = mode.format
+        let expected: Set<NSPasteboard.PasteboardType> = format == .file ? [.fileURL]
+            : format == .data ? [.init("org.webmproject.webp")] : [.fileURL, .init("org.webmproject.webp")]
         #expect(Set(items[index].types) == expected)
-        if mode != .file { #expect(items[index].data(forType: .init("org.webmproject.webp")) == Data([UInt8(index + 1)])) }
+        if format != .file { #expect(items[index].data(forType: .init("org.webmproject.webp")) == Data([UInt8(index + 1)])) }
     }
     #expect(items[1].types == [.fileURL] && items[1].string(forType: .fileURL) == urls[1].absoluteString)
 }

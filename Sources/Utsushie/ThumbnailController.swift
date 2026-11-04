@@ -40,7 +40,7 @@ final class ThumbnailController {
             rememberImage(card)
         }
         card.annotationConfig = { [weak self] in self?.annotationConfig() ?? UtsushieConfig() }
-        card.onStills = { [weak self, weak card] stills in
+        card.onStills = { [weak self, weak card] stills, copied in
             guard let self, let card else { return }
             for still in stills {
                 if card.libraryEditing {
@@ -48,7 +48,7 @@ final class ThumbnailController {
                     if let files = try? RecentCaptureStore.files(in: still.artifact.url.deletingLastPathComponent()) {
                         recentImages.remember(state, at: still.artifact.url, among: files)
                     }
-                } else { self.add(still.artifact, image: still.image, copied: true, seconds: seconds, screen: card.screen) }
+                } else { self.add(still.artifact, image: still.image, copied: copied, seconds: seconds, screen: card.screen) }
             }
             if !stills.isEmpty { onArtifactsChange?() }
         }
@@ -198,7 +198,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     var screen: NSScreen?
     var onClose: (() -> Void)?
     var onRequestKeys: (() -> Void)?
-    var onStills: (([VideoStillArtifact]) -> Void)?
+    var onStills: (([VideoStillArtifact], Bool) -> Void)?
     var onEditingChange: ((Bool) -> Void)?
     var onArtifactChange: (() -> Void)?
     var onExportStatus: ((String?) -> Void)?
@@ -382,7 +382,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             let updated = try AnnotationSave.commit(data: data, artifact: self.artifact, mode: config.clipboard,
                 imageSize: CGSize(width: image.width, height: image.height), copy: self.copyImage)
             imageState.history = controller.canvas.history
-            self.complete(artifact: updated, image: image, copied: true)
+            self.complete(artifact: updated, image: image, copied: config.clipboard.copiesAutomatically)
         }
         controller.onClose = { [weak self] in
             guard let self else { return }
@@ -422,14 +422,15 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
                     let result = try await session.finish(artifact: artifact, config: config) {
                         copyEntries($0, config.clipboard)
                     }
+                    let copied = config.clipboard.copiesAutomatically
                     if let image = result.image {
-                        complete(artifact: result.video, image: image, copied: result.stills.isEmpty)
+                        complete(artifact: result.video, image: image, copied: copied && result.stills.isEmpty)
                     } else {
-                        finalizing = false; view.copied = result.stills.isEmpty
+                        finalizing = false; view.copied = copied && result.stills.isEmpty
                         view.refreshControls(); view.needsDisplay = true; resumeTimer()
                         onArtifactChange?()
                     }
-                    onStills?(result.stills)
+                    onStills?(result.stills, copied)
                     onExportStatus?(nil)
                     libraryEditing = false
                 } catch {

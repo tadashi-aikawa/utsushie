@@ -66,6 +66,7 @@ enum ClipboardWriter {
     /// NSPasteboardItemだけを書き、NSImage由来のTIFF/PNG表現を載せない。
     static func item(for artifact: SharedArtifact, data: Data? = nil, mode: ClipboardMode) -> NSPasteboardItem {
         let item = NSPasteboardItem()
+        let mode = mode.format
         // 動画はmodeによらずファイルURLのみ。MP4全体をメモリへ読み込まない。
         if artifact.kind == .mp4 || mode == .both || mode == .file { item.setString(artifact.url.absoluteString, forType: .fileURL) }
         if artifact.kind == .webP, mode == .both || mode == .data, let data { item.setData(data, forType: artifact.kind.pasteboardType) }

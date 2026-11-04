@@ -57,7 +57,8 @@ func clipboardContainsOnlyRequestedWebPTypes(_ mode: ClipboardMode) {
     let item = ClipboardWriter.item(for: artifact, data: Data([1]), mode: mode)
     let expected: Set<NSPasteboard.PasteboardType>
     switch mode {
-    case .both: expected = [.fileURL, .init("org.webmproject.webp")]
+    // noneは一覧の⌘Cのように自分で選んだコピーで呼ばれ、既定のbothで載せる。
+    case .both, .none: expected = [.fileURL, .init("org.webmproject.webp")]
     case .file: expected = [.fileURL]
     case .data: expected = [.init("org.webmproject.webp")]
     }

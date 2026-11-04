@@ -488,14 +488,35 @@ func seekingDuringTransitionPreviewCancelsAnimationAndDoesNotResumePlayback(_ ki
         let items = try #require(pasteboard.pasteboardItems)
         #expect(items.count == 2)
         for (item, still) in zip(items, result.stills) {
-            let expected: Set<NSPasteboard.PasteboardType> = mode == .file ? [.fileURL] : mode == .data ? [ArtifactKind.webP.pasteboardType] : [.fileURL, ArtifactKind.webP.pasteboardType]
+            let format = mode.format
+            let expected: Set<NSPasteboard.PasteboardType> = format == .file ? [.fileURL] : format == .data ? [ArtifactKind.webP.pasteboardType] : [.fileURL, ArtifactKind.webP.pasteboardType]
             #expect(Set(item.types) == expected)
-            if mode != .data { #expect(item.string(forType: .fileURL) == still.artifact.url.absoluteString) }
-            if mode != .file { #expect(item.data(forType: ArtifactKind.webP.pasteboardType) == still.data) }
+            if format != .data { #expect(item.string(forType: .fileURL) == still.artifact.url.absoluteString) }
+            if format != .file { #expect(item.data(forType: ArtifactKind.webP.pasteboardType) == still.data) }
         }
     }
     #expect(!ClipboardWriter.copy([], mode: .both, to: pasteboard))
     #expect(pasteboard.pasteboardItems?.count == 2)
+}
+
+@MainActor @Test func videoFinishWithClipboardNoneSavesWithoutCopy() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    let bytes = try Data(contentsOf: source.temporaryURL)
+    let artifact = SharedArtifact(url: source.temporaryURL, kind: .mp4, width: 64, height: 48,
+        byteCount: bytes.count, duration: source.duration, videoFPS: 30)
+    let session = VideoEditSession(artifact: artifact, fps: 30, rememberDirectory: { _ in })
+    defer { session.close() }
+    session.document.setStart(1.4)
+    _ = session.document.addStill(at: 0.3)
+    var config = UtsushieConfig(); config.clipboard = .none
+    var copied = false
+    let result = try await session.finish(artifact: artifact, config: config) { _ in copied = true; return false }
+    #expect(!copied && result.image != nil && result.stills.count == 1)
+    #expect(abs((result.video.duration ?? 0) - 2.2) < 0.001)
+    #expect(FileManager.default.fileExists(atPath: result.stills[0].artifact.url.path))
 }
 
 @MainActor @Test func cutAndStillsFinishUsesOriginalAndRollsBackFailedCopy() async throws {

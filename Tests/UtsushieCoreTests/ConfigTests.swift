@@ -79,9 +79,21 @@ func invalidHotkey(_ setting: String) {
     #expect(result.warnings.count == 2)
     #expect(result.config == UtsushieConfig())
 }
-@Test(arguments: ["both", "file", "data"])
+@Test(arguments: ["both", "file", "data", "none"])
 func clipboardModes(_ mode: String) {
     let result = ConfigLoader.parse(toml: "[clipboard]\nmode = \"\(mode)\"")
     #expect(result.config.clipboard.rawValue == mode)
     #expect(result.warnings.isEmpty)
+}
+@Test func clipboardNoneSkipsAutomaticCopyButKeepsManualFormat() {
+    #expect(UtsushieConfig().clipboard == .both)
+    #expect(!ClipboardMode.none.copiesAutomatically)
+    #expect(ClipboardMode.none.format == .both)
+    for mode in [ClipboardMode.both, .file, .data] {
+        #expect(mode.copiesAutomatically)
+        #expect(mode.format == mode)
+    }
+    let result = ConfigLoader.parse(toml: "[clipboard]\nmode = \"off\"")
+    #expect(result.config.clipboard == .both)
+    #expect(result.warnings == ["clipboard.mode が不正なため既定値を使います"])
 }

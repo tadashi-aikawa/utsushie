@@ -128,6 +128,18 @@ private func pixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     #expect(try Data(contentsOf: url) == Data([1, 2, 3]))
     #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["capture.webp"])
 }
+@MainActor @Test func annotationSaveWithClipboardNoneReplacesFileWithoutCopy() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appendingPathComponent("capture.webp")
+    try Data([1, 2, 3]).write(to: url)
+    let artifact = SharedArtifact(url: url, kind: .webP, width: 160, height: 100, byteCount: 3)
+    var copied = false
+    let updated = try AnnotationSave.commit(data: Data([4, 5]), artifact: artifact, mode: .none) { _, _, _ in copied = true; return false }
+    #expect(!copied && updated.byteCount == 2)
+    #expect(try Data(contentsOf: url) == Data([4, 5]))
+}
 @MainActor @Test func annotationSaveFailureDoesNotAttemptCopy() throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("missing.webp")
     let artifact = SharedArtifact(url: url, kind: .webP, width: 160, height: 100, byteCount: 0)
