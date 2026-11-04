@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var statusMenu: NSMenu!
     private var config = UtsushieConfig()
-    private var warnings: [String] = []
+    private var warnings = AppWarnings()
     private let hotkey = GlobalHotkey()
     private let libraryHotkey = GlobalHotkey(identifier: 2)
     private let overlay = OverlayController()
@@ -58,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         thumbnails.onLibraryExportStatus = { [weak self] url, status in self?.captureLibrary?.setExportStatus(url, status: status) }
         thumbnails.onWarning = { [weak self] in self?.addWarning($0) }
         reloadConfig()
-        warnings += VideoEditStore.cleanupAtLaunch(directory: config.outputURL())
+        VideoEditStore.cleanupAtLaunch(directory: config.outputURL()).forEach { addWarning($0) }
         updateWarnings()
         hotkey.onPress = { [weak self] in self?.shoot() }
         libraryHotkey.onPress = { [weak self] in self?.openLibrary() }
@@ -118,16 +118,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     private func reloadConfig() {
         let result = ConfigLoader.load()
-        config = result.config; warnings = result.warnings
+        config = result.config
+        var configWarnings = result.warnings
         thumbnails.corner = config.thumbnailCorner
         // 設定変更で撮影と一覧のキーを交換しても、古い一覧の登録を先に解放する。
         libraryHotkey.unregister()
-        if let warning = hotkey.register(config.hotkey) { warnings.append(warning) }
+        if let warning = hotkey.register(config.hotkey) { configWarnings.append(warning) }
         if let key = config.libraryHotkey {
-            if let warning = libraryHotkey.register(key) { warnings.append("撮影の一覧: " + warning) }
+            if let warning = libraryHotkey.register(key) { configWarnings.append("撮影の一覧: " + warning) }
         } else { libraryHotkey.unregister() }
         libraryItem?.title = "撮影の一覧を開く" + (config.libraryHotkey.map { "  " + HotkeyPresentation.label($0) } ?? "")
         updateHotkeyLabel()
+        replaceConfigurationWarnings(configWarnings)
+    }
+    /// 設定由来の警告だけを差し替え、保存時などに足した警告は残す。
+    func replaceConfigurationWarnings(_ configWarnings: [String]) {
+        warnings.replaceConfiguration(configWarnings)
         updateWarnings()
     }
     private func updateHotkeyLabel() {
@@ -144,15 +150,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         shootItem.attributedTitle = attributed
     }
     private func updateWarnings() {
-        warningItem?.isHidden = warnings.isEmpty
-        warningItem?.title = "設定の警告 \(warnings.count)件…"
+        warningItem?.isHidden = warnings.menuTitle == nil
+        warningItem?.title = warnings.menuTitle ?? ""
     }
-    /// 保存時に見つかった問題を設定の警告と同じメニューへ出す。同じ文は重ねない。
-    private func addWarning(_ warning: String) {
-        guard !warnings.contains(warning) else { return }
-        warnings.append(warning); updateWarnings()
+    /// 保存時に見つかった問題を設定の警告と同じメニューへ出す。設定を読み直しても終了まで残す。
+    func addWarning(_ warning: String) {
+        warnings.add(warning); updateWarnings()
     }
-    @objc private func showWarnings() { alert("UTSUSHIEの警告", warnings.joined(separator: "\n")) }
+    var warningMessages: [String] { warnings.all }
+    @objc private func showWarnings() { alert("UTSUSHIEの警告", warnings.all.joined(separator: "\n")) }
     @objc private func openLibrary() {
         reloadConfig()
         guard let captureLibrary else {
@@ -389,7 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func persistLast(_ rect: CGRect) {
         lastArea = LastArea(rect: rect)
         do { try lastArea?.save(to: lastURL) }
-        catch { warnings.append("前回範囲を保存できません: \(error.localizedDescription)"); updateWarnings() }
+        catch { addWarning("前回範囲を保存できません: \(error.localizedDescription)") }
     }
     @objc private func openFolder() {
         do {

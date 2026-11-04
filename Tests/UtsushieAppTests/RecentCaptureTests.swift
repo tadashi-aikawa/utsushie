@@ -373,6 +373,24 @@ func libraryRestoresSavedFrameBeforeAttachingDelegateAndKeepsGridPositive(_ save
     #expect(menu.items.contains { $0.title == "UTSUSHIEを終了" && $0.target === delegate })
 }
 
+@MainActor @Test func saveWarningStaysInMenuAfterConfigurationWarningsAreReplaced() throws {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    defer { delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification, object: app)) }
+    delegate.installStatusMenu()
+    let menu = try #require(delegate.installedStatusMenu)
+    let item = try #require(menu.items.first { $0.action == NSSelectorFromString("showWarnings") })
+    delegate.replaceConfigurationWarnings([])
+    #expect(item.isHidden)
+    // 既定名での保存 → メニューを開いたときの設定の読み直し。実際の設定ファイルとホットキーには触れない。
+    delegate.addWarning(CaptureFileNaming.fallbackWarning)
+    delegate.replaceConfigurationWarnings([])
+    #expect(!item.isHidden && item.title == "設定の警告 1件…")
+    delegate.replaceConfigurationWarnings(["file.name が不正なため既定値を使います"])
+    #expect(item.title == "設定の警告 2件…")
+    #expect(delegate.warningMessages == ["file.name が不正なため既定値を使います", CaptureFileNaming.fallbackWarning])
+}
+
 @MainActor @Test func libraryReusesCellsAndLimitsThumbnailReadsToVisibleFilesAndFourAtOnce() async throws {
     let dir = try recentDirectory(); defer { try? FileManager.default.removeItem(at: dir) }
     for index in 0..<1200 { try Data([0]).write(to: dir.appendingPathComponent("\(index).webp")) }

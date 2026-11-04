@@ -66,6 +66,29 @@ func invalidFileNamePatterns(_ pattern: String) {
     #expect(CaptureFileNaming.resolve(date: september, timeZone: tokyo) == .init(name: "\(fallback).webp", usedDefault: false))
     #expect(CaptureFileNaming.resolve(date: september, sequence: 2, extension: "mp4", timeZone: tokyo, pattern: "{VV}").name == "\(fallback)-2.mp4")
 }
+@Test func fileNameFallbackWarningSurvivesConfigurationReload() throws {
+    let tokyo = try #require(TimeZone(identifier: "Asia/Tokyo"))
+    // 「in the morning」などは14バイト、「in the afternoon」は16バイト。設定時の見本では収まり、午後の保存で255バイトを超える。
+    let pattern = String(repeating: "{BBBB}", count: 17)
+    let toml = "[file]\nname = \"\(pattern)\""
+    #expect(CaptureFileNaming.isValid(pattern: pattern, timeZone: tokyo))
+    let afternoon = Date(timeIntervalSince1970: 1_793_772_943) // 2026-11-04T15:15:43+09:00
+    #expect(CaptureFileNaming.resolve(date: afternoon, timeZone: tokyo, pattern: pattern).usedDefault)
+    var warnings = AppWarnings()
+    warnings.replaceConfiguration(ConfigLoader.parse(toml: toml).warnings)
+    #expect(warnings.menuTitle == nil)
+    // 既定名での保存 → メニューを開いて設定を読み直す。
+    warnings.add(CaptureFileNaming.fallbackWarning)
+    warnings.replaceConfiguration(ConfigLoader.parse(toml: toml).warnings)
+    #expect(warnings.all == [CaptureFileNaming.fallbackWarning])
+    #expect(warnings.menuTitle == "設定の警告 1件…")
+    // 設定の警告と合わせて出し、同じ文は重ねない。
+    warnings.add(CaptureFileNaming.fallbackWarning)
+    warnings.replaceConfiguration(["thumbnail.corner が不正なため既定値を使います"])
+    #expect(warnings.all == ["thumbnail.corner が不正なため既定値を使います", CaptureFileNaming.fallbackWarning])
+    warnings.replaceConfiguration([])
+    #expect(warnings.all == [CaptureFileNaming.fallbackWarning])
+}
 @Test func fileNameSettingReadsValidPatternAndRejectsWrongType() {
     let valid = ConfigLoader.parse(toml: "[file]\nname = \"{yyyyMMdd}-{HHmmss}-utsushie\"")
     #expect(valid.warnings.isEmpty)
