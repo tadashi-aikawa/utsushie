@@ -85,6 +85,20 @@ func clipboardModes(_ mode: String) {
     #expect(result.config.clipboard.rawValue == mode)
     #expect(result.warnings.isEmpty)
 }
+@Test(arguments: CardCorner.allCases)
+func thumbnailCorners(_ corner: CardCorner) {
+    let result = ConfigLoader.parse(toml: "[thumbnail]\ncorner = \"\(corner.rawValue)\"")
+    #expect(result.config.thumbnailCorner == corner)
+    #expect(result.warnings.isEmpty)
+}
+@Test(arguments: ["\"bottom-right\"", "\"BottomRight\"", "\"\"", "1"])
+func invalidThumbnailCornerFallsBackToBottomRight(_ value: String) {
+    let result = ConfigLoader.parse(toml: "[thumbnail]\nseconds = 8\ncorner = \(value)")
+    #expect(UtsushieConfig().thumbnailCorner == .bottomRight)
+    #expect(result.config.thumbnailCorner == .bottomRight)
+    #expect(result.config.thumbnailSeconds == 8)
+    #expect(result.warnings == ["thumbnail.corner が不正なため既定値を使います"])
+}
 @Test func clipboardNoneSkipsAutomaticCopyButKeepsManualFormat() {
     #expect(UtsushieConfig().clipboard == .both)
     #expect(!ClipboardMode.none.copiesAutomatically)

@@ -53,12 +53,14 @@ public enum OverlayPresentation {
 
 public enum CardAction: Int, CaseIterable, Sendable { case annotate, save, reveal, close }
 public enum CardPresentation {
-    /// 最新を右下へ置き、上端を超える前に左の列へ折り返す。
-    public static func stackOrigin(index: Int, visible: CGRect, cardSize: CGSize = CGSize(width: 264, height: 216)) -> CGPoint {
+    /// 最新を隅へ置き、反対の端を超える前に内側の列へ折り返す。上の隅は上端から下へ積む。
+    public static func stackOrigin(index: Int, visible: CGRect, cardSize: CGSize = CGSize(width: 264, height: 216),
+                                   corner: CardCorner = .bottomRight) -> CGPoint {
         let stride = cardSize.height + 12
         let rows = max(1, Int(((visible.height - 36 + 12) / stride).rounded(.down)))
-        return CGPoint(x: visible.maxX - 18 - cardSize.width - CGFloat(index / rows) * (cardSize.width + 12),
-                       y: visible.minY + 18 + CGFloat(index % rows) * stride)
+        let column = CGFloat(index / rows) * (cardSize.width + 12), row = CGFloat(index % rows) * stride
+        return CGPoint(x: corner.isLeft ? visible.minX + 18 + column : visible.maxX - 18 - cardSize.width - column,
+                       y: corner.isTop ? visible.maxY - 18 - cardSize.height - row : visible.minY + 18 + row)
     }
     // カードは左上原点。4ボタンとも同じ幅で、描画と当たり判定に同じ矩形を使う。
     public static func button(_ action: CardAction) -> CGRect {

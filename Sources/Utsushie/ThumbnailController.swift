@@ -11,6 +11,8 @@ final class ThumbnailController {
     private var removingURLs: Set<URL> = []
     private var keyboardTargetID: UUID?
     let recentImages = RecentImageMemory()
+    /// 設定の再読込で変わったら、表示中のカードも新しい隅へ積み直す。
+    var corner: CardCorner = .bottomRight { didSet { if corner != oldValue { layout() } } }
     var annotationConfig: () -> UtsushieConfig = { ConfigLoader.load().config }
     var editorFocus = AnnotationApplicationFocus()
     var makeVideoSession: (SharedArtifact, Int) -> VideoEditSession = { VideoEditSession(artifact: $0, fps: $1) }
@@ -178,13 +180,14 @@ final class ThumbnailController {
         for card in cards { card.setKeyboardTarget(card.id == keyboardTargetID) }
     }
     private func layout() {
-        // 配列は古い順。逆順に下から置くので最新が最下段。
+        // 配列は古い順。逆順に隅から置くので最新が隅に来る。
         var indices: [ObjectIdentifier: Int] = [:]
         for card in cards.reversed() {
             guard let screen = card.screen else { continue }
             let key = ObjectIdentifier(screen)
             let index = indices[key] ?? 0
-            card.panel.setFrameOrigin(CardPresentation.stackOrigin(index: index, visible: screen.visibleFrame, cardSize: card.panel.frame.size))
+            card.panel.setFrameOrigin(CardPresentation.stackOrigin(index: index, visible: screen.visibleFrame,
+                cardSize: card.panel.frame.size, corner: corner))
             indices[key] = index + 1
         }
     }

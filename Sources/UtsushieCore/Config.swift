@@ -8,6 +8,12 @@ public enum ClipboardMode: String, Sendable, CaseIterable {
     /// 実際に載せる形式。noneで自分から載せる操作は既定のbothにする。
     public var format: ClipboardMode { self == .none ? .both : self }
 }
+/// 共有カードを出す画面の隅。2枚目以降は同じ隅から縦に積む。
+public enum CardCorner: String, Sendable, CaseIterable {
+    case bottomRight, bottomLeft, topRight, topLeft
+    public var isTop: Bool { self == .topRight || self == .topLeft }
+    public var isLeft: Bool { self == .bottomLeft || self == .topLeft }
+}
 public struct PrivacyConfig: Equatable, Sendable {
     public var ai = false
     public var claude = ""
@@ -41,6 +47,7 @@ public struct UtsushieConfig: Equatable, Sendable {
     public var lossless = false
     public var clipboard: ClipboardMode = .both
     public var thumbnailSeconds: Double = 5
+    public var thumbnailCorner: CardCorner = .bottomRight
     public var video = VideoConfig()
     public var privacy = PrivacyConfig()
     public init() {}
@@ -102,6 +109,10 @@ public enum ConfigLoader {
         if let item = value("thumbnail", "seconds") {
             if let number = item.double ?? item.int.map(Double.init), number.isFinite, (0.1...300).contains(number) { config.thumbnailSeconds = number }
             else { warn("thumbnail.seconds") }
+        }
+        if let item = value("thumbnail", "corner") {
+            if let string = item.string, let corner = CardCorner(rawValue: string) { config.thumbnailCorner = corner }
+            else { warn("thumbnail.corner") }
         }
         if let item = value("video", "fps") {
             if let fps = item.int, (1...60).contains(fps) { config.video.fps = fps }
@@ -204,6 +215,7 @@ public enum ConfigLoader {
 
     [thumbnail]
     seconds = 5 # 0.1〜300。ホバー中は停止
+    corner = "bottomRight" # bottomRight / bottomLeft / topRight / topLeft
 
     [privacy]
     ai = false # trueで編集画面のHが使える。認識した文字だけをClaudeへ送る

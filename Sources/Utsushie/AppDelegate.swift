@@ -118,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func reloadConfig() {
         let result = ConfigLoader.load()
         config = result.config; warnings = result.warnings
+        thumbnails.corner = config.thumbnailCorner
         // 設定変更で撮影と一覧のキーを交換しても、古い一覧の登録を先に解放する。
         libraryHotkey.unregister()
         if let warning = hotkey.register(config.hotkey) { warnings.append(warning) }

@@ -148,4 +148,34 @@ import UtsushieCore
     #expect(origins[3] == CGPoint(x: origins[0].x - 276, y: origins[0].y))
     #expect(origins[6] == CGPoint(x: origins[0].x - 552, y: origins[0].y))
     #expect(CardPresentation.stackOrigin(index: 1, visible: CGRect(x: 0, y: 0, width: 800, height: 300)).y == 18)
+    #expect((0..<8).map { CardPresentation.stackOrigin(index: $0, visible: visible, corner: .bottomRight) } == origins)
+}
+
+@Test func sharingCardsStackFromEachCornerAndFoldInward() {
+    let visible = CGRect(x: 100, y: 50, width: 1440, height: 900)
+    let size = CGSize(width: 264, height: 216)
+    func origins(_ corner: CardCorner) -> [CGPoint] {
+        (0..<8).map { CardPresentation.stackOrigin(index: $0, visible: visible, cardSize: size, corner: corner) }
+    }
+    let right = visible.maxX - 18 - 264, left = visible.minX + 18
+    let bottom = visible.minY + 18, top = visible.maxY - 18 - 216
+    let expected: [CardCorner: (x: CGFloat, y: CGFloat, dx: CGFloat, dy: CGFloat)] = [
+        .bottomRight: (right, bottom, -276, 228), .bottomLeft: (left, bottom, 276, 228),
+        .topRight: (right, top, -276, -228), .topLeft: (left, top, 276, -228),
+    ]
+    for corner in CardCorner.allCases {
+        let o = origins(corner), e = try! #require(expected[corner])
+        // 900ptの高さには3枚まで積め、4枚目から内側の列へ移る。
+        #expect(o[0] == CGPoint(x: e.x, y: e.y))
+        #expect(o[1] == CGPoint(x: e.x, y: e.y + e.dy))
+        #expect(o[2] == CGPoint(x: e.x, y: e.y + e.dy * 2))
+        #expect(o[3] == CGPoint(x: e.x + e.dx, y: e.y))
+        #expect(o[6] == CGPoint(x: e.x + e.dx * 2, y: e.y))
+        for origin in o.prefix(3) {
+            #expect(origin.y >= visible.minY + 18 && origin.y + 216 <= visible.maxY - 18)
+        }
+    }
+    // 1枚しか収まらない高さでも、上の隅は上端から18ptの位置に置く。
+    let short = CGRect(x: 0, y: 0, width: 800, height: 300)
+    #expect(CardPresentation.stackOrigin(index: 1, visible: short, corner: .topLeft) == CGPoint(x: 18 + 276, y: 300 - 18 - 216))
 }
