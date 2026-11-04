@@ -405,7 +405,8 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         hide()
         if videoSession == nil { videoSession = makeVideoSession(artifact, annotationConfig().video.fps) }
         guard let session = videoSession else { return }
-        let controller = VideoEditorController(source: session.sourceURL, document: session.document, screen: screen, focus: editorFocus)
+        let controller = VideoEditorController(source: session.sourceURL, document: session.document, screen: screen, focus: editorFocus,
+            copiesStills: annotationConfig().clipboard.copiesAutomatically)
         videoEditor = controller
         onEditingChange?(true)
         controller.onClose = { [weak self] in

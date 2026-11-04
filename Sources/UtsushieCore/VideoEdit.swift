@@ -185,11 +185,13 @@ public struct VideoEditDocument: Equatable, Sendable {
     public func transitionCrossed(from previous: Double, to time: Double) -> VideoCutTransition? {
         transitions.first { ($0.kind == .fade || $0.kind == .dissolve) && previous < $0.range.start && time >= $0.range.start }
     }
-    public var completionText: String {
+    public var completionText: String { completionText(copiesStills: true) }
+    /// `[clipboard] mode = "none"`では静止画を載せないので「保存」と書く。
+    public func completionText(copiesStills: Bool) -> String {
         let trim = isTrimmed ? (transitionDuration > 0
             ? String(format: "残す %.1f秒 + つなぎ %.1f秒", keptDuration, transitionDuration)
             : String(format: "%.1f秒に切る", outputDuration)) : nil
-        let images = stills.isEmpty ? nil : "静止画\(stills.count)枚をコピー"
+        let images = stills.isEmpty ? nil : "静止画\(stills.count)枚を" + (copiesStills ? "コピー" : "保存")
         let actions = [trim, images].compactMap { $0 }
         return actions.isEmpty ? "ドラッグで切る範囲を選ぶ ・ ⏎でこのコマを撮る" : "完了で " + actions.joined(separator: " ・ ")
     }

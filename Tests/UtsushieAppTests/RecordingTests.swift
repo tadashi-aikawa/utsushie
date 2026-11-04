@@ -605,6 +605,22 @@ func seekingDuringTransitionPreviewCancelsAnimationAndDoesNotResumePlayback(_ ki
     #expect(abs(Int(firstPixel[1]) - 30) <= 5)
 }
 
+@MainActor @Test func videoEditorHintSaysSaveWhenClipboardIsNone() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    let editor = VideoEditorController(source: source.temporaryURL, document: VideoEditDocument(duration: source.duration),
+        screen: nil, focus: .init(activate: {}, restore: { _ in }), copiesStills: false)
+    defer { editor.window.close() }
+    for _ in 0..<200 where !editor.canCapture { try await Task.sleep(for: .milliseconds(10)) }
+    editor.seek(to: 1.2)
+    let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: editor.window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 36))
+    #expect(editor.handleKey(enter))
+    #expect(editor.hintText == "完了で 静止画1枚を保存")
+}
+
 @MainActor @Test func videoEditorCapturesDisplayedVFRFrameAndUndoRestoresTray() async throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

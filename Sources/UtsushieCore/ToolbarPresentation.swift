@@ -50,9 +50,10 @@ public enum AnnotationToolbarPresentation {
 
 public enum VideoToolbarPresentation {
     public static let height: CGFloat = 75
-    public static func hint(document: VideoEditDocument, discardArmed: Bool = false, message: ToolbarHint? = nil) -> ToolbarHint {
+    public static func hint(document: VideoEditDocument, discardArmed: Bool = false, message: ToolbarHint? = nil,
+                            copiesStills: Bool = true) -> ToolbarHint {
         if let message { return message }
-        return ToolbarHint(document.completionText, keys: document.isTrimmed || !document.stills.isEmpty ? [] : ["⏎"])
+        return ToolbarHint(document.completionText(copiesStills: copiesStills), keys: document.isTrimmed || !document.stills.isEmpty ? [] : ["⏎"])
     }
     public static func length(document: VideoEditDocument) -> String {
         if document.transitionDuration > 0 {

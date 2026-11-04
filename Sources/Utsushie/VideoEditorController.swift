@@ -52,7 +52,11 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
     var hintText: String { toolbar.hintView.hint.text }
     var canCapture: Bool { !frameTimes.isEmpty }
 
-    init(source: URL, document: VideoEditDocument, screen: NSScreen?, focus: AnnotationApplicationFocus = .init()) {
+    /// 完了時に静止画をクリップボードへ載せるか。手引きの文言だけに使う。
+    private let copiesStills: Bool
+    init(source: URL, document: VideoEditDocument, screen: NSScreen?, focus: AnnotationApplicationFocus = .init(),
+         copiesStills: Bool = true) {
+        self.copiesStills = copiesStills
         initial = document; history = VideoEditHistory(document); self.focus = focus; self.source = source
         player = AVPlayer(url: source)
         timeline = VideoEditorTimeline(document: document)
@@ -131,7 +135,8 @@ final class VideoEditorController: NSObject, NSWindowDelegate {
         toolbar.captureButton.state = timeline.document.stills.contains(where: { $0.time == frame }) ? .on : .off
         toolbar.finishButton.isEnabled = timeline.document.outputDuration > 0
         toolbar.discardButton.armed = discardArmed; toolbar.discardButton.needsDisplay = true
-        toolbar.hintView.hint = VideoToolbarPresentation.hint(document: timeline.document, discardArmed: discardArmed, message: message)
+        toolbar.hintView.hint = VideoToolbarPresentation.hint(document: timeline.document, discardArmed: discardArmed, message: message,
+            copiesStills: copiesStills)
         toolbar.length.stringValue = VideoToolbarPresentation.length(document: timeline.document); toolbar.needsLayout = true
         root.hasStills = !timeline.document.stills.isEmpty
         root.tray.update(marks: timeline.document.stills, images: stillImages, active: activeStill)

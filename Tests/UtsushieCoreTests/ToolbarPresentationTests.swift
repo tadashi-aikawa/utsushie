@@ -77,5 +77,8 @@ import Testing
     _ = document.addStill(at: 15); _ = document.addStill(at: 20)
     #expect(VideoToolbarPresentation.height == AnnotationToolbarPresentation.height)
     #expect(VideoToolbarPresentation.hint(document: document, discardArmed: true).text == "完了で 14.6秒に切る ・ 静止画2枚をコピー")
+    #expect(VideoToolbarPresentation.hint(document: document, copiesStills: false).text == "完了で 14.6秒に切る ・ 静止画2枚を保存")
+    #expect(VideoToolbarPresentation.hint(document: VideoEditDocument(duration: 24.1), copiesStills: false).text
+        == "ドラッグで切る範囲を選ぶ ・ ⏎でこのコマを撮る")
     #expect(VideoToolbarPresentation.length(document: document) == "残す 14.6秒 / 24.1秒")
 }

@@ -122,6 +122,8 @@ import UtsushieCore
     #expect(document.completionText == "完了で 静止画2枚をコピー")
     _ = document.cut(.init(2, 11.5))
     #expect(document.completionText == "完了で 14.6秒に切る ・ 静止画2枚をコピー")
+    // [clipboard] mode = "none"では載せないので保存と書く。
+    #expect(document.completionText(copiesStills: false) == "完了で 14.6秒に切る ・ 静止画2枚を保存")
     #expect(document.stills.map(\.time) == [3, 10])
     var history = VideoEditHistory(document)
     document.removeStill(first!)
