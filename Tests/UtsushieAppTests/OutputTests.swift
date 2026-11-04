@@ -31,6 +31,20 @@ func realWebPEncoding(_ lossless: Bool) throws {
     #expect(try Data(contentsOf: first) == Data([1]))
     #expect(try Data(contentsOf: second) == Data([2]))
 }
+@Test func customFileNamePatternSavesImagesAndVideosWithSerialOnCollision() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let date = Date(timeIntervalSince1970: 0), pattern = "{yyyyMMdd}-utsushie"
+    let day = CaptureFileNaming.name(date: date, extension: "", pattern: pattern).dropLast()
+    let first = try ArtifactStore.save(data: Data([1]), kind: .webP, directory: dir, date: date, pattern: pattern)
+    let second = try ArtifactStore.save(data: Data([2]), kind: .webP, directory: dir, date: date, pattern: pattern)
+    #expect(first.lastPathComponent == "\(day).webp" && second.lastPathComponent == "\(day)-1.webp")
+    #expect(try Data(contentsOf: first) == Data([1]) && Data(contentsOf: second) == Data([2]))
+    let recording = dir.appendingPathComponent(".pending.recording.mp4")
+    try Data([3]).write(to: recording)
+    let video = try ArtifactStore.publishVideo(from: recording, date: date, pattern: pattern)
+    #expect(video.lastPathComponent == "\(day).mp4")
+}
 @Test func losslessPreservesOrientationAndAlpha() throws {
     let width = 8, height = 6
     let context = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,

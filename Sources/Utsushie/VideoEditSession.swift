@@ -53,7 +53,8 @@ final class VideoEditSession {
         // noneはコピーを成功扱いで省き、失敗時の復元にも入らない。
         func copyIfNeeded(_ entries: [ClipboardEntry]) -> Bool { config.clipboard.copiesAutomatically ? copy(entries) : true }
         let stills = try await VideoStillExporter.save(source: sourceURL, marks: document.stills,
-            directory: url.deletingLastPathComponent(), quality: config.quality, lossless: config.lossless, pixelScale: artifact.pixelScale)
+            directory: url.deletingLastPathComponent(), quality: config.quality, lossless: config.lossless, pixelScale: artifact.pixelScale,
+            pattern: config.fileName)
         do {
             if needsExport {
                 let (video, image) = try await save(artifact: artifact) { updated in

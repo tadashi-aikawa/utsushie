@@ -320,7 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             do {
                 let result = try await session.finish(hostTime: stoppedAt)
                 temporary = result.temporaryURL
-                let url = try ArtifactStore.publishVideo(from: result.temporaryURL, date: recordingDate)
+                let url = try ArtifactStore.publishVideo(from: result.temporaryURL, date: recordingDate, pattern: recordingConfig.fileName)
                 temporary = nil
                 let bytes = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
                 let artifact = SharedArtifact(url: url, kind: .mp4, width: result.width, height: result.height,
@@ -360,7 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // エンコードとディスク書き込みはメインスレッドを塞がない。
                 let (data, url) = try await Task.detached(priority: .userInitiated) {
                     let data = try WebPEncoder.encode(image, quality: snapshot.quality, lossless: snapshot.lossless)
-                    let url = try ArtifactStore.save(data: data, kind: .webP, directory: snapshot.outputURL())
+                    let url = try ArtifactStore.save(data: data, kind: .webP, directory: snapshot.outputURL(), pattern: snapshot.fileName)
                     return (data, url)
                 }.value
                 let artifact = SharedArtifact(url: url, kind: .webP, width: image.width, height: image.height, byteCount: data.count,

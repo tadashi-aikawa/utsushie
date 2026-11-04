@@ -41,20 +41,23 @@ enum ArtifactStore {
         guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     }
     /// 完成したMP4だけを公開する。移動は同一フォルダ内なので原子的。既存名は上書きしない。
-    static func publishVideo(from temporary: URL, date: Date) throws -> URL {
+    static func publishVideo(from temporary: URL, date: Date, pattern: String = CaptureFileNaming.defaultPattern) throws -> URL {
         var sequence = 0
         while true {
-            let target = temporary.deletingLastPathComponent().appendingPathComponent(CaptureFileNaming.name(date: date, sequence: sequence, extension: "mp4"))
+            let target = temporary.deletingLastPathComponent().appendingPathComponent(
+                CaptureFileNaming.name(date: date, sequence: sequence, extension: "mp4", pattern: pattern))
             do { try FileManager.default.moveItem(at: temporary, to: target); return target }
             catch let error as CocoaError where error.code == .fileWriteFileExists { sequence += 1 }
         }
     }
     /// 同秒と再起動後の既存ファイルを保護。存在確認だけでは競合するので排他作成する。
-    static func save(data: Data, kind: ArtifactKind, directory: URL, date: Date = Date()) throws -> URL {
+    static func save(data: Data, kind: ArtifactKind, directory: URL, date: Date = Date(),
+                     pattern: String = CaptureFileNaming.defaultPattern) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var sequence = 0
         while true {
-            let url = directory.appendingPathComponent(CaptureFileNaming.name(date: date, sequence: sequence, extension: kind.fileExtension))
+            let url = directory.appendingPathComponent(
+                CaptureFileNaming.name(date: date, sequence: sequence, extension: kind.fileExtension, pattern: pattern))
             do { try data.write(to: url, options: .withoutOverwriting); return url }
             catch let error as CocoaError where error.code == .fileWriteFileExists { sequence += 1 }
         }

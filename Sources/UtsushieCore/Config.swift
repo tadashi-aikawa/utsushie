@@ -48,6 +48,8 @@ public struct UtsushieConfig: Equatable, Sendable {
     public var clipboard: ClipboardMode = .both
     public var thumbnailSeconds: Double = 5
     public var thumbnailCorner: CardCorner = .bottomRight
+    /// 保存ファイル名の書式。`CaptureFileNaming`で展開する。
+    public var fileName = CaptureFileNaming.defaultPattern
     public var video = VideoConfig()
     public var privacy = PrivacyConfig()
     public init() {}
@@ -85,13 +87,17 @@ public enum ConfigLoader {
         func warn(_ name: String) {
             warnings.append(name == "libraryHotkey" ? "libraryHotkey が不正なため無効にします" : "\(name) が不正なため既定値を使います")
         }
-        for section in ["hotkey", "libraryHotkey", "webp", "clipboard", "thumbnail", "video", "privacy"] {
+        for section in ["hotkey", "libraryHotkey", "file", "webp", "clipboard", "thumbnail", "video", "privacy"] {
             if let item = root[section], item.tomlValue.table == nil { warn(section) }
         }
         if let item = value(nil, "outputDir") {
             if let path = item.string, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                path.hasPrefix("/") || path.hasPrefix("~/") { config.outputDir = path }
             else { warn("outputDir") }
+        }
+        if let item = value("file", "name") {
+            if let pattern = item.string, CaptureFileNaming.isValid(pattern: pattern) { config.fileName = pattern }
+            else { warn("file.name") }
         }
         for (key, assign) in [("downscale", { (v: Bool) in config.downscale = v }), ("lossless", { (v: Bool) in config.lossless = v })] {
             if let item = value("webp", key) {
@@ -198,6 +204,9 @@ public enum ConfigLoader {
     # [libraryHotkey]
     # keyCode = 37 # 物理キーL。⌘⇧L
     # modifiers = ["command", "shift"]
+
+    [file]
+    name = "utsushie-{yyyyMMdd}-{HHmmss}" # {}の中は日時の書式。拡張子は自動。同名なら末尾に-1
 
     [webp]
     downscale = true # 見た目の1xへ縮小する既定。範囲選択のRでその回だけ切り替え

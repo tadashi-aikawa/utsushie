@@ -278,6 +278,9 @@ modifiers = ["command", "shift"] # ⌘・⌥・⌃のいずれかを含める
 # keyCode = 37                    # 物理キーL。⌘⇧L
 # modifiers = ["command", "shift"]
 
+[file]
+name = "utsushie-{yyyyMMdd}-{HHmmss}" # 保存するファイル名。{}の中は日時の書式、外はそのまま。拡張子は自動
+
 [webp]
 downscale = true                 # 見た目の大きさ(1x)に縮小する既定。範囲選択のRでその回だけ切り替え
 quality = 80                     # 0〜100
@@ -305,6 +308,13 @@ effort = "low"                   # low / medium / high
 ```
 
 不正な値はその項目だけ既定値に戻り、メニューに警告が出ます。
+
+`[file] name` の `{}` の中には `yyyy` `MM` `dd` `HH` `mm` `ss` などの[日時の書式](https://unicode.org/reports/tr35/tr35-dates.html#Date_Field_Symbol_Table)を書けます。
+
+- 例: `"{yyyyMMdd}-{HHmmss}-utsushie"` は `20261104-101543-utsushie.webp` になります。
+- 同じ名前のファイルがあれば、末尾に `-1` `-2` を付けます。
+- 動画と、動画から取り出す静止画も同じ書式です。
+- `/` `:` は使えません。`.` で始まる名前も使えません。
 
 ## 開発
 
