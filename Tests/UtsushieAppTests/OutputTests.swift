@@ -24,8 +24,8 @@ func realWebPEncoding(_ lossless: Bool) throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: dir) }
     let date = Date(timeIntervalSince1970: 0)
-    let first = try ArtifactStore.save(data: Data([1]), kind: .webP, directory: dir, date: date)
-    let second = try ArtifactStore.save(data: Data([2]), kind: .webP, directory: dir, date: date)
+    let first = try ArtifactStore.save(data: Data([1]), kind: .webP, directory: dir, date: date).url
+    let second = try ArtifactStore.save(data: Data([2]), kind: .webP, directory: dir, date: date).url
     #expect(first != second)
     #expect(second.lastPathComponent.hasSuffix("-1.webp"))
     #expect(try Data(contentsOf: first) == Data([1]))
@@ -38,12 +38,31 @@ func realWebPEncoding(_ lossless: Bool) throws {
     let day = CaptureFileNaming.name(date: date, extension: "", pattern: pattern).dropLast()
     let first = try ArtifactStore.save(data: Data([1]), kind: .webP, directory: dir, date: date, pattern: pattern)
     let second = try ArtifactStore.save(data: Data([2]), kind: .webP, directory: dir, date: date, pattern: pattern)
-    #expect(first.lastPathComponent == "\(day).webp" && second.lastPathComponent == "\(day)-1.webp")
-    #expect(try Data(contentsOf: first) == Data([1]) && Data(contentsOf: second) == Data([2]))
+    #expect(first.url.lastPathComponent == "\(day).webp" && second.url.lastPathComponent == "\(day)-1.webp")
+    #expect(!first.usedDefaultName && !second.usedDefaultName)
+    #expect(try Data(contentsOf: first.url) == Data([1]) && Data(contentsOf: second.url) == Data([2]))
     let recording = dir.appendingPathComponent(".pending.recording.mp4")
     try Data([3]).write(to: recording)
     let video = try ArtifactStore.publishVideo(from: recording, date: date, pattern: pattern)
-    #expect(video.lastPathComponent == "\(day).mp4")
+    #expect(video.url.lastPathComponent == "\(day).mp4" && !video.usedDefaultName)
+}
+@Test func unusableExpandedFileNameFallsBackToDefaultAndKeepsVideo() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let tokyo = try #require(TimeZone(identifier: "Asia/Tokyo"))
+    let date = Date(timeIntervalSince1970: 1_790_763_343) // 2026-09-30T19:15:43+09:00
+    // タイムゾーン名の`/`と、長い月名で255バイトを超える名前は、保存時に既定の名前へ戻す。
+    for pattern in ["shot-{VV}", String(repeating: "{MMMM}", count: 30)] {
+        let image = try ArtifactStore.save(data: Data([1]), kind: .webP, directory: dir, date: date, pattern: pattern, timeZone: tokyo)
+        #expect(image.usedDefaultName)
+        #expect(image.url.lastPathComponent.hasPrefix("utsushie-20260930-191543"))
+        let recording = dir.appendingPathComponent(".utsushie-\(UUID().uuidString).recording.mp4")
+        try Data([2]).write(to: recording)
+        let video = try ArtifactStore.publishVideo(from: recording, date: date, pattern: pattern, timeZone: tokyo)
+        #expect(video.usedDefaultName && FileManager.default.fileExists(atPath: video.url.path))
+        #expect(!FileManager.default.fileExists(atPath: recording.path))
+    }
 }
 @Test func losslessPreservesOrientationAndAlpha() throws {
     let width = 8, height = 6

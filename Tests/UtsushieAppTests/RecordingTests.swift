@@ -167,8 +167,8 @@ func videoClipboardAlwaysContainsOnlyFileURL(_ mode: ClipboardMode) {
     let first = dir.appendingPathComponent("one.recording.mp4"), second = dir.appendingPathComponent("two.recording.mp4")
     try Data([1]).write(to: first); try Data([2]).write(to: second)
     let date = Date(timeIntervalSince1970: 0)
-    let a = try ArtifactStore.publishVideo(from: first, date: date)
-    let b = try ArtifactStore.publishVideo(from: second, date: date)
+    let a = try ArtifactStore.publishVideo(from: first, date: date).url
+    let b = try ArtifactStore.publishVideo(from: second, date: date).url
     #expect(a != b && b.lastPathComponent.hasSuffix("-1.mp4"))
     #expect(try Data(contentsOf: a) == Data([1]))
     #expect(try Data(contentsOf: b) == Data([2]))

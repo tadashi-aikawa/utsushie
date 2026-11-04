@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         installStatusMenu()
         thumbnails.onArtifactsChange = { [weak self] in self?.captureLibrary?.refresh() }
         thumbnails.onLibraryExportStatus = { [weak self] url, status in self?.captureLibrary?.setExportStatus(url, status: status) }
+        thumbnails.onWarning = { [weak self] in self?.addWarning($0) }
         reloadConfig()
         warnings += VideoEditStore.cleanupAtLaunch(directory: config.outputURL())
         updateWarnings()
@@ -145,6 +146,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func updateWarnings() {
         warningItem?.isHidden = warnings.isEmpty
         warningItem?.title = "設定の警告 \(warnings.count)件…"
+    }
+    /// 保存時に見つかった問題を設定の警告と同じメニューへ出す。同じ文は重ねない。
+    private func addWarning(_ warning: String) {
+        guard !warnings.contains(warning) else { return }
+        warnings.append(warning); updateWarnings()
     }
     @objc private func showWarnings() { alert("UTSUSHIEの警告", warnings.joined(separator: "\n")) }
     @objc private func openLibrary() {
@@ -320,8 +326,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             do {
                 let result = try await session.finish(hostTime: stoppedAt)
                 temporary = result.temporaryURL
-                let url = try ArtifactStore.publishVideo(from: result.temporaryURL, date: recordingDate, pattern: recordingConfig.fileName)
+                let saved = try ArtifactStore.publishVideo(from: result.temporaryURL, date: recordingDate, pattern: recordingConfig.fileName)
+                let url = saved.url
                 temporary = nil
+                if saved.usedDefaultName { addWarning(CaptureFileNaming.fallbackWarning) }
                 let bytes = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
                 let artifact = SharedArtifact(url: url, kind: .mp4, width: result.width, height: result.height,
                     byteCount: bytes, duration: result.duration, videoFPS: recordingConfig.video.fps,
@@ -358,11 +366,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 let image = captured.image
                 // エンコードとディスク書き込みはメインスレッドを塞がない。
-                let (data, url) = try await Task.detached(priority: .userInitiated) {
+                let (data, saved) = try await Task.detached(priority: .userInitiated) {
                     let data = try WebPEncoder.encode(image, quality: snapshot.quality, lossless: snapshot.lossless)
-                    let url = try ArtifactStore.save(data: data, kind: .webP, directory: snapshot.outputURL(), pattern: snapshot.fileName)
-                    return (data, url)
+                    let saved = try ArtifactStore.save(data: data, kind: .webP, directory: snapshot.outputURL(), pattern: snapshot.fileName)
+                    return (data, saved)
                 }.value
+                let url = saved.url
+                if saved.usedDefaultName { addWarning(CaptureFileNaming.fallbackWarning) }
                 let artifact = SharedArtifact(url: url, kind: .webP, width: image.width, height: image.height, byteCount: data.count,
                     pixelScale: captured.scale)
                 let copied = snapshot.clipboard.copiesAutomatically && ClipboardWriter.copy(artifact, data: data, mode: snapshot.clipboard)

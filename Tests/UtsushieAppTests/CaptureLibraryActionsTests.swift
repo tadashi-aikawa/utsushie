@@ -176,7 +176,7 @@ func libraryCopiesAllImagesAndVideosInDisplayOrderWithoutGeneralPasteboard(_ mod
     let directory = try actionsDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let thumbnails = ThumbnailController(), image = try actionsImage()
-    let url = try ArtifactStore.save(data: WebPEncoder.encode(image, quality: 80, lossless: true), kind: .webP, directory: directory)
+    let url = try ArtifactStore.save(data: WebPEncoder.encode(image, quality: 80, lossless: true), kind: .webP, directory: directory).url
     thumbnails.add(SharedArtifact(url: url, kind: .webP, width: 32, height: 24, byteCount: 1),
         image: image, copied: false, seconds: 100, screen: nil)
     defer { for card in thumbnails.cards { thumbnails.remove(card.id) } }
@@ -244,7 +244,7 @@ func libraryCopiesAllImagesAndVideosInDisplayOrderWithoutGeneralPasteboard(_ mod
     let directory = try actionsDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let thumbnails = ThumbnailController(), image = try actionsImage()
-    let url = try ArtifactStore.save(data: WebPEncoder.encode(image, quality: 80, lossless: true), kind: .webP, directory: directory)
+    let url = try ArtifactStore.save(data: WebPEncoder.encode(image, quality: 80, lossless: true), kind: .webP, directory: directory).url
     thumbnails.add(SharedArtifact(url: url, kind: .webP, width: 32, height: 24, byteCount: 1),
         image: image, copied: false, seconds: 100, screen: nil)
     defer { for card in thumbnails.cards { thumbnails.remove(card.id) } }

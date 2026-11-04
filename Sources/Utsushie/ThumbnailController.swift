@@ -20,6 +20,8 @@ final class ThumbnailController {
     /// 表示中のカードの窓が増えた。撮影用UIの除外に使う窓の一覧を取り直す合図にする。
     var onCardAdded: (() -> Void)?
     var onLibraryExportStatus: ((URL, String?) -> Void)?
+    /// 保存時の問題をメニューの警告へ出す。
+    var onWarning: ((String) -> Void)?
     var beforeShowingCard: ((NSWindow) async -> Bool)?
 
     @discardableResult
@@ -53,6 +55,7 @@ final class ThumbnailController {
                 } else { self.add(still.artifact, image: still.image, copied: copied, seconds: seconds, screen: card.screen) }
             }
             if !stills.isEmpty { onArtifactsChange?() }
+            if stills.contains(where: \.usedDefaultName) { onWarning?(CaptureFileNaming.fallbackWarning) }
         }
         card.onExportStatus = { [weak self, weak card] status in
             guard let card else { return }

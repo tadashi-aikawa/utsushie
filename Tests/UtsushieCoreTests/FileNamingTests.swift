@@ -38,7 +38,33 @@ func invalidFileNamePatterns(_ pattern: String) {
         #expect(result.warnings == ["file.name が不正なため既定値を使います"])
     }
     // 呼び出し側の誤りで不正な書式が渡っても、既定の名前で保存できる。
-    #expect(CaptureFileNaming.name(date: sample, timeZone: jst, pattern: pattern) == "utsushie-20261104-101543.webp")
+    // 250文字は連番の余裕が無いので設定では弾くが、最終名が255バイトに収まる回はそのまま使う。
+    if pattern.count < 250 {
+        #expect(CaptureFileNaming.resolve(date: sample, timeZone: jst, pattern: pattern) == .init(name: "utsushie-20261104-101543.webp", usedDefault: true))
+    }
+}
+@Test func fileNameResolveChecksFinalNameWithActualDateAndTimeZone() throws {
+    let tokyo = try #require(TimeZone(identifier: "Asia/Tokyo"))
+    let september = Date(timeIntervalSince1970: 1_790_763_343) // 2026-09-30T19:15:43+09:00
+    let fallback = "utsushie-20260930-191543"
+    // タイムゾーン名・オフセットはUTCの見本では通っても、東京で`/`・`:`が出る。
+    for pattern in ["{VV}", "x{ZZZZZ}"] {
+        #expect(!CaptureFileNaming.isValid(pattern: pattern, timeZone: tokyo))
+        let resolved = CaptureFileNaming.resolve(date: september, timeZone: tokyo, pattern: pattern)
+        #expect(resolved == .init(name: "\(fallback).webp", usedDefault: true))
+    }
+    // 月名で長さが変わる。設定時は最長の9月で測り、保存時は連番と拡張子を含めて255バイトで切る。
+    let months = String(repeating: "{MMMM}", count: 30)
+    #expect(!CaptureFileNaming.isValid(pattern: months, timeZone: tokyo))
+    #expect(CaptureFileNaming.resolve(date: september, timeZone: tokyo, pattern: months).usedDefault)
+    let may = Date(timeIntervalSince1970: 1_779_000_000) // 2026-05
+    #expect(CaptureFileNaming.resolve(date: may, timeZone: tokyo, pattern: months).name == String(repeating: "May", count: 30) + ".webp")
+    let edge = String(repeating: "a", count: 250)
+    #expect(CaptureFileNaming.resolve(date: may, extension: "mp4", timeZone: tokyo, pattern: edge) == .init(name: edge + ".mp4", usedDefault: false))
+    #expect(CaptureFileNaming.resolve(date: may, sequence: 1, extension: "mp4", timeZone: tokyo, pattern: edge).usedDefault)
+    // 既定の書式はそのまま使い、警告の対象にしない。
+    #expect(CaptureFileNaming.resolve(date: september, timeZone: tokyo) == .init(name: "\(fallback).webp", usedDefault: false))
+    #expect(CaptureFileNaming.resolve(date: september, sequence: 2, extension: "mp4", timeZone: tokyo, pattern: "{VV}").name == "\(fallback)-2.mp4")
 }
 @Test func fileNameSettingReadsValidPatternAndRejectsWrongType() {
     let valid = ConfigLoader.parse(toml: "[file]\nname = \"{yyyyMMdd}-{HHmmss}-utsushie\"")

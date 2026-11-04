@@ -40,25 +40,31 @@ enum ArtifactStore {
         }
         guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     }
+    struct SavedFile: Sendable {
+        var url: URL
+        /// 書式の展開結果が使えず、既定の名前で保存した。呼び出し側がメニューの警告へ出す。
+        var usedDefaultName: Bool
+    }
     /// 完成したMP4だけを公開する。移動は同一フォルダ内なので原子的。既存名は上書きしない。
-    static func publishVideo(from temporary: URL, date: Date, pattern: String = CaptureFileNaming.defaultPattern) throws -> URL {
+    static func publishVideo(from temporary: URL, date: Date, pattern: String = CaptureFileNaming.defaultPattern,
+                             timeZone: TimeZone = .current) throws -> SavedFile {
         var sequence = 0
         while true {
-            let target = temporary.deletingLastPathComponent().appendingPathComponent(
-                CaptureFileNaming.name(date: date, sequence: sequence, extension: "mp4", pattern: pattern))
-            do { try FileManager.default.moveItem(at: temporary, to: target); return target }
+            let name = CaptureFileNaming.resolve(date: date, sequence: sequence, extension: "mp4", timeZone: timeZone, pattern: pattern)
+            let target = temporary.deletingLastPathComponent().appendingPathComponent(name.name)
+            do { try FileManager.default.moveItem(at: temporary, to: target); return SavedFile(url: target, usedDefaultName: name.usedDefault) }
             catch let error as CocoaError where error.code == .fileWriteFileExists { sequence += 1 }
         }
     }
     /// 同秒と再起動後の既存ファイルを保護。存在確認だけでは競合するので排他作成する。
     static func save(data: Data, kind: ArtifactKind, directory: URL, date: Date = Date(),
-                     pattern: String = CaptureFileNaming.defaultPattern) throws -> URL {
+                     pattern: String = CaptureFileNaming.defaultPattern, timeZone: TimeZone = .current) throws -> SavedFile {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var sequence = 0
         while true {
-            let url = directory.appendingPathComponent(
-                CaptureFileNaming.name(date: date, sequence: sequence, extension: kind.fileExtension, pattern: pattern))
-            do { try data.write(to: url, options: .withoutOverwriting); return url }
+            let name = CaptureFileNaming.resolve(date: date, sequence: sequence, extension: kind.fileExtension, timeZone: timeZone, pattern: pattern)
+            let url = directory.appendingPathComponent(name.name)
+            do { try data.write(to: url, options: .withoutOverwriting); return SavedFile(url: url, usedDefaultName: name.usedDefault) }
             catch let error as CocoaError where error.code == .fileWriteFileExists { sequence += 1 }
         }
     }

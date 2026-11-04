@@ -16,7 +16,7 @@ private func recentDirectory() throws -> URL {
 @MainActor private func recentArtifact(_ image: CGImage, in directory: URL, seconds: Double = 0) throws -> SharedArtifact {
     let date = Date(timeIntervalSince1970: seconds)
     let data = try WebPEncoder.encode(image, quality: 80, lossless: true)
-    let url = try ArtifactStore.save(data: data, kind: .webP, directory: directory, date: date)
+    let url = try ArtifactStore.save(data: data, kind: .webP, directory: directory, date: date).url
     try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
     return SharedArtifact(url: url, kind: .webP, width: image.width, height: image.height, byteCount: data.count)
 }

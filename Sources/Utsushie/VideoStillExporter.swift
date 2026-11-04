@@ -5,6 +5,8 @@ struct VideoStillArtifact: Sendable {
     let artifact: SharedArtifact
     let data: Data
     let image: CGImage
+    /// 書式の展開結果が使えず、既定の名前で保存した。
+    var usedDefaultName = false
     var clipboardEntry: ClipboardEntry { ClipboardEntry(artifact: artifact, data: data) }
 }
 
@@ -32,9 +34,10 @@ enum VideoStillExporter {
                 try Task.checkCancellation()
                 let image = try await frame(source: source, time: mark.time)
                 let data = try WebPEncoder.encode(image, quality: quality, lossless: lossless)
-                let url = try ArtifactStore.save(data: data, kind: .webP, directory: directory, date: date, pattern: pattern)
-                result.append(VideoStillArtifact(artifact: SharedArtifact(url: url, kind: .webP, width: image.width,
-                    height: image.height, byteCount: data.count, pixelScale: pixelScale), data: data, image: image))
+                let saved = try ArtifactStore.save(data: data, kind: .webP, directory: directory, date: date, pattern: pattern)
+                result.append(VideoStillArtifact(artifact: SharedArtifact(url: saved.url, kind: .webP, width: image.width,
+                    height: image.height, byteCount: data.count, pixelScale: pixelScale), data: data, image: image,
+                    usedDefaultName: saved.usedDefaultName))
             }
             return result
         } catch {
