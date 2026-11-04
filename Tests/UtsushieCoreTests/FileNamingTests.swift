@@ -66,14 +66,19 @@ func invalidFileNamePatterns(_ pattern: String) {
     #expect(CaptureFileNaming.resolve(date: september, timeZone: tokyo) == .init(name: "\(fallback).webp", usedDefault: false))
     #expect(CaptureFileNaming.resolve(date: september, sequence: 2, extension: "mp4", timeZone: tokyo, pattern: "{VV}").name == "\(fallback)-2.mp4")
 }
-@Test func fileNameFallbackWarningSurvivesConfigurationReload() throws {
+@Test func fileNamePatternValidInConfigCanStillFallBackWhenSavedInAfternoon() throws {
+    // 検証のタイムゾーンをUTCと東京に固定する。ConfigLoader.parseは実行環境の.currentを使うので通さない。
     let tokyo = try #require(TimeZone(identifier: "Asia/Tokyo"))
     // 「in the morning」などは14バイト、「in the afternoon」は16バイト。設定時の見本では収まり、午後の保存で255バイトを超える。
     let pattern = String(repeating: "{BBBB}", count: 17)
-    let toml = "[file]\nname = \"\(pattern)\""
     #expect(CaptureFileNaming.isValid(pattern: pattern, timeZone: tokyo))
     let afternoon = Date(timeIntervalSince1970: 1_793_772_943) // 2026-11-04T15:15:43+09:00
-    #expect(CaptureFileNaming.resolve(date: afternoon, timeZone: tokyo, pattern: pattern).usedDefault)
+    #expect(CaptureFileNaming.resolve(date: afternoon, timeZone: tokyo, pattern: pattern)
+        == .init(name: "utsushie-20261104-151543.webp", usedDefault: true))
+}
+@Test func fileNameFallbackWarningSurvivesConfigurationReload() {
+    // どのタイムゾーンでも通る書式にし、実行環境で設定の警告が変わらないようにする。
+    let toml = "[file]\nname = \"{yyyyMMdd}-{HHmmss}-utsushie\""
     var warnings = AppWarnings()
     warnings.replaceConfiguration(ConfigLoader.parse(toml: toml).warnings)
     #expect(warnings.menuTitle == nil)
