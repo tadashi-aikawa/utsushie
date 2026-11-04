@@ -452,6 +452,51 @@ func seekingDuringTransitionPreviewCancelsAnimationAndDoesNotResumePlayback(_ ki
     #expect(try Data(contentsOf: unrelated) == Data([5]))
 }
 
+@Test func videoOriginalKeepsLongPublicNameOutOfBackupNameAndRecoversIt() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    // 設定で通る最長に近い名前。旧方式の退避名では255バイトを超えた。
+    let target = dir.appendingPathComponent(String(repeating: "a", count: 240) + ".mp4")
+    try Data([1, 2]).write(to: target)
+    let temporary = VideoEditStore.temporaryURL(for: target)
+    try Data([3]).write(to: temporary)
+    let original = try VideoEditStore.replace(temporary: temporary, target: target, original: nil)
+    #expect(original.lastPathComponent.utf8.count < 100 && !original.lastPathComponent.contains("aaaa"))
+    #expect(VideoEditStore.originalName(of: original) == target.lastPathComponent)
+    #expect(VideoEditStore.originalName(of: target) == nil)
+    // 改名直後に終了して公開先が無い場合は、拡張属性の名前へ戻して属性を外す。
+    try FileManager.default.removeItem(at: target)
+    let unnamed = dir.appendingPathComponent("\(VideoEditStore.originalPrefix)\(UUID().uuidString).mp4")
+    try Data([9]).write(to: unnamed)
+    try VideoEditStore.cleanup(directory: dir)
+    #expect(try Data(contentsOf: target) == Data([1, 2]))
+    #expect(VideoEditStore.originalName(of: target) == nil && !FileManager.default.fileExists(atPath: original.path))
+    // 公開名が分からない元は消さない。
+    #expect(try Data(contentsOf: unnamed) == Data([9]))
+}
+
+@MainActor @Test func videoEditFinishesWithLongCustomFileName() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    var config = UtsushieConfig(); config.fileName = String(repeating: "a", count: 200); config.clipboard = .none
+    let published = try ArtifactStore.publishVideo(from: source.temporaryURL, date: Date(), pattern: config.fileName)
+    #expect(!published.usedDefaultName && published.url.lastPathComponent == config.fileName + ".mp4")
+    let bytes = try Data(contentsOf: published.url)
+    let artifact = SharedArtifact(url: published.url, kind: .mp4, width: 64, height: 48,
+        byteCount: bytes.count, duration: source.duration, videoFPS: 30)
+    let session = VideoEditSession(artifact: artifact, fps: 30, rememberDirectory: { _ in })
+    defer { session.close() }
+    session.document.setStart(1.4)
+    _ = session.document.addStill(at: 0.3)
+    let result = try await session.finish(artifact: artifact, config: config) { _ in true }
+    #expect(result.video.url == published.url && abs((result.video.duration ?? 0) - 2.2) < 0.001)
+    #expect(try Data(contentsOf: try #require(session.originalURL)) == bytes)
+    #expect(result.stills.count == 1 && result.stills[0].artifact.url.lastPathComponent == config.fileName + ".webp")
+}
+
 @MainActor @Test func videoStillsSaveNativeSizeWebPAndCopyAllItemsWithoutReencodingVideo() async throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
