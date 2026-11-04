@@ -28,7 +28,9 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
   - `AnnotationViewport.swift`: 表示倍率・原点、カーソルを固定するズーム、表示の移動と全体表示。
   - `Privacy.swift`: AI応答の行番号の解釈、文字だけのプロンプト、モザイク範囲の余白と画像内への制限、Claude実行ファイルの探索順。
   - `ToolbarPresentation.swift`: 編集画面の手引きの優先順位、範囲選択の帯の幅と配置。
+  - `UIPresentation.swift`: 範囲選択の寸法表示の配置と文言、共有カードの隅と積み方・ボタンの矩形・状態の文言、録画の表示文言。
 - `Sources/Utsushie/`: AppKit・ScreenCaptureKit・ApplicationServicesの実行ターゲット。Swift 6。
+  - `Main.swift`: アプリの入口。NSApplicationにAppDelegateを付けて走らせる。
   - `AppDelegate.swift`: メニュー、権限、設定の再読込、撮影から共有までの流れ。
   - `GlobalHotkey.swift`: Carbonのグローバルホットキー。
   - `OverlayController.swift`: 全画面の選択パネルと物理キー入力。
@@ -42,6 +44,7 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
   - `RecordingAudio.swift`: 音源ごとのAACトラック、無音の穴埋め、2トラックの混ぜ合わせ。
   - `VideoEncoding.swift`: 録画と編集で共有するH.264の設定。容量の小・大で分ける。
   - `VideoEditorController.swift`: 動画の編集ウィンドウ、元の縮尺を保つ時間軸、再生と物理キー。
+  - `VideoBoundaryPreview.swift`: 境界ドラッグ中の静止画の取得を直列化し、待機中の位置は最新の1件だけ残す。
   - `VideoEditExporter.swift`: Readerの2コマ先読み、VFRの表示時間の交差、Writerへの時刻を詰めた再エンコード。
   - `VideoTransitionRenderer.swift`: PixelBufferPoolとCIContextによる早送りの印・暗転・ディゾルブの合成。
   - `VideoTransitionMenu.swift`: 切った範囲ごとのつなぎ方と整数倍率のメニュー。
