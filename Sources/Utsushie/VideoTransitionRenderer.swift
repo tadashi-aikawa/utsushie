@@ -21,13 +21,27 @@ final class VideoTransitionRenderer {
         }
         self.pool = pool
     }
-    func fastForward(_ sample: CMSampleBuffer, speed: Int, start: Double, duration: Double) throws -> CMSampleBuffer {
+    /// 早送りの印は、寄せた後のコマへ重ねる。印まで拡大しないため。
+    func fastForward(_ sample: CMSampleBuffer, speed: Int, start: Double, duration: Double, crop: CGRect? = nil) throws -> CMSampleBuffer {
         guard let pixels = sample.imageBuffer else { throw CaptureError.unavailable("早送りのコマを読めません") }
         if badge?.0 != speed {
             let image = try VideoFastForwardBadge.image(width: Int(bounds.width), height: Int(bounds.height), speed: speed)
             badge = (speed, CIImage(cgImage: image))
         }
-        return try rendered(badge!.1.composited(over: CIImage(cvPixelBuffer: pixels)), start: start, duration: duration, reference: pixels)
+        return try rendered(badge!.1.composited(over: zoomed(CIImage(cvPixelBuffer: pixels), crop: crop)),
+                            start: start, duration: duration, reference: pixels)
+    }
+    func zoom(_ sample: CMSampleBuffer, crop: CGRect, start: Double, duration: Double) throws -> CMSampleBuffer {
+        guard let pixels = sample.imageBuffer else { throw CaptureError.unavailable("ズームのコマを読めません") }
+        return try rendered(zoomed(CIImage(cvPixelBuffer: pixels), crop: crop), start: start, duration: duration, reference: pixels)
+    }
+    /// cropは元録画の左上原点のピクセル座標。CIImageの左下原点へ反転し、出力の寸法いっぱいへ拡大する。
+    func zoomed(_ image: CIImage, crop: CGRect?) -> CIImage {
+        guard let crop, crop.width > 0, crop.height > 0 else { return image }
+        let transform = CGAffineTransform(translationX: -crop.minX, y: -(bounds.height - crop.maxY))
+            .concatenating(CGAffineTransform(scaleX: bounds.width / crop.width, y: bounds.height / crop.height))
+        // 縁の外を透明で補間しないよう、端の画素を延ばしてから切り出す。
+        return image.clampedToExtent().transformed(by: transform).cropped(to: bounds)
     }
     func rendered(_ image: CIImage, start: Double, duration: Double, reference: CVPixelBuffer? = nil) throws -> CMSampleBuffer {
         var pixels: CVPixelBuffer?
@@ -50,15 +64,16 @@ final class VideoTransitionRenderer {
         }
         return sample
     }
+    /// ズームは演出を合成した後のコマへ掛ける。
     func transition(before: CMSampleBuffer, after: CMSampleBuffer, kind: VideoTransitionKind,
-                    progress: Double, start: Double, duration: Double) throws -> CMSampleBuffer {
+                    progress: Double, start: Double, duration: Double, crop: CGRect? = nil) throws -> CMSampleBuffer {
         guard let preceding = before.imageBuffer, let following = after.imageBuffer else {
             throw CaptureError.unavailable("つなぎの両端のコマを読めません")
         }
         if kind == .dissolve {
             let image = CIImage(cvPixelBuffer: preceding).applyingFilter("CIDissolveTransition", parameters: [
                 kCIInputTargetImageKey: CIImage(cvPixelBuffer: following), kCIInputTimeKey: progress])
-            return try rendered(image, start: start, duration: duration, reference: preceding)
+            return try rendered(zoomed(image, crop: crop), start: start, duration: duration, reference: preceding)
         }
         let firstHalf = progress < 0.5
         let pixels = firstHalf ? preceding : following
@@ -67,12 +82,16 @@ final class VideoTransitionRenderer {
             "inputRVector": CIVector(x: brightness, y: 0, z: 0, w: 0),
             "inputGVector": CIVector(x: 0, y: brightness, z: 0, w: 0),
             "inputBVector": CIVector(x: 0, y: 0, z: brightness, w: 0)])
-        return try rendered(image, start: start, duration: duration, reference: pixels)
+        return try rendered(zoomed(image, crop: crop), start: start, duration: duration, reference: pixels)
     }
 }
 
 enum VideoExportTiming {
-    static func time(_ seconds: Double) -> CMTime { CMTime(value: Int64((seconds * 60000).rounded()), timescale: 60000) }
+    static func time(_ seconds: Double) -> CMTime {
+        CMTime(value: VideoExportPlan.tick(seconds), timescale: CMTimeScale(VideoExportPlan.timescale))
+    }
+    /// 時間単位の値を秒へ戻す。timeへ渡すと同じ値へ丸まる。
+    static func seconds(_ tick: Int64) -> Double { Double(tick) / Double(VideoExportPlan.timescale) }
 }
 
 enum VideoFastForwardBadge {

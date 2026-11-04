@@ -94,14 +94,19 @@ private final class VideoExportJob: @unchecked Sendable {
         var sample: CMSampleBuffer
         var start: Double
         var speed: Int
+        /// 寄り方を決める元録画の時刻。
+        var source: Double
     }
     private var heldFastForward: HeldFrame?
     private var current: CMSampleBuffer?
     private var next: CMSampleBuffer?
     private enum Emission {
         case sample(CMSampleBuffer)
-        case transition(before: CMSampleBuffer, after: CMSampleBuffer, kind: VideoTransitionKind, progress: Double, start: Double, duration: Double)
+        case zoom(CMSampleBuffer, crop: CGRect, start: Double, duration: Double)
+        case transition(before: CMSampleBuffer, after: CMSampleBuffer, kind: VideoTransitionKind, progress: Double, start: Double, duration: Double,
+                        crop: CGRect?)
     }
+    private var size: CGSize { CGSize(width: width, height: height) }
     private var pending: [Emission] = []
     private var precedingFrame: CMSampleBuffer?
     private var emittedJunctions: Set<Int> = []
@@ -181,8 +186,11 @@ private final class VideoExportJob: @unchecked Sendable {
                     let sample: CMSampleBuffer
                     switch pending.removeFirst() {
                     case .sample(let ready): sample = ready
-                    case let .transition(before, after, kind, progress, start, duration):
-                        sample = try renderer.transition(before: before, after: after, kind: kind, progress: progress, start: start, duration: duration)
+                    case let .zoom(source, crop, start, duration):
+                        sample = try renderer.zoom(source, crop: crop, start: start, duration: duration)
+                    case let .transition(before, after, kind, progress, start, duration, crop):
+                        sample = try renderer.transition(before: before, after: after, kind: kind, progress: progress, start: start,
+                                                         duration: duration, crop: crop)
                     }
                     guard input.append(sample) else { throw writer.error ?? CaptureError.unavailable("動画のコマを書けません") }
                     if image == nil, let pixels = sample.imageBuffer {
@@ -208,27 +216,42 @@ private final class VideoExportJob: @unchecked Sendable {
                         let count = max(1, Int(ceil(Double(fps) * 0.25))) * 2
                         for frame in 0..<count {
                             let offset = Double(frame) * 0.5 / Double(count)
+                            let progress = Double(frame) / Double(count)
                             pending.append(.transition(before: precedingFrame, after: sample, kind: junction.transition.kind,
-                                progress: Double(frame) / Double(count), start: junction.outputTime + offset, duration: 0.5 / Double(count)))
+                                progress: progress, start: junction.outputTime + offset, duration: 0.5 / Double(count),
+                                crop: plan.transitionCrop(junction, progress: progress, size: size)))
                         }
                         emittedJunctions.insert(index)
                     }
                     let start = max(a, segment.source.start), end = min(b, segment.source.end)
                     let outputStart = segment.outputTime(forSource: start)
                     if segment.speed > 1 {
+                        // 間引いた後のコマへ、そのコマの元の時刻の寄り方を掛ける。
                         if let held = heldFastForward {
                             if outputStart - held.start >= 1 / Double(fps) - 1e-9 {
-                                pending.append(.sample(try renderer.fastForward(held.sample, speed: held.speed, start: held.start, duration: outputStart - held.start)))
-                                heldFastForward = HeldFrame(sample: sample, start: outputStart, speed: segment.speed)
+                                pending.append(.sample(try renderer.fastForward(held.sample, speed: held.speed, start: held.start, duration: outputStart - held.start,
+                                    crop: plan.zoomCrop(atSource: held.source, size: size))))
+                                heldFastForward = HeldFrame(sample: sample, start: outputStart, speed: segment.speed, source: start)
                             }
-                        } else { heldFastForward = HeldFrame(sample: sample, start: outputStart, speed: segment.speed) }
+                        } else { heldFastForward = HeldFrame(sample: sample, start: outputStart, speed: segment.speed, source: start) }
                         if end == segment.source.end, let held = heldFastForward {
                             pending.append(.sample(try renderer.fastForward(held.sample, speed: held.speed, start: held.start,
-                                duration: segment.outputStart + segment.outputDuration - held.start)))
+                                duration: segment.outputStart + segment.outputDuration - held.start,
+                                crop: plan.zoomCrop(atSource: held.source, size: size))))
                             heldFastForward = nil
                         }
                     } else {
-                        pending.append(.sample(try retimed(sample, start: outputStart, duration: end - start)))
+                        // 寄り方が変わらない区間は元のコマのまま渡し、補間中だけ描き直す。
+                        // 時刻は時間単位へ丸めた値を使い、長さは終了と開始の差にする。
+                        for piece in plan.zoomOutputPieces(segment: segment, source: VideoRange(start, end), fps: fps, size: size) {
+                            let pieceStart = VideoExportTiming.seconds(piece.start)
+                            let duration = VideoExportTiming.seconds(piece.end - piece.start)
+                            if let crop = piece.crop {
+                                pending.append(.zoom(sample, crop: crop, start: pieceStart, duration: duration))
+                            } else {
+                                pending.append(.sample(try retimed(sample, start: pieceStart, duration: duration)))
+                            }
+                        }
                         precedingFrame = sample
                     }
                 }

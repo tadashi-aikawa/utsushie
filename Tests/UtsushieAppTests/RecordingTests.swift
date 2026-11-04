@@ -297,6 +297,183 @@ func transitionExportFreezesBoundaryFramesAndAddsHalfSecond(_ kind: VideoTransit
     #expect(result.image.width == 64 && result.image.height == 48)
 }
 
+/// 左半分が暗く右半分が明るい、30fpsの録画。
+private func splitVideo(in directory: URL, width: Int = 160, height: Int = 120, seconds: Int = 3) async throws -> URL {
+    let url = directory.appendingPathComponent("split.mp4")
+    let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+    let input = AVAssetWriterInput(mediaType: .video, outputSettings: VideoEncoding.settings(width: width, height: height, fps: 30, compression: .standard))
+    input.expectsMediaDataInRealTime = false; writer.add(input)
+    #expect(writer.startWriting()); writer.startSession(atSourceTime: .zero)
+    for index in 0..<(seconds * 30) {
+        while !input.isReadyForMoreMediaData {
+            if writer.status == .failed { throw try #require(writer.error) }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        let frame = try sample(time: Double(index) / 30, gray: 220, width: width, height: height).buffer
+        let pixels = try #require(frame.imageBuffer)
+        CVPixelBufferLockBaseAddress(pixels, [])
+        let base = try #require(CVPixelBufferGetBaseAddress(pixels))
+        for y in 0..<height { for x in 0..<(width / 2) {
+            for channel in 0..<3 { base.storeBytes(of: UInt8(30), toByteOffset: y * CVPixelBufferGetBytesPerRow(pixels) + x * 4 + channel, as: UInt8.self) }
+        } }
+        CVPixelBufferUnlockBaseAddress(pixels, [])
+        #expect(input.append(frame))
+    }
+    writer.endSession(atSourceTime: CMTime(seconds: Double(seconds), preferredTimescale: 60000)); input.markAsFinished()
+    await writer.finishWriting(); #expect(writer.status == .completed)
+    return url
+}
+
+private func green(_ image: CGImage, x: Int, y: Int) throws -> Int {
+    let data = try #require(image.dataProvider?.data) as Data
+    return Int(data[y * image.bytesPerRow + x * (image.bitsPerPixel / 8) + 1])
+}
+
+@Test func zoomExportMagnifiesOnlyFramesInsideRangeAndEasesBothEnds() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await splitVideo(in: dir)
+    // 右上の明るい1/4へ寄せる。
+    let rect = CGRect(x: 80, y: 0, width: 80, height: 60)
+    let document = VideoEditDocument(duration: 3, zooms: [VideoZoom(range: .init(1, 2), rect: rect)])
+    let target = dir.appendingPathComponent("zoom.mp4")
+    let result = try await VideoEditExporter.export(source: source, destination: target, document: document, fps: 30)
+    #expect(result.width == 160 && result.height == 120)
+    #expect(abs(try await AVURLAsset(url: target).load(.duration).seconds - 3) < 0.001)
+    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: target))
+    generator.requestedTimeToleranceBefore = .zero; generator.requestedTimeToleranceAfter = .zero
+    func frame(_ time: Double) async throws -> CGImage {
+        try await generator.image(at: CMTime(seconds: time, preferredTimescale: 60000)).image
+    }
+    // 区間外は元のまま。左は暗く右は明るい。
+    for time in [0.5, 2.5] {
+        let image = try await frame(time)
+        #expect(try green(image, x: 20, y: 60) < 60)
+        #expect(try green(image, x: 140, y: 60) > 190)
+    }
+    // 寄りきった間は全体が明るい。
+    let held = try await frame(1.5)
+    #expect(try green(held, x: 20, y: 60) > 190)
+    #expect(try green(held, x: 60, y: 100) > 190)
+    // 補間の途中は境目が左へ動く。x=60は全体では暗く、半分寄ると明るい。
+    #expect(try green(try await frame(1.2), x: 60, y: 60) > 190)
+    #expect(try green(try await frame(1.0), x: 60, y: 60) < 60)
+    #expect(try green(try await frame(1.85), x: 60, y: 60) > 190)
+}
+
+@Test func zoomExportUsesPerRangeEaseSeconds() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await splitVideo(in: dir)
+    // 1秒の区間に1秒の補間を指定すると、半分ずつの0.5秒で寄って戻る。
+    let document = VideoEditDocument(duration: 3, zooms: [VideoZoom(range: .init(1, 2), rect: CGRect(x: 80, y: 0, width: 80, height: 60), ease: 1)])
+    let target = dir.appendingPathComponent("ease.mp4")
+    _ = try await VideoEditExporter.export(source: source, destination: target, document: document, fps: 30)
+    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: target))
+    generator.requestedTimeToleranceBefore = .zero; generator.requestedTimeToleranceAfter = .zero
+    func frame(_ time: Double) async throws -> CGImage {
+        try await generator.image(at: CMTime(seconds: time, preferredTimescale: 60000)).image
+    }
+    // 0.3秒の補間なら寄りきっている時刻でも、まだ寄り始め。境目は右に残る。
+    #expect(try green(try await frame(1.1), x: 40, y: 60) < 60)
+    #expect(try green(try await frame(1.5), x: 40, y: 60) > 190)
+    #expect(try green(try await frame(1.9), x: 40, y: 60) < 60)
+}
+
+/// frameTimesはSetで重複を消すため、Readerが返すPTSの列をそのまま読む。
+private func decodedPresentationTimes(_ url: URL) async throws -> [Int64] {
+    let asset = AVURLAsset(url: url)
+    let track = try #require(try await asset.loadTracks(withMediaType: .video).first)
+    let reader = try AVAssetReader(asset: asset)
+    let output = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+    reader.add(output)
+    #expect(reader.startReading())
+    var times: [Int64] = []
+    while let sample = output.copyNextSampleBuffer() {
+        times.append(CMTimeConvertScale(sample.presentationTimeStamp, timescale: 60000, method: .roundHalfAwayFromZero).value)
+    }
+    #expect(reader.status == .completed)
+    return times
+}
+
+@Test func zoomExportKeepsStrictlyIncreasingPTSWhenRampEndsJustAfterFrame() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await splitVideo(in: dir)
+    // 補間の終わりが1.000001秒で、1.0秒のコマの頭を60000分の1秒未満だけ切る。
+    let document = VideoEditDocument(duration: 3, zooms: [VideoZoom(range: .init(0.700001, 2), rect: CGRect(x: 80, y: 0, width: 80, height: 60))])
+    let target = dir.appendingPathComponent("tick.mp4")
+    _ = try await VideoEditExporter.export(source: source, destination: target, document: document, fps: 30)
+    let times = try await decodedPresentationTimes(target)
+    #expect(zip(times, times.dropFirst()).allSatisfy { $0 < $1 })
+    #expect(times.filter { $0 == 60000 }.count == 1)
+    #expect(abs(try await AVURLAsset(url: target).load(.duration).seconds - 3) < 0.001)
+}
+
+@Test(arguments: [0.0, 2.0])
+func zoomExportKeepsStrictlyIncreasingPTSAtEaseLimits(_ ease: Double) async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await splitVideo(in: dir)
+    // 区間の両端をコマの時刻からわずかにずらし、補間の境目が時間単位未満でコマを切るようにする。
+    let document = VideoEditDocument(duration: 3, zooms: [
+        VideoZoom(range: .init(0.700001, 1.300001), rect: CGRect(x: 80, y: 0, width: 80, height: 60), ease: ease),
+        VideoZoom(range: .init(1.5, 2.900001), rect: CGRect(x: 0, y: 0, width: 80, height: 60), ease: ease)])
+    #expect(document.zooms.map(\.ease) == [ease, ease])
+    let target = dir.appendingPathComponent("ease-limit.mp4")
+    _ = try await VideoEditExporter.export(source: source, destination: target, document: document, fps: 30)
+    let times = try await decodedPresentationTimes(target)
+    #expect(!times.isEmpty && times.first == 0)
+    #expect(zip(times, times.dropFirst()).allSatisfy { $0 < $1 })
+    #expect(abs(try await AVURLAsset(url: target).load(.duration).seconds - 3) < 0.001)
+}
+
+@Test func zoomExportRedrawsHeldVFRFrameDuringRamp() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await editableVideo(in: dir)
+    // 0.3秒のコマは1.4秒まで保持される。その間に寄って戻る。
+    let document = VideoEditDocument(duration: source.duration,
+        zooms: [VideoZoom(range: .init(0.4, 1.3), rect: CGRect(x: 0, y: 0, width: 32, height: 24))])
+    let target = dir.appendingPathComponent("held.mp4")
+    _ = try await VideoEditExporter.export(source: source.temporaryURL, destination: target, document: document, fps: 30)
+    let times = try await VideoEditMedia.frameTimes(url: target)
+    // 寄る0.3秒と戻る0.3秒は1/30秒ごとに描き直し、寄りきった間と区間外は保持したまま。
+    #expect(times.filter { $0 > 0.4 + 1e-6 && $0 < 0.7 - 1e-6 }.count == 8)
+    #expect(times.filter { $0 > 1.0 + 1e-6 && $0 < 1.3 - 1e-6 }.count == 8)
+    #expect(times.filter { $0 >= 0.7 - 1e-6 && $0 <= 1.0 + 1e-6 }.count == 1)
+    #expect(times.filter { $0 > 1.3 + 1e-6 && $0 < 1.4 - 1e-6 }.isEmpty)
+    #expect(zip(times, times.dropFirst()).allSatisfy { $0 < $1 })
+    #expect(abs(try await AVURLAsset(url: target).load(.duration).seconds - source.duration) < 0.001)
+}
+
+@Test func zoomAppliesAfterFastForwardThinningAndKeepsBadgeUnscaled() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await splitVideo(in: dir, width: 640, height: 360)
+    var document = VideoEditDocument(duration: 3, kept: [.init(0, 0.5), .init(2.5, 3)],
+        zooms: [VideoZoom(range: .init(0.6, 2.4), rect: CGRect(x: 320, y: 0, width: 320, height: 180))])
+    document.setTransition(for: .init(0.5, 2.5), kind: .fastForward, speed: 4)
+    let target = dir.appendingPathComponent("fast-zoom.mp4")
+    _ = try await VideoEditExporter.export(source: source, destination: target, document: document, fps: 30)
+    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: target))
+    generator.requestedTimeToleranceBefore = .zero; generator.requestedTimeToleranceAfter = .zero
+    // 早送りの中ほど(元録画1.5秒)は寄っていて、左も明るい。印は元の大きさのまま右上にある。
+    let image = try await generator.image(at: CMTime(seconds: 0.75, preferredTimescale: 60000)).image
+    #expect(try green(image, x: 80, y: 300) > 190)
+    let badge = VideoFastForwardBadge.rect(width: 640, height: 360, speed: 4)
+    #expect(try green(image, x: Int(badge.midX), y: 360 - Int(badge.minY + 3)) < 95)
+    // 残す範囲は寄らない。
+    let plain = try await generator.image(at: CMTime(seconds: 0.25, preferredTimescale: 60000)).image
+    #expect(try green(plain, x: 80, y: 300) < 60)
+}
+
 @MainActor @Test func videoEditSessionOverwritesSameNameAndAlwaysReeditsOriginal() async throws {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -373,6 +550,18 @@ func transitionExportFreezesBoundaryFramesAndAddsHalfSecond(_ kind: VideoTransit
     session.document.setTransition(for: range, kind: .fastForward)
     #expect(session.document.transitions[0].multiplier == 4)
     session.close()
+}
+
+@MainActor @Test func zoomOnlyEditReexportsAndStillMarksDoNot() async throws {
+    let artifact = SharedArtifact(url: URL(fileURLWithPath: "/tmp/utsushie-test-missing.mp4"), kind: .mp4, width: 64, height: 48,
+        byteCount: 0, duration: 3.6, videoFPS: 30)
+    let session = VideoEditSession(artifact: artifact, fps: 30, rememberDirectory: { _ in })
+    session.document.addStill(at: 1)
+    #expect(!session.needsExport)
+    let added = session.document.addZoom(drag: CGRect(x: 0, y: 0, width: 32, height: 24), size: CGSize(width: 64, height: 48), at: 1)
+    #expect(added != nil && session.needsExport)
+    session.document.removeZoom(try #require(added))
+    #expect(!session.needsExport)
 }
 
 @Test func mixedTransitionsExportInSourceOrderIncludingMultipleJoinsWithinOneHeldFrame() async throws {
@@ -651,6 +840,446 @@ func seekingDuringTransitionPreviewCancelsAnimationAndDoesNotResumePlayback(_ ki
     editor.undo()
     editor.goToEnd(); editor.captureFrame()
     #expect(editor.timeline.document.stills.map(\.time) == [0.3, 214000.0 / 60000])
+}
+
+@MainActor @Test(arguments: [false, true])
+func dissolvePreviewInterpolatesZoomLikeExportPlan(zoomTool: Bool) async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await splitVideo(in: dir)
+    let rect = CGRect(x: 80, y: 0, width: 80, height: 60)
+    var document = VideoEditDocument(duration: 3, kept: [.init(0, 1.5), .init(2.2, 3)], zooms: [VideoZoom(range: .init(0.5, 1.8), rect: rect)])
+    document.setTransition(for: .init(1.5, 2.2), kind: .dissolve)
+    let plan = VideoExportPlan(document: document)
+    let junction = try #require(plan.junctions.first)
+    let size = CGSize(width: 160, height: 120)
+    let editor = VideoEditorController(source: source, document: document, screen: nil, focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    for _ in 0..<300 where editor.videoSize == nil || !editor.canCapture { try await Task.sleep(for: .milliseconds(10)) }
+    try #require(editor.videoSize == size)
+    editor.window.contentView?.layoutSubtreeIfNeeded()
+    if zoomTool { editor.toggleZoomTool(); #expect(editor.zoomTool) }
+    editor.seek(to: 1.3, resume: true)
+    // 演出の前半・後半とも、プレビューの矩形が書き出しの計画と一致する。位置が末尾へ飛んでも倍率を戻さない。
+    var checked: Set<Bool> = []
+    let deadline = ContinuousClock.now + .seconds(4)
+    while checked.count < 2, ContinuousClock.now < deadline {
+        if let progress = editor.transitionPreviewProgress, progress > 0.1, progress < 0.9 {
+            // ツール中でも再生中は寄るので、演出の間も書き出しと同じ補間にし、枠は出さない。
+            let crop = try #require(editor.previewZoomCrop)
+            let expected = try #require(plan.transitionCrop(junction, progress: progress, size: size))
+            #expect(abs(crop.minX - expected.minX) < 0.001 && abs(crop.width - expected.width) < 0.001)
+            #expect(crop != rect && editor.previewOutline == nil)
+            checked.insert(progress >= 0.5)
+        }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(checked == [false, true])
+    editor.seek(to: 2.5)
+    #expect(editor.transitionPreviewProgress == nil && editor.previewZoomCrop == nil)
+}
+
+@MainActor @Test(arguments: [false, true])
+func zoomPlacedAwayFromPlayheadSeeksIntoRangeAndKeepsOutline(fromCut: Bool) async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await splitVideo(in: dir)
+    let document = VideoEditDocument(duration: 3, kept: fromCut ? [.init(0, 1), .init(2, 3)] : nil)
+    let editor = VideoEditorController(source: source, document: document, screen: nil, focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    for _ in 0..<300 where editor.videoSize == nil { try await Task.sleep(for: .milliseconds(10)) }
+    try #require(editor.videoSize == CGSize(width: 160, height: 120))
+    let root = try #require(editor.window.contentView)
+    root.layoutSubtreeIfNeeded()
+    let preview = try #require(root.subviews.first { $0.layer?.sublayers?.contains { $0 is AVPlayerLayer } == true })
+    let stage = AVMakeRect(aspectRatio: CGSize(width: 160, height: 120), insideRect: preview.bounds.insetBy(dx: 16, dy: 4))
+    func mouse(_ type: NSEvent.EventType, _ fx: Double, _ fy: Double) throws -> NSEvent {
+        let point = preview.convert(CGPoint(x: stage.minX + stage.width * fx, y: stage.maxY - stage.height * fy), to: nil)
+        return try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: editor.window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+    }
+    // 録画末尾(End)か、切った範囲の中から置く。
+    if fromCut { editor.seek(to: 1.5) } else { editor.goToEnd() }
+    editor.toggleZoomTool()
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.5, 0.01))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 1, 0.3))
+    preview.mouseUp(with: try mouse(.leftMouseUp, 1, 0.3))
+    let zoom = try #require(editor.timeline.document.zooms.first)
+    #expect(zoom.range == (fromCut ? .init(0, 1) : .init(1, 3)))
+    // 区間の頭へ移り、ツールのまま枠とリサイズの対象を保つ。
+    #expect(editor.position == zoom.range.start && editor.zoomTool && editor.timeline.selectedZoom == zoom.id)
+    #expect(editor.previewOutline == zoom.rect)
+    preview.mouseMoved(with: try mouse(.mouseMoved, 0.5, 0.15))
+    #expect(editor.previewCursor == .resize([.minX]))
+}
+
+@MainActor @Test func optionDragMovesZoomRectInsideAndOutsideToolAndStopsAtEdges() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await splitVideo(in: dir)
+    let rect = CGRect(x: 80, y: 0, width: 80, height: 60)
+    let zoom = VideoZoom(range: .init(0.5, 2.5), rect: rect)
+    let editor = VideoEditorController(source: source, document: VideoEditDocument(duration: 3, zooms: [zoom]), screen: nil,
+        focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    for _ in 0..<300 where editor.videoSize == nil { try await Task.sleep(for: .milliseconds(10)) }
+    try #require(editor.videoSize == CGSize(width: 160, height: 120))
+    let root = try #require(editor.window.contentView)
+    root.layoutSubtreeIfNeeded()
+    let preview = try #require(root.subviews.first { $0.layer?.sublayers?.contains { $0 is AVPlayerLayer } == true })
+    let stage = AVMakeRect(aspectRatio: CGSize(width: 160, height: 120), insideRect: preview.bounds.insetBy(dx: 16, dy: 4))
+    func mouse(_ type: NSEvent.EventType, _ fx: Double, _ fy: Double, option: Bool = false) throws -> NSEvent {
+        let point = preview.convert(CGPoint(x: stage.minX + stage.width * fx, y: stage.maxY - stage.height * fy), to: nil)
+        return try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: option ? .option : [], timestamp: 0,
+            windowNumber: editor.window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+    }
+    // ツール外: レーンで選んだ区間の矩形を薄い枠で示す。寄った表示なので、枠は映像全体に重なる。
+    editor.timeline.selectedZoom = zoom.id
+    editor.seek(to: 1.5)
+    #expect(editor.previewZoomCrop == rect && editor.previewOutline == rect)
+    preview.mouseMoved(with: try mouse(.mouseMoved, 0.5, 0.5, option: true)); #expect(editor.previewCursor == .openHand)
+    preview.mouseMoved(with: try mouse(.mouseMoved, 0.5, 0.5)); #expect(editor.previewCursor == .arrow)
+    // ⌥なしはツール外では何もしない。
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.5, 0.5))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 0.2, 0.5))
+    preview.mouseUp(with: try mouse(.leftMouseUp, 0.2, 0.5))
+    #expect(editor.timeline.document.zooms[0].rect == rect)
+    // ⌥はmouseDownで決め、途中で離しても移動を続ける。寄った表示の4分の1は元録画の20px。
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.5, 0.5, option: true))
+    #expect(editor.previewCursor == .closedHand)
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 0.25, 0.5))
+    #expect(editor.previewOutline == CGRect(x: 60, y: 0, width: 80, height: 60) && editor.previewCursor == .closedHand)
+    #expect(editor.previewZoomCrop == rect)
+    preview.mouseUp(with: try mouse(.leftMouseUp, 0.25, 0.5))
+    #expect(editor.timeline.document.zooms[0].rect == CGRect(x: 60, y: 0, width: 80, height: 60))
+    #expect(editor.timeline.document.zooms[0].range == zoom.range && editor.timeline.selectedZoom == zoom.id)
+    #expect(editor.previewZoomCrop == CGRect(x: 60, y: 0, width: 80, height: 60))
+    editor.undo(); #expect(editor.timeline.document.zooms[0].rect == rect)
+    // プレビューの外まで引いても頭打ちにせず、元録画の左端まで届く。
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.5, 0.5, option: true))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, -2, 0.5, option: true))
+    #expect(editor.previewOutline == CGRect(x: 0, y: 0, width: 80, height: 60))
+    preview.mouseUp(with: try mouse(.leftMouseUp, -2, 0.5, option: true))
+    #expect(editor.timeline.document.zooms[0].rect == CGRect(x: 0, y: 0, width: 80, height: 60))
+    editor.undo(); #expect(editor.timeline.document.zooms[0].rect == rect)
+    // ⌥ドラッグの途中でEscを押すと、選択と一緒にドラッグを取り消し、未確定の枠と握った手を残さない。
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.5, 0.5, option: true))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 0.3, 0.5))
+    #expect(editor.previewOutline == CGRect(x: 64, y: 0, width: 80, height: 60))
+    #expect(editor.handleKey(try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: editor.window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 53))))
+    #expect(editor.timeline.selectedZoom == nil && editor.previewOutline == nil && editor.previewCursor != .closedHand)
+    preview.mouseUp(with: try mouse(.leftMouseUp, 0.3, 0.5))
+    #expect(editor.timeline.document.zooms[0].rect == rect && editor.previewOutline == nil)
+    editor.timeline.selectedZoom = zoom.id; editor.seek(to: 1.5)
+    // ツール中: 再生位置の区間を⌥ドラッグで動かし、元録画の端で止める。ツールは抜けない。
+    #expect(editor.handleKey(try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: editor.window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 6))))
+    #expect(editor.zoomTool && editor.previewZoomCrop == nil && editor.previewOutline == rect)
+    preview.mouseMoved(with: try mouse(.mouseMoved, 0.25, 0.2, option: true)); #expect(editor.previewCursor == .crosshair)
+    preview.mouseMoved(with: try mouse(.mouseMoved, 0.6, 0.2, option: true)); #expect(editor.previewCursor == .openHand)
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.6, 0.2, option: true))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 0, 0.9, option: true))
+    preview.mouseUp(with: try mouse(.leftMouseUp, 0, 0.9, option: true))
+    #expect(editor.timeline.document.zooms[0].rect == CGRect(x: 0, y: 60, width: 80, height: 60))
+    #expect(editor.zoomTool && editor.timeline.document.zooms.count == 1)
+    editor.undo(); #expect(editor.timeline.document.zooms[0].rect == rect)
+}
+
+@MainActor @Test func zoomToolPlacesRangeFromPreviewDragAndPreviewShowsZoomedPlayer() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await splitVideo(in: dir)
+    let editor = VideoEditorController(source: source, document: VideoEditDocument(duration: 3), screen: nil,
+        focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    for _ in 0..<300 where editor.videoSize == nil { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(editor.videoSize == CGSize(width: 160, height: 120))
+    let root = try #require(editor.window.contentView)
+    root.layoutSubtreeIfNeeded()
+    let preview = try #require(root.subviews.first { $0.layer?.sublayers?.contains { $0 is AVPlayerLayer } == true })
+    let player = try #require(preview.layer?.sublayers?.first { $0 is AVPlayerLayer })
+    func key(_ code: UInt16) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: editor.window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code))
+    }
+    // 映像の範囲の割合で、プレビューのウィンドウ座標を作る。yは上からの割合。
+    let stage = AVMakeRect(aspectRatio: CGSize(width: 160, height: 120), insideRect: preview.bounds.insetBy(dx: 16, dy: 4))
+    func mouse(_ type: NSEvent.EventType, _ fx: Double, _ fy: Double) throws -> NSEvent {
+        let point = preview.convert(CGPoint(x: stage.minX + stage.width * fx, y: stage.maxY - stage.height * fy), to: nil)
+        return try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: editor.window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+    }
+    editor.seek(to: 1.5)
+    #expect(editor.handleKey(try key(6)))
+    #expect(editor.zoomTool && editor.toolbar.zoomButton.state == .on && editor.hintText.contains("ドラッグ"))
+    // 4pt以内はクリックとして扱い、置かない。
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.6, 0.1))
+    preview.mouseUp(with: try mouse(.leftMouseUp, 0.6, 0.1))
+    #expect(editor.timeline.document.zooms.isEmpty && editor.zoomTool)
+    // ドラッグ中の枠は最小の1/8(20px)へ跳ねず、カーソルに沿った大きさのまま。⌘Zでドラッグだけを取り消す。
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.5, 0.5))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 0.6, 0.55))
+    let small = try #require(editor.previewOutline)
+    #expect(abs(small.width - 16) < 0.5 && abs(small.height - 12) < 0.5 && abs(small.minX - 80) < 0.5)
+    editor.undo()
+    #expect(editor.previewOutline == nil && editor.timeline.document.zooms.isEmpty)
+    preview.mouseUp(with: try mouse(.leftMouseUp, 0.6, 0.55))
+    #expect(editor.timeline.document.zooms.isEmpty)
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.5, 0.01))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 1, 0.3))
+    preview.mouseUp(with: try mouse(.leftMouseUp, 1, 0.3))
+    let zoom = try #require(editor.timeline.document.zooms.first)
+    #expect(zoom.range == .init(0.5, 2.5))
+    // 横長のドラッグを出力と同じ4:3へ広げる。
+    #expect(abs(zoom.rect.width - 80) < 0.5 && abs(zoom.rect.height - 60) < 0.5 && abs(zoom.rect.minX - 80) < 0.5)
+    // 確定してもツールに留まり、区間を選んで全体表示に枠を出し続ける。
+    #expect(editor.zoomTool && editor.timeline.selectedZoom == zoom.id)
+    #expect(editor.previewOutline == zoom.rect && CATransform3DIsIdentity(player.transform))
+    // ツール中でも、Z・Escを押さずに再生すると寄る。停止したら全体表示と枠へ戻る。
+    editor.seek(to: 1.5, resume: true)
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(editor.zoomTool && abs(player.transform.m11 - 2) < 0.01 && editor.previewOutline == nil)
+    editor.seek(to: 1.5)
+    #expect(editor.zoomTool && CATransform3DIsIdentity(player.transform) && editor.previewOutline == zoom.rect)
+    // ツールを抜けると寄った見え方をプレビューに出す。
+    #expect(editor.handleKey(try key(6)) && !editor.zoomTool)
+    #expect(abs(player.transform.m11 - 2) < 0.01)
+    editor.seek(to: 0.2)
+    #expect(CATransform3DIsIdentity(player.transform))
+    // 区間の中で左上へ描き直すと、押した点を右下の角に固定した矩形になる。
+    editor.seek(to: 1.5)
+    #expect(editor.handleKey(try key(6)) && editor.zoomTool)
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.75, 0.75))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 0.5, 0.5))
+    preview.mouseUp(with: try mouse(.leftMouseUp, 0.5, 0.5))
+    let redrawn = try #require(editor.timeline.document.zooms.first)
+    #expect(editor.timeline.document.zooms.count == 1 && redrawn.id == zoom.id && redrawn.range == zoom.range)
+    #expect(abs(redrawn.rect.maxX - 120) < 0.5 && abs(redrawn.rect.maxY - 90) < 0.5)
+    #expect(abs(redrawn.rect.width - 40) < 0.5 && abs(redrawn.rect.height - 30) < 0.5)
+    editor.undo(); #expect(editor.timeline.document.zooms.first?.rect == zoom.rect)
+    editor.undo(); #expect(editor.timeline.document.zooms.isEmpty)
+    editor.redo(); #expect(editor.timeline.document.zooms.count == 1)
+    // 左の辺の縁は⌥を押していてもリサイズ。右の辺を固定し、縦は中心を保って元録画の中へ押し戻す。
+    #expect(editor.zoomTool)
+    func optionMouse(_ type: NSEvent.EventType, _ fx: Double, _ fy: Double) throws -> NSEvent {
+        let point = preview.convert(CGPoint(x: stage.minX + stage.width * fx, y: stage.maxY - stage.height * fy), to: nil)
+        return try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: .option, timestamp: 0,
+            windowNumber: editor.window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+    }
+    preview.mouseMoved(with: try mouse(.mouseMoved, 0.5, 0.3)); #expect(editor.previewCursor == .resize([.minX]))
+    preview.mouseMoved(with: try optionMouse(.mouseMoved, 0.5, 0.3)); #expect(editor.previewCursor == .resize([.minX]))
+    preview.mouseMoved(with: try mouse(.mouseMoved, 0.75, 0.3)); #expect(editor.previewCursor == .crosshair)
+    preview.mouseDown(with: try optionMouse(.leftMouseDown, 0.5, 0.3))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 0.25, 0.3))
+    let resizing = try #require(editor.previewOutline)
+    #expect(abs(resizing.minX - 40) < 0.5 && abs(resizing.maxX - 160) < 0.5 && abs(resizing.width / resizing.height - 4 / 3) < 0.001)
+    #expect(editor.previewCursor == .resize([.minX]))
+    preview.mouseUp(with: try mouse(.leftMouseUp, 0.25, 0.3))
+    let resized = try #require(editor.timeline.document.zooms.first)
+    #expect(abs(resized.rect.minX - 40) < 0.5 && abs(resized.rect.width - 120) < 0.5 && abs(resized.rect.height - 90) < 0.5)
+    #expect(resized.rect.minY >= 0 && resized.range == zoom.range && editor.zoomTool)
+    editor.undo(); #expect(editor.timeline.document.zooms.first?.rect == zoom.rect)
+    // ツールを抜けるのはZ・Escなどの明示した操作だけ。
+    #expect(editor.handleKey(try key(6)) && !editor.zoomTool)
+    // 時間軸のレーンをクリックして選び、⌫で消す。
+    let timeline = editor.timeline, width = timeline.bounds.width - 48
+    let lane = try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: timeline.convert(CGPoint(x: 24 + width * 1.5 / 3, y: 70 + 46), to: nil),
+        modifierFlags: [], timestamp: 0, windowNumber: editor.window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+    timeline.mouseDown(with: lane)
+    #expect(timeline.selectedZoom == zoom.id && abs(editor.position - 1.5) < 0.01)
+    #expect(editor.handleKey(try key(51)))
+    #expect(editor.timeline.document.zooms.isEmpty && editor.timeline.document.kept == [.init(0, 3)])
+    #expect(editor.handleKey(try key(6)) && editor.zoomTool)
+    #expect(editor.handleKey(try key(53)) && !editor.zoomTool)
+    #expect(!editor.handleKey(try key(53)))
+}
+
+@MainActor @Test func zoomDragStaysOnGrabbedRangeAndSeekOrUndoCancelsIt() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await splitVideo(in: dir)
+    let size = CGSize(width: 160, height: 120)
+    var document = VideoEditDocument(duration: 3)
+    let placedFirst = document.addZoom(drag: CGRect(x: 40, y: 30, width: 80, height: 60), size: size, at: 0.5)
+    // 2つ目も左の辺を広げられる位置に置き、取り違えたら矩形が変わるようにする。
+    let placedSecond = document.addZoom(drag: CGRect(x: 60, y: 40, width: 80, height: 60), size: size, at: 2.5)
+    let first = try #require(placedFirst), second = try #require(placedSecond)
+    #expect(document.zooms.map(\.range) == [.init(0, 2), .init(2, 3)])
+    let original = document.zooms
+    let editor = VideoEditorController(source: source, document: document, screen: nil, focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    for _ in 0..<300 where editor.videoSize == nil { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(editor.videoSize == size)
+    let root = try #require(editor.window.contentView)
+    root.layoutSubtreeIfNeeded()
+    let preview = try #require(root.subviews.first { $0.layer?.sublayers?.contains { $0 is AVPlayerLayer } == true })
+    func key(_ code: UInt16, _ flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+            windowNumber: editor.window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code))
+    }
+    let stage = AVMakeRect(aspectRatio: size, insideRect: preview.bounds.insetBy(dx: 16, dy: 4))
+    func mouse(_ type: NSEvent.EventType, _ fx: Double, _ fy: Double, _ flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+        let point = preview.convert(CGPoint(x: stage.minX + stage.width * fx, y: stage.maxY - stage.height * fy), to: nil)
+        return try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: flags, timestamp: 0,
+            windowNumber: editor.window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+    }
+    func rect(_ id: UUID) -> CGRect? { editor.timeline.document.zooms.first { $0.id == id }?.rect }
+    editor.seek(to: 1)
+    #expect(editor.handleKey(try key(6)) && editor.zoomTool)
+    // 1つ目の区間の左の辺をつかんだまま、⇧→で2つ目の区間へ移ると、ドラッグを取り消して2つ目の枠を出す。
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.25, 0.5))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 0.1, 0.5))
+    #expect(editor.previewOutline != original[0].rect)
+    #expect(editor.handleKey(try key(124, .shift)))
+    #expect(abs(editor.position - 2) < 0.01 && editor.previewOutline == original[1].rect)
+    #expect(editor.previewCursor != .resize([.minX]))
+    // 離しても、どちらの区間も変えない。
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 0.05, 0.5))
+    preview.mouseUp(with: try mouse(.leftMouseUp, 0.05, 0.5))
+    #expect(editor.timeline.document.zooms == original)
+    // 1つ目の区間を縮めてから、⌥ドラッグの途中で⌘Zを押すと、ドラッグだけを取り消して履歴は戻さない。
+    editor.seek(to: 1)
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.25, 0.5))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 0.1, 0.5))
+    preview.mouseUp(with: try mouse(.leftMouseUp, 0.1, 0.5))
+    let resized = try #require(rect(first))
+    #expect(resized != original[0].rect && rect(second) == original[1].rect)
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.5, 0.5, .option))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 0.6, 0.6))
+    #expect(editor.previewOutline != resized)
+    #expect(editor.handleKey(try key(6, .command)))
+    #expect(rect(first) == resized && editor.previewOutline == resized && editor.previewCursor != .closedHand)
+    preview.mouseUp(with: try mouse(.leftMouseUp, 0.6, 0.6))
+    #expect(rect(first) == resized)
+    // 次の⌘Zで縮める前へ戻る。やり直しの途中のドラッグも取り消し、やり直しは進める。
+    editor.undo(); #expect(editor.timeline.document.zooms == original)
+    preview.mouseDown(with: try mouse(.leftMouseDown, 0.5, 0.5, .option))
+    preview.mouseDragged(with: try mouse(.leftMouseDragged, 0.6, 0.6))
+    editor.redo()
+    #expect(rect(first) == resized && editor.previewOutline == resized)
+    preview.mouseUp(with: try mouse(.leftMouseUp, 0.6, 0.6))
+    #expect(rect(first) == resized && rect(second) == original[1].rect)
+}
+
+@MainActor @Test func zoomToolPlacesRangeOnTimelineSelectionWhenOneIsChosen() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let source = try await splitVideo(in: dir)
+    let editor = VideoEditorController(source: source, document: VideoEditDocument(duration: 3), screen: nil,
+        focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    for _ in 0..<300 where editor.videoSize == nil { try await Task.sleep(for: .milliseconds(10)) }
+    let root = try #require(editor.window.contentView)
+    root.layoutSubtreeIfNeeded()
+    let preview = try #require(root.subviews.first { $0.layer?.sublayers?.contains { $0 is AVPlayerLayer } == true })
+    func key(_ code: UInt16) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: editor.window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code))
+    }
+    let stage = AVMakeRect(aspectRatio: CGSize(width: 160, height: 120), insideRect: preview.bounds.insetBy(dx: 16, dy: 4))
+    func mouse(_ type: NSEvent.EventType, _ fx: Double, _ fy: Double) throws -> NSEvent {
+        let point = preview.convert(CGPoint(x: stage.minX + stage.width * fx, y: stage.maxY - stage.height * fy), to: nil)
+        return try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: editor.window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+    }
+    // 置いた矩形の縁から始めるとリサイズになるので、2回目からは右下の離れた所から描く。
+    var draws = 0
+    func draw() throws {
+        let from = draws == 0 ? 0.05 : 0.6, to = draws == 0 ? 0.35 : 0.95
+        draws += 1
+        preview.mouseDown(with: try mouse(.leftMouseDown, from, from))
+        preview.mouseDragged(with: try mouse(.leftMouseDragged, to, to))
+        preview.mouseUp(with: try mouse(.leftMouseUp, to, to))
+    }
+    // 時間軸で範囲を選んでからツールで描くと、2秒の目安ではなくその範囲に置き、選択を外す。
+    let timeline = editor.timeline, width = timeline.bounds.width - 48
+    func strip(_ type: NSEvent.EventType, _ time: Double) throws -> NSEvent {
+        try #require(NSEvent.mouseEvent(with: type, location: timeline.convert(CGPoint(x: 24 + width * time / 3, y: 70 + 20), to: nil),
+            modifierFlags: [], timestamp: 0, windowNumber: editor.window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1))
+    }
+    timeline.mouseDown(with: try strip(.leftMouseDown, 0.3))
+    timeline.mouseDragged(with: try strip(.leftMouseDragged, 1.5))
+    timeline.mouseUp(with: try strip(.leftMouseUp, 1.5))
+    let selected = try #require(timeline.selection)
+    #expect(abs(selected.start - 0.3) < 0.02 && abs(selected.end - 1.5) < 0.02)
+    #expect(editor.handleKey(try key(6)) && editor.zoomTool)
+    #expect(editor.hintText.hasPrefix(String(format: "選んだ%.1f秒に", selected.duration)))
+    try draw()
+    let placed = try #require(editor.timeline.document.zooms.first)
+    #expect(placed.range == selected && timeline.selection == nil && editor.zoomTool)
+    #expect(!editor.hintText.hasPrefix("選んだ"))
+    // 既存の区間と重なる範囲を選んで描いたら置かず、選択を残して知らせる。
+    timeline.selection = .init(1, 2.5)
+    try draw()
+    #expect(editor.timeline.document.zooms.count == 1 && timeline.selection == .init(1, 2.5))
+    #expect(editor.hintText.contains("選んだ範囲にはズームを置けません"))
+    // 選択がなければ従来どおり、再生位置のまわりに置く。
+    timeline.selection = nil
+    editor.undo(); #expect(editor.timeline.document.zooms.isEmpty)
+    editor.seek(to: 1.5)
+    try draw()
+    #expect(editor.timeline.document.zooms.first?.range == .init(0.5, 2.5))
+}
+
+@MainActor @Test func zoomLaneStandsOutOnWhiteVideoAndShortensTitleToFit() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    // 白い画面の30秒の録画。2秒の区間はレーンで70pt足らずになる。
+    let writer = try MP4Writer(url: dir.appendingPathComponent("recording.mp4"), width: 640, height: 360, fps: 30)
+    for time in [0.0, 10.0, 20.0, 29.0] {
+        await feed(writer, sample: try sample(time: 100 + time, gray: 250, width: 640, height: 360), host: 1000 + time)
+        try await Task.sleep(for: .milliseconds(50))
+    }
+    let source = try await writer.finish(hostTime: 1030)
+    let size = CGSize(width: 640, height: 360)
+    var document = VideoEditDocument(duration: source.duration)
+    _ = document.addZoom(drag: CGRect(x: 160, y: 90, width: 320, height: 180), size: size, at: 5)
+    _ = document.addZoom(drag: CGRect(x: 0, y: 0, width: 213.3, height: 120), size: size, at: 17)
+    _ = document.moveZoomBoundary(index: 1, start: false, to: 23)
+    _ = document.addZoom(drag: CGRect(x: 0, y: 0, width: 320, height: 180), size: size, at: 28)
+    _ = document.moveZoomBoundary(index: 2, start: true, to: 29.5)
+    #expect(document.zooms.count == 3)
+    let editor = VideoEditorController(source: source.temporaryURL, document: document, screen: nil, focus: .init(activate: {}, restore: { _ in }))
+    defer { editor.window.close() }
+    for _ in 0..<300 where editor.videoSize == nil { try await Task.sleep(for: .milliseconds(10)) }
+    // 区間の下のコマまで白く描かれてから測る。読み込み前の黒い背景では、台形が無くても暗く見える。
+    for _ in 0..<300 where editor.timeline.images.count < 12 { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(editor.timeline.images.count == 12)
+    editor.window.contentView?.layoutSubtreeIfNeeded()
+    let timeline = editor.timeline, zooms = timeline.document.zooms
+    #expect(timeline.zoomLaneRect(zooms[0]).width < 76)
+    // 狭い区間は倍率だけ、広い区間は「ズーム」も付け、どちらも入らない区間は形だけにする。
+    #expect(timeline.zoomLaneTitle(zooms[0]) == "×2.0")
+    #expect(timeline.zoomLaneTitle(zooms[1]) == "ズーム ×3.0")
+    #expect(timeline.zoomLaneTitle(zooms[2]) == nil)
+    // 白いコマの上でも、台形は墨の濃さで描く。台形のすぐ上は白いコマのまま。
+    let rep = try #require(timeline.bitmapImageRepForCachingDisplay(in: timeline.bounds))
+    timeline.cacheDisplay(in: timeline.bounds, to: rep)
+    let lane = timeline.zoomLaneRect(zooms[0])
+    let scale = Double(rep.pixelsWide) / timeline.bounds.width
+    func brightness(_ point: CGPoint) throws -> CGFloat {
+        let row = timeline.isFlipped ? point.y : timeline.bounds.height - point.y
+        return try #require(rep.colorAt(x: Int(point.x * scale), y: Int(row * scale))?.usingColorSpace(.sRGB)).brightnessComponent
+    }
+    let probeX = lane.minX + lane.width * 0.3
+    #expect(try brightness(CGPoint(x: probeX, y: lane.maxY - 3)) < 0.25)
+    #expect(try brightness(CGPoint(x: probeX, y: lane.minY - 4)) > 0.85)
+    // 補間が区間の半分を占めると上辺が尖るので、中ほどで入る幅でも文字を出さない。
+    var steep = timeline.document
+    steep.setZoomEase(zooms[1].id, seconds: 2)
+    _ = steep.moveZoomBoundary(index: 1, start: false, to: zooms[1].range.start + 3.9)
+    timeline.document = steep
+    let tall = try #require(timeline.document.zooms.first { $0.id == zooms[1].id })
+    #expect(abs(tall.ramp - tall.range.duration / 2) < 0.001)
+    #expect(timeline.zoomLaneRect(tall).width > 120 && timeline.zoomLaneTitle(tall) == nil)
 }
 
 @MainActor @Test func videoBoundaryDragDisplaysActualVFRPixelsAndRestoresPlayerOnReleaseOrUndo() async throws {

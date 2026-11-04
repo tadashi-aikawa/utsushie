@@ -52,7 +52,8 @@ final class OverlayController {
         case let .resize(edges): .frameResize(position: Self.resizePosition(edges), directions: .all)
         }
     }
-    private static func resizePosition(_ edges: LastFrameEdges) -> NSCursor.FrameResizePosition {
+    /// 動画のズームの矩形のリサイズも同じ向きのカーソルを使う。
+    static func resizePosition(_ edges: LastFrameEdges) -> NSCursor.FrameResizePosition {
         // AppKitの座標なのでmaxYが上。
         switch (edges.contains(.minX) ? -1 : edges.contains(.maxX) ? 1 : 0, edges.contains(.minY) ? -1 : edges.contains(.maxY) ? 1 : 0) {
         case (-1, 1): .topLeft

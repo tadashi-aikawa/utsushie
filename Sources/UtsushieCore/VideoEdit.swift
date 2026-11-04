@@ -66,13 +66,95 @@ public struct VideoEditDocument: Equatable, Sendable {
     public private(set) var kept: [VideoRange]
     public private(set) var stills: [VideoStillMark]
     public private(set) var transitions: [VideoCutTransition]
-    public init(duration: Double, kept: [VideoRange]? = nil, stills: [VideoStillMark] = [], transitions: [VideoCutTransition] = []) {
+    /// 開始の昇順で、重ならない。切った範囲とは独立に元録画の秒数で持つ。
+    public private(set) var zooms: [VideoZoom]
+    public init(duration: Double, kept: [VideoRange]? = nil, stills: [VideoStillMark] = [], transitions: [VideoCutTransition] = [],
+                zooms: [VideoZoom] = []) {
         self.duration = duration.isFinite ? max(0, duration) : 0
         self.kept = VideoRange.merged(kept ?? [VideoRange(0, self.duration)], duration: self.duration)
         let limit = self.duration
         self.stills = stills.filter { $0.time.isFinite && $0.time >= 0 && $0.time < limit }
         self.transitions = []
+        var accepted: [VideoZoom] = []
+        for zoom in zooms.sorted(by: { $0.range.start < $1.range.start })
+        where zoom.range.start >= 0 && zoom.range.end <= limit && zoom.range.duration > 0
+            && accepted.last.map({ $0.range.end <= zoom.range.start }) ?? true { accepted.append(zoom) }
+        self.zooms = accepted
         reconcileTransitions(from: transitions)
+    }
+    /// 再生位置が既存の区間の中なら、その区間の矩形を描き直す。外なら位置を中心に、残す範囲と前後の区間の間へ収めて置く。
+    @discardableResult public mutating func addZoom(drag: CGRect, size: CGSize, at time: Double) -> UUID? {
+        guard time.isFinite, let rect = VideoZoom.fitted(drag, size: size) else { return nil }
+        if let index = zooms.firstIndex(where: { $0.range.contains(time) }) {
+            zooms[index].rect = rect; return zooms[index].id
+        }
+        guard let segment = kept.first(where: { $0.contains(time) })
+                ?? kept.min(by: { distance($0, time) < distance($1, time) }) else { return nil }
+        let t = min(segment.end, max(segment.start, time))
+        // 切った範囲から寄せた位置が既存の区間の中なら、見えていない区間を描き直さずに置かない。
+        guard !zooms.contains(where: { $0.range.contains(t) }) else { return nil }
+        let lower = max(segment.start, zooms.last { $0.range.end <= t }?.range.end ?? 0)
+        let upper = min(segment.end, zooms.first { $0.range.start > t }?.range.start ?? duration)
+        guard upper - lower >= VideoZoom.minimumDuration else { return nil }
+        let length = min(VideoZoom.initialDuration, upper - lower)
+        let start = min(upper - length, max(lower, t - length / 2))
+        let zoom = VideoZoom(range: VideoRange(start, start + length), rect: rect)
+        guard !zooms.contains(where: { $0.range.start < zoom.range.end && zoom.range.start < $0.range.end }) else { return nil }
+        zooms.append(zoom); zooms.sort { $0.range.start < $1.range.start }
+        return zoom.id
+    }
+    private func distance(_ range: VideoRange, _ time: Double) -> Double {
+        time < range.start ? range.start - time : max(0, time - range.end)
+    }
+    public mutating func removeZoom(_ id: UUID) { zooms.removeAll { $0.id == id } }
+    /// 寸法を保って矩形を動かす。元録画の端で止める。
+    public mutating func moveZoom(_ id: UUID, by delta: CGPoint, size: CGSize) {
+        guard let index = zooms.firstIndex(where: { $0.id == id }) else { return }
+        zooms[index].rect = VideoZoom.moved(zooms[index].rect, by: delta, size: size)
+    }
+    /// つかんだ辺を動かし、縦横比を保ってリサイズする。edgesは元録画の左上原点の向き。
+    public mutating func resizeZoom(_ id: UUID, edges: LastFrameEdges, by delta: CGPoint, size: CGSize) {
+        guard let index = zooms.firstIndex(where: { $0.id == id }) else { return }
+        zooms[index].rect = VideoZoom.resized(zooms[index].rect, edges: edges, by: delta, size: size)
+    }
+    /// イン・アウトの補間の秒数を区間ごとに変える。
+    public mutating func setZoomEase(_ id: UUID, seconds: Double) {
+        guard let index = zooms.firstIndex(where: { $0.id == id }) else { return }
+        zooms[index].setEase(seconds)
+    }
+    /// 前後の区間と録画の両端で止め、最短の長さより縮めない。制限後の端の時刻を返す。
+    @discardableResult public mutating func moveZoomBoundary(index: Int, start: Bool, to time: Double) -> Double? {
+        guard zooms.indices.contains(index), time.isFinite else { return nil }
+        let range = zooms[index].range
+        let minimum = min(VideoZoom.minimumDuration, range.duration)
+        if start {
+            let limit = index == 0 ? 0 : zooms[index - 1].range.end
+            zooms[index].range.start = min(range.end - minimum, max(limit, time))
+            return zooms[index].range.start
+        }
+        let limit = index == zooms.count - 1 ? duration : zooms[index + 1].range.start
+        zooms[index].range.end = max(range.start + minimum, min(limit, time))
+        return zooms[index].range.end
+    }
+    /// 長さを保って区間を動かす。前後の区間と録画の両端で止める。制限後の始まりの時刻を返す。
+    @discardableResult public mutating func moveZoomRange(index: Int, by delta: Double) -> Double? {
+        guard zooms.indices.contains(index), delta.isFinite else { return nil }
+        let range = zooms[index].range
+        let lower = index == 0 ? 0 : zooms[index - 1].range.end
+        let upper = index == zooms.count - 1 ? duration : zooms[index + 1].range.start
+        let start = min(upper - range.duration, max(lower, range.start + delta))
+        zooms[index].range = VideoRange(start, start + range.duration)
+        return start
+    }
+    /// 時間軸で選んだ範囲にズームを置く。録画の中へ切り詰め、ほかの区間と重なるか最短の長さに足りなければ置かない。
+    @discardableResult public mutating func addZoom(drag: CGRect, size: CGSize, range: VideoRange) -> UUID? {
+        guard let rect = VideoZoom.fitted(drag, size: size) else { return nil }
+        let clipped = VideoRange(max(0, range.start), min(duration, range.end))
+        guard clipped.duration >= VideoZoom.minimumDuration,
+              !zooms.contains(where: { $0.range.start < clipped.end && clipped.start < $0.range.end }) else { return nil }
+        let zoom = VideoZoom(range: clipped, rect: rect)
+        zooms.append(zoom); zooms.sort { $0.range.start < $1.range.start }
+        return zoom.id
     }
     public var interiorCuts: [VideoRange] { cuts.filter { $0.start > 0 && $0.end < duration } }
     public func transition(for range: VideoRange) -> VideoCutTransition {
@@ -192,7 +274,8 @@ public struct VideoEditDocument: Equatable, Sendable {
             ? String(format: "残す %.1f秒 + つなぎ %.1f秒", keptDuration, transitionDuration)
             : String(format: "%.1f秒に切る", outputDuration)) : nil
         let images = stills.isEmpty ? nil : "静止画\(stills.count)枚を" + (copiesStills ? "コピー" : "保存")
-        let actions = [trim, images].compactMap { $0 }
+        let zoom = zooms.isEmpty ? nil : "ズーム\(zooms.count)区間を付ける"
+        let actions = [trim, zoom, images].compactMap { $0 }
         return actions.isEmpty ? "ドラッグで切る範囲を選ぶ ・ ⏎でこのコマを撮る" : "完了で " + actions.joined(separator: " ・ ")
     }
 }
@@ -215,8 +298,39 @@ public struct VideoExportPlan: Sendable {
     public var segments: [Segment]
     public var junctions: [Junction]
     public var duration: Double
+    /// 元録画の秒数で寄り方を決める。早送りは間引き後のコマ、暗転・ディゾルブは合成後のコマへ掛ける。
+    public var zooms: [VideoZoom]
+    public func zoomCrop(atSource time: Double, size: CGSize) -> CGRect? { zooms.crop(at: time, size: size) }
+    public func zoomPieces(source: VideoRange, fps: Int, size: CGSize) -> [VideoZoomPiece] {
+        zooms.pieces(source: source, fps: fps, size: size)
+    }
+    /// 書き出しの時間単位。コマ・トラック・MP4全体をこの単位へ揃える。
+    public static let timescale: Int64 = 60000
+    public static func tick(_ seconds: Double) -> Int64 { Int64((seconds * Double(timescale)).rounded()) }
+    /// 残す区間のコマを寄り方ごとに分け、出力の時刻を時間単位へ丸めてから並べる。
+    /// 丸めで長さが0になる区間は捨て、長さは終了と開始の差で求める。同じPTSのコマを2枚渡さないため。
+    public func zoomOutputPieces(segment: Segment, source: VideoRange, fps: Int, size: CGSize) -> [VideoZoomOutputPiece] {
+        var result: [VideoZoomOutputPiece] = []
+        for piece in zoomPieces(source: source, fps: fps, size: size) {
+            let start = Self.tick(segment.outputTime(forSource: piece.source.start))
+            let end = Self.tick(segment.outputTime(forSource: piece.source.end))
+            guard end > start else { continue }
+            if let last = result.last, last.crop == piece.crop, last.end == start {
+                result[result.count - 1].end = end
+            } else { result.append(VideoZoomOutputPiece(start: start, end: end, crop: piece.crop)) }
+        }
+        return result
+    }
+    /// 演出の前は切った範囲の頭、後ろは末尾の寄り方で、その間を進み具合で補間する。
+    public func transitionCrop(_ junction: Junction, progress: Double, size: CGSize) -> CGRect? {
+        let before = zoomCrop(atSource: segments[junction.precedingSegment].source.end, size: size)
+        let after = zoomCrop(atSource: segments[junction.followingSegment].source.start, size: size)
+        if before == nil, after == nil { return nil }
+        let full = CGRect(origin: .zero, size: size)
+        return VideoZoom.interpolated(from: before ?? full, to: after ?? full, min(1, max(0, progress)))
+    }
     public init(document: VideoEditDocument) {
-        var offset = 0.0; segments = []; junctions = []
+        var offset = 0.0; segments = []; junctions = []; zooms = document.zooms
         for (index, range) in document.kept.enumerated() {
             if index > 0 {
                 let cut = VideoRange(document.kept[index - 1].end, range.start)
@@ -312,12 +426,30 @@ public struct VideoTransitionAudioPreview: Equatable, Sendable {
 
 public enum VideoTimelineHit: Equatable, Sendable {
     case boundary(segment: Int, start: Bool)
+    case zoomBoundary(index: Int, start: Bool)
+    case zoom(index: Int)
     case strip
     case outside
 }
 public enum VideoTimelineGesture {
+    /// 時間軸のバーの下側に重ねるズーム区間のレーン。バーの上端からのpt。
+    public static let zoomLane: ClosedRange<Double> = 38...54
     public static func hit(x: Double, y: Double, width: Double, document: VideoEditDocument) -> VideoTimelineHit {
         guard width > 0, document.duration > 0, (0...56).contains(y) else { return .outside }
+        // ズームのレーンでは、残す範囲のつまみよりズーム区間を優先する。
+        if zoomLane.contains(y) {
+            var best: (Double, VideoTimelineHit)?
+            for (index, zoom) in document.zooms.enumerated() {
+                for (time, start) in [(zoom.range.start, true), (zoom.range.end, false)] {
+                    let distance = abs(x - time / document.duration * width)
+                    if distance <= 7, best == nil || distance < best!.0 { best = (distance, .zoomBoundary(index: index, start: start)) }
+                }
+            }
+            if let best { return best.1 }
+            if let index = document.zooms.firstIndex(where: {
+                $0.range.start / document.duration * width <= x && x < $0.range.end / document.duration * width
+            }) { return .zoom(index: index) }
+        }
         // 端が接近しているときも、最も近い境界をつかむ。
         var best: (Double, VideoTimelineHit)?
         for (index, range) in document.kept.enumerated() {

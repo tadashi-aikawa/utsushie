@@ -51,9 +51,15 @@ public enum AnnotationToolbarPresentation {
 public enum VideoToolbarPresentation {
     public static let height: CGFloat = 75
     public static func hint(document: VideoEditDocument, discardArmed: Bool = false, message: ToolbarHint? = nil,
-                            copiesStills: Bool = true) -> ToolbarHint {
+                            copiesStills: Bool = true, zoomTool: Bool = false, selection: VideoRange? = nil) -> ToolbarHint {
         if let message { return message }
-        return ToolbarHint(document.completionText(copiesStills: copiesStills), keys: document.isTrimmed || !document.stills.isEmpty ? [] : ["⏎"])
+        if zoomTool, let selection {
+            // 時間軸で選んだ範囲があれば、矩形を描くとその範囲に置く。
+            return ToolbarHint(String(format: "選んだ%.1f秒に、プレビューで寄せる範囲をドラッグ ・ Z Escで戻る", selection.duration), keys: ["Z", "Esc"])
+        }
+        if zoomTool { return ToolbarHint("プレビューで寄せる範囲をドラッグ ・ 枠の縁でリサイズ ・ ⌥ドラッグで移動 ・ Z Escで戻る", keys: ["⌥", "Z", "Esc"]) }
+        let edited = document.isTrimmed || !document.stills.isEmpty || !document.zooms.isEmpty
+        return ToolbarHint(document.completionText(copiesStills: copiesStills), keys: edited ? [] : ["⏎"])
     }
     public static func length(document: VideoEditDocument) -> String {
         if document.transitionDuration > 0 {

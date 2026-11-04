@@ -6,6 +6,7 @@ final class VideoToolbarView: NSView {
     let startButton = ToolbarButton(title: "始め", key: "I")
     let endButton = ToolbarButton(title: "終わり", key: "O")
     let cutButton = ToolbarButton(title: "切る", key: "⌫")
+    let zoomButton = ToolbarButton(title: "ズーム", key: "Z")
     let captureButton = ToolbarButton(title: "撮る", key: "⏎")
     let undoButton = ToolbarButton(title: "↶", face: .plain)
     let redoButton = ToolbarButton(title: "↷", face: .plain)
@@ -13,27 +14,32 @@ final class VideoToolbarView: NSView {
     let finishButton = ToolbarButton(title: "完了", key: "⌘↩", face: .primary)
     let hintView = ToolbarHintView()
     let length = NSTextField(labelWithString: "")
-    var trays: [ToolbarTray] { [cutTray, captureTray] }
+    var trays: [ToolbarTray] { [cutTray, zoomTray, captureTray] }
     override var isFlipped: Bool { true }
     convenience init() { self.init(frame: .zero) }
     override init(frame: CGRect) {
         super.init(frame: frame)
         // 台は共通部品の描画と余白をそのまま使う。
         cutTray = ToolbarTray([startButton, endButton, cutButton])
+        zoomTray = ToolbarTray([zoomButton])
         captureTray = ToolbarTray([captureButton])
         undoButton.fixedWidth = 28; redoButton.fixedWidth = 28
         undoButton.toolTip = "取り消し ⌘Z"; redoButton.toolTip = "やり直し ⇧⌘Z"
+        zoomButton.toolTip = "プレビューで寄せる範囲をドラッグ Z"
         length.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .medium); length.textColor = UITheme.key
-        [cutTray!, captureTray!, undoButton, redoButton, discardButton, finishButton, hintView, length].forEach { addSubview($0) }
+        [cutTray!, zoomTray!, captureTray!, undoButton, redoButton, discardButton, finishButton, hintView, length].forEach { addSubview($0) }
     }
     private(set) var cutTray: ToolbarTray!
+    private(set) var zoomTray: ToolbarTray!
     private(set) var captureTray: ToolbarTray!
     required init?(coder: NSCoder) { fatalError() }
     override func layout() {
         super.layout()
-        cutTray.frame = CGRect(x: 14, y: 9, width: cutTray.naturalWidth, height: 32)
-        captureTray.frame = CGRect(x: cutTray.frame.maxX + 10, y: 9, width: captureTray.naturalWidth, height: 32)
-        cutTray.needsLayout = true; captureTray.needsLayout = true
+        var x: CGFloat = 14
+        for tray in trays {
+            tray.frame = CGRect(x: x, y: 9, width: tray.naturalWidth, height: 32)
+            tray.needsLayout = true; x = tray.frame.maxX + 10
+        }
         var right = bounds.width - 14
         for button in [finishButton, discardButton, redoButton, undoButton] {
             button.frame = CGRect(x: right - button.naturalWidth, y: 11, width: button.naturalWidth, height: 28)
