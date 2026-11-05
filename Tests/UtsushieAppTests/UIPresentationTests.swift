@@ -89,6 +89,44 @@ private func uiPixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     #expect(border.panels.count == 1 && border.panels[0].contentView === view)
 }
 
+@MainActor @Test func recordingCurtainFollowsTheRecordedDisplayWhenDisplaysAreRearranged() throws {
+    let border = RecordingBorder()
+    defer { border.close() }
+    let main = RecordingBorder.Screen(id: 1, frame: CGRect(x: 0, y: 0, width: 300, height: 200),
+                                      visibleFrame: CGRect(x: 0, y: 0, width: 300, height: 176))
+    let external = RecordingBorder.Screen(id: 2, frame: CGRect(x: 300, y: 0, width: 200, height: 150),
+                                          visibleFrame: CGRect(x: 300, y: 0, width: 200, height: 150))
+    border.sync(screens: [main, external])
+    border.move(to: CGRect(x: 320, y: 20, width: 100, height: 60))
+    // 外部画面を主画面の左へ移しても、録画はディスプレイ内の座標で範囲を固定している。
+    let left = RecordingBorder.Screen(id: 2, frame: CGRect(x: -200, y: 0, width: 200, height: 150),
+                                      visibleFrame: CGRect(x: -200, y: 0, width: 200, height: 150))
+    border.sync(screens: [main, left])
+    for panel in border.panels {
+        #expect((panel.contentView as? RecordingCurtainView)?.selection == CGRect(x: -180, y: 20, width: 100, height: 60))
+    }
+}
+
+@MainActor @Test func recordingBadgeMovingToAnAddedDisplayRedrawsTheOldOne() throws {
+    let border = RecordingBorder()
+    defer { border.close() }
+    let main = RecordingBorder.Screen(id: 1, frame: CGRect(x: 0, y: 0, width: 300, height: 200),
+                                      visibleFrame: CGRect(x: 0, y: 0, width: 300, height: 176))
+    let added = RecordingBorder.Screen(id: 2, frame: CGRect(x: 300, y: 0, width: 300, height: 200),
+                                       visibleFrame: CGRect(x: 300, y: 0, width: 300, height: 200))
+    border.sync(screens: [main])
+    border.reveal()
+    border.move(to: CGRect(x: 250, y: 20, width: 200, height: 60))
+    border.setElapsed("0:03")
+    let old = try #require(border.panels.first?.contentView as? RecordingCurtainView)
+    #expect(old.badgeText == "0:03")
+    old.display()
+    // はみ出した側に画面が増え、バッジがそちらへ移る。止まった古いバッジを残さない。
+    border.sync(screens: [main, added])
+    #expect(old.badgeText == nil && !old.showsBadge && old.needsDisplay)
+    #expect((border.panels[1].contentView as? RecordingCurtainView)?.badgeText == "0:03")
+}
+
 @MainActor @Test func recordingCurtainDrawsFullDisplayCornersInside() throws {
     let view = RecordingCurtainView(frame: CGRect(x: 0, y: 0, width: 200, height: 140))
     view.screenFrame = CGRect(x: 100, y: 50, width: 200, height: 140)

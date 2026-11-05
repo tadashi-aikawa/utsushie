@@ -16,6 +16,9 @@ final class RecordingBorder: NSObject {
     }
     private var entries: [Entry] = []
     private var rect = CGRect.zero
+    /// 範囲の原点を、範囲と最も広く重なる画面の原点から測った位置。画面の並びを変えても録画の範囲へ付いていく。
+    /// 理由: 録画はディスプレイ内の座標で範囲を固定しているため。
+    private var anchor: (id: UInt32, offset: CGPoint)?
     private var elapsed: String?
     private var revealed = false
     var panels: [RecordingBorderPanel] { entries.map(\.panel) }
@@ -25,6 +28,7 @@ final class RecordingBorder: NSObject {
         close()
         self.rect = rect
         sync(screens: Self.currentScreens())
+        updateAnchor()
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
@@ -38,6 +42,7 @@ final class RecordingBorder: NSObject {
         guard rect != self.rect else { return }
         self.rect = rect
         for entry in entries { entry.view.selection = rect; entry.view.needsDisplay = true }
+        updateAnchor()
         updateBadgeScreen()
     }
     /// 録画が始まったら経過時間を出す。nilなら出さない。
@@ -49,11 +54,18 @@ final class RecordingBorder: NSObject {
     func close() {
         NotificationCenter.default.removeObserver(self, name: NSApplication.didChangeScreenParametersNotification, object: nil)
         entries.forEach { $0.panel.orderOut(nil) }; entries.removeAll()
-        elapsed = nil; revealed = false
+        elapsed = nil; revealed = false; anchor = nil
     }
     /// 録画中に画面が増減しても全ディスプレイを暗く保つ。残る画面のパネルは作り直さない。
     /// 理由: 録画のフィルターは開始時の窓番号で暗幕を除外しているため。増えた画面は録画中のディスプレイではない。
     func sync(screens: [Screen]) {
+        if let anchor, let screen = screens.first(where: { $0.id == anchor.id }) {
+            let moved = CGRect(origin: CGPoint(x: screen.frame.minX + anchor.offset.x, y: screen.frame.minY + anchor.offset.y), size: rect.size)
+            if moved != rect {
+                rect = moved
+                for entry in entries { entry.view.selection = rect; entry.view.needsDisplay = true }
+            }
+        }
         let ids = Set(screens.map(\.id))
         for entry in entries where !ids.contains(entry.id) { entry.panel.orderOut(nil) }
         entries.removeAll { !ids.contains($0.id) }
@@ -100,13 +112,15 @@ final class RecordingBorder: NSObject {
         view.selection = rect
     }
     private func local(_ rect: CGRect, in frame: CGRect) -> CGRect { rect.offsetBy(dx: -frame.minX, dy: -frame.minY) }
+    private func updateAnchor() {
+        guard let index = RecordingPresentation.badgeScreen(selection: rect, screens: entries.map(\.view.screenFrame)) else { anchor = nil; return }
+        let frame = entries[index].view.screenFrame
+        anchor = (entries[index].id, CGPoint(x: rect.minX - frame.minX, y: rect.minY - frame.minY))
+    }
     private func updateBadgeScreen() {
         let index = RecordingPresentation.badgeScreen(selection: rect, screens: entries.map(\.view.screenFrame))
         for (offset, entry) in entries.enumerated() {
-            let shows = offset == index
-            guard shows != entry.view.showsBadge else { continue }
-            entry.view.showsBadge = shows
-            entry.view.setBadge(shows ? elapsed : nil)
+            entry.view.setBadge(offset == index ? elapsed : nil, shows: offset == index)
         }
     }
 }
@@ -123,10 +137,12 @@ final class RecordingCurtainView: NSView {
     var showsBadge = false
     private(set) var badgeText: String?
 
-    func setBadge(_ text: String?) {
-        guard text != badgeText else { return }
+    /// 表示先の切り替えも、古いバッジの矩形を測ってから変え、前後の両方を描き直す。
+    func setBadge(_ text: String?, shows: Bool? = nil) {
+        let shows = shows ?? showsBadge
+        guard text != badgeText || shows != showsBadge else { return }
         if let old = badgeFrame() { setNeedsDisplay(old.insetBy(dx: -2, dy: -2)) }
-        badgeText = text
+        badgeText = text; showsBadge = shows
         if let new = badgeFrame() { setNeedsDisplay(new.insetBy(dx: -2, dy: -2)) }
     }
     private var local: CGRect { selection.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY) }
