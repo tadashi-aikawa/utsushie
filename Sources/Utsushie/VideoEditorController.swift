@@ -1141,7 +1141,7 @@ final class VideoEditorTimeline: NSView {
     }
     override func draw(_ dirtyRect: NSRect) {
         UITheme.ink.setFill(); bounds.fill()
-        UIDrawing.text("\(VideoEditFormatting.time(position)) / \(VideoEditFormatting.time(document.duration))", in: CGRect(x: 134, y: 18, width: 176, height: 20), size: 14)
+        UIDrawing.text("\(VideoEditFormatting.time(position)) / \(VideoEditFormatting.time(document.duration))", in: CGRect(x: 134, y: 18, width: 176, height: 20), size: 14, monospacedDigits: true)
         UIDrawing.text("Space 再生 ・ ←→ 1コマ ・ ⇧←→ 1秒 ・ ⌘←→ 先頭・末尾", in: CGRect(x: 324, y: 19, width: bounds.width - 348, height: 18), size: 11.5, color: UITheme.key)
         NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: strip).addClip()
         NSColor.black.setFill(); strip.fill()

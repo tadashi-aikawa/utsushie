@@ -57,10 +57,13 @@ enum UIDrawing {
         color.setFill(); NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
     }
     static func text(_ string: String, in rect: CGRect, size: CGFloat = 12, color: NSColor = UITheme.text,
-                     weight: NSFont.Weight = .medium, centered: Bool = false) {
+                     weight: NSFont.Weight = .medium, centered: Bool = false, monospacedDigits: Bool = false) {
         let style = NSMutableParagraphStyle()
         style.lineBreakMode = .byTruncatingTail; style.alignment = centered ? .center : .left
-        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: size, weight: weight),
+        // 刻々と変わる数字は等幅にする。プロポーショナルでは「1」だけ細く、値が変わるたびに幅が揺れるため。
+        let font = monospacedDigits ? NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+            : NSFont.systemFont(ofSize: size, weight: weight)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font,
             .foregroundColor: color, .paragraphStyle: style]
         (string as NSString).draw(in: rect, withAttributes: attributes)
     }
