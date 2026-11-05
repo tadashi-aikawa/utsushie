@@ -3,61 +3,110 @@ import UtsushieCore
 
 /// 録画中に範囲選択の暗幕・鉤と経過時間のバッジを引き継ぐ。入力を透過し、撮影用UIとして録画から除外する。
 @MainActor
-final class RecordingBorder {
-    private var panels: [NSPanel] = []
-    private var views: [RecordingCurtainView] = []
+final class RecordingBorder: NSObject {
+    struct Screen: Equatable {
+        let id: UInt32
+        let frame: CGRect
+        let visibleFrame: CGRect
+    }
+    private struct Entry {
+        let id: UInt32
+        let panel: RecordingBorderPanel
+        let view: RecordingCurtainView
+    }
+    private var entries: [Entry] = []
     private var rect = CGRect.zero
     private var elapsed: String?
+    private var revealed = false
+    var panels: [RecordingBorderPanel] { entries.map(\.panel) }
 
     /// 除外する窓番号を録画の準備前に確保するため先に出す。`reveal`までは何も描かない。
     func show(rect: CGRect) {
         close()
         self.rect = rect
-        for screen in NSScreen.screens {
-            let panel = RecordingBorderPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-            panel.setFrame(screen.frame, display: false)
-            panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
-            panel.ignoresMouseEvents = true; panel.hidesOnDeactivate = false
-            panel.level = .screenSaver
-            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-            panel.animationBehavior = .none
-            panel.sharingType = .none
-            let view = RecordingCurtainView(frame: CGRect(origin: .zero, size: screen.frame.size))
-            view.screenFrame = screen.frame
-            view.visibleFrame = screen.visibleFrame.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
-            view.selection = rect
-            panel.contentView = view
-            panel.orderFrontRegardless(); panels.append(panel); views.append(view)
-        }
-        updateBadgeScreen()
+        sync(screens: Self.currentScreens())
+        NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
     /// 選択画面を閉じる直前に呼ぶ。暗幕を同期で描き、選択画面の暗幕と二重に重なる時間を作らない。
     func reveal() {
-        for view in views { view.revealed = true; view.display() }
+        revealed = true
+        for entry in entries { entry.view.revealed = true; entry.view.display() }
     }
     /// 移動するウィンドウの枠へくり抜きを付いていかせる。
     func move(to rect: CGRect) {
         guard rect != self.rect else { return }
         self.rect = rect
-        for view in views { view.selection = rect; view.needsDisplay = true }
+        for entry in entries { entry.view.selection = rect; entry.view.needsDisplay = true }
         updateBadgeScreen()
     }
     /// 録画が始まったら経過時間を出す。nilなら出さない。
     func setElapsed(_ text: String?) {
         guard text != elapsed else { return }
         elapsed = text
-        for view in views where view.showsBadge { view.setBadge(text) }
+        for entry in entries where entry.view.showsBadge { entry.view.setBadge(text) }
     }
     func close() {
-        panels.forEach { $0.orderOut(nil) }; panels.removeAll(); views.removeAll(); elapsed = nil
+        NotificationCenter.default.removeObserver(self, name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        entries.forEach { $0.panel.orderOut(nil) }; entries.removeAll()
+        elapsed = nil; revealed = false
     }
+    /// 録画中に画面が増減しても全ディスプレイを暗く保つ。残る画面のパネルは作り直さない。
+    /// 理由: 録画のフィルターは開始時の窓番号で暗幕を除外しているため。増えた画面は録画中のディスプレイではない。
+    func sync(screens: [Screen]) {
+        let ids = Set(screens.map(\.id))
+        for entry in entries where !ids.contains(entry.id) { entry.panel.orderOut(nil) }
+        entries.removeAll { !ids.contains($0.id) }
+        for screen in screens {
+            if let entry = entries.first(where: { $0.id == screen.id }) {
+                guard entry.view.screenFrame != screen.frame || entry.view.visibleFrame != local(screen.visibleFrame, in: screen.frame) else { continue }
+                entry.panel.setFrame(screen.frame, display: false)
+                entry.view.frame = CGRect(origin: .zero, size: screen.frame.size)
+                configure(entry.view, screen: screen)
+                entry.view.needsDisplay = true
+            } else {
+                entries.append(makeEntry(screen))
+            }
+        }
+        updateBadgeScreen()
+    }
+    @objc private func screensChanged() { sync(screens: Self.currentScreens()) }
+    private static func currentScreens() -> [Screen] {
+        NSScreen.screens.map { screen in
+            let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+            return Screen(id: id, frame: screen.frame, visibleFrame: screen.visibleFrame)
+        }
+    }
+    private func makeEntry(_ screen: Screen) -> Entry {
+        let panel = RecordingBorderPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.setFrame(screen.frame, display: false)
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
+        panel.ignoresMouseEvents = true; panel.hidesOnDeactivate = false
+        panel.level = .screenSaver
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.animationBehavior = .none
+        panel.sharingType = .none
+        let view = RecordingCurtainView(frame: CGRect(origin: .zero, size: screen.frame.size))
+        configure(view, screen: screen)
+        view.revealed = revealed
+        panel.contentView = view
+        panel.orderFrontRegardless()
+        return Entry(id: screen.id, panel: panel, view: view)
+    }
+    private func configure(_ view: RecordingCurtainView, screen: Screen) {
+        view.screenFrame = screen.frame
+        view.visibleFrame = local(screen.visibleFrame, in: screen.frame)
+        view.selection = rect
+    }
+    private func local(_ rect: CGRect, in frame: CGRect) -> CGRect { rect.offsetBy(dx: -frame.minX, dy: -frame.minY) }
     private func updateBadgeScreen() {
-        let index = RecordingPresentation.badgeScreen(selection: rect, screens: views.map(\.screenFrame))
-        for (offset, view) in views.enumerated() {
+        let index = RecordingPresentation.badgeScreen(selection: rect, screens: entries.map(\.view.screenFrame))
+        for (offset, entry) in entries.enumerated() {
             let shows = offset == index
-            guard shows != view.showsBadge else { continue }
-            view.showsBadge = shows
-            view.setBadge(shows ? elapsed : nil)
+            guard shows != entry.view.showsBadge else { continue }
+            entry.view.showsBadge = shows
+            entry.view.setBadge(shows ? elapsed : nil)
         }
     }
 }

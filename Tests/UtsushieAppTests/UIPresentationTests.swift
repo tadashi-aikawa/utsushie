@@ -64,6 +64,31 @@ private func uiPixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     #expect(try uiPixel(other, x: 52, y: 101) != [229, 53, 42, 255])
 }
 
+@MainActor @Test func recordingCurtainKeepsExcludedPanelsAndCoversDisplaysAddedWhileRecording() throws {
+    let border = RecordingBorder()
+    defer { border.close() }
+    let main = RecordingBorder.Screen(id: 1, frame: CGRect(x: 0, y: 0, width: 300, height: 200),
+                                      visibleFrame: CGRect(x: 0, y: 0, width: 300, height: 176))
+    let added = RecordingBorder.Screen(id: 2, frame: CGRect(x: 300, y: 0, width: 200, height: 150),
+                                       visibleFrame: CGRect(x: 300, y: 0, width: 200, height: 150))
+    border.sync(screens: [main])
+    border.reveal()
+    border.move(to: CGRect(x: 20, y: 20, width: 100, height: 60))
+    border.setElapsed("0:03")
+    let recorded = try #require(border.panels.first)
+    // 録画のフィルターは開始時の窓番号で除外するので、残る画面のパネルは作り直さない。
+    border.sync(screens: [main, added])
+    #expect(border.panels.count == 2 && border.panels[0] === recorded)
+    let view = try #require(border.panels[1].contentView as? RecordingCurtainView)
+    #expect(view.revealed && view.screenFrame == added.frame && view.selection == CGRect(x: 20, y: 20, width: 100, height: 60))
+    // ウィンドウが増えた画面へ移ったら、バッジもそちらへ移す。
+    border.move(to: CGRect(x: 320, y: 20, width: 100, height: 60))
+    #expect(view.badgeText == "0:03")
+    #expect((recorded.contentView as? RecordingCurtainView)?.badgeText == nil)
+    border.sync(screens: [added])
+    #expect(border.panels.count == 1 && border.panels[0].contentView === view)
+}
+
 @MainActor @Test func recordingCurtainDrawsFullDisplayCornersInside() throws {
     let view = RecordingCurtainView(frame: CGRect(x: 0, y: 0, width: 200, height: 140))
     view.screenFrame = CGRect(x: 100, y: 50, width: 200, height: 140)
