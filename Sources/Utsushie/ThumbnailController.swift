@@ -23,6 +23,9 @@ final class ThumbnailController {
     /// 保存時の問題をメニューの警告へ出す。
     var onWarning: ((String) -> Void)?
     var beforeShowingCard: ((NSWindow) async -> Bool)?
+    var trashFiles: @Sendable ([URL]) -> CaptureLibraryTrashResult = { CaptureLibraryFileActions.trash($0) }
+    var reportTrashFailure: (ThumbnailCard) -> Void = { $0.showTrashFailure() }
+    private(set) var trashTask: Task<Void, Never>?
 
     @discardableResult
     func add(_ artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, screen: NSScreen?, finalizing: Bool = false,
@@ -70,6 +73,10 @@ final class ThumbnailController {
             guard let self, let card, self.cards.contains(where: { $0 === card }) else { return }
             self.keyboardTargetID = card.id
             self.updateKeyboardTarget()
+        }
+        card.onTrash = { [weak self, weak card] in
+            guard let self, let card else { return }
+            trash(card)
         }
         card.onClose = { [weak self, weak card] in
             guard let self, let card else { return }
@@ -131,6 +138,7 @@ final class ThumbnailController {
         for card in libraryCards { card.onClose?() }
     }
     func pruneMemory(to files: [RecentCaptureFile]) { recentImages.retain(files) }
+    func isRemoving(_ url: URL) -> Bool { removingURLs.contains(url.standardizedFileURL) }
     func canRemoveFromLibrary(_ url: URL) -> Bool {
         guard !removingURLs.contains(url.standardizedFileURL) else { return false }
         return allCards.filter { $0.artifact.url.standardizedFileURL == url.standardizedFileURL }
@@ -147,6 +155,20 @@ final class ThumbnailController {
         forgetLibraryFiles(removed)
         removingURLs.subtract(urls.map(\.standardizedFileURL))
         for card in allCards where urls.contains(card.artifact.url.standardizedFileURL) { card.setRemovalPending(false) }
+    }
+    /// 一覧のゴミ箱と同じ予約を使い、移している間は同じファイルの編集・ドラッグ・一覧からの削除を止める。
+    private func trash(_ card: ThumbnailCard) {
+        let url = card.artifact.url.standardizedFileURL
+        guard canRemoveFromLibrary(url) else { return }
+        reserveLibraryRemoval([url])
+        let trash = trashFiles
+        trashTask = Task { [self] in
+            // 移し終えたらforgetLibraryFilesがカードを閉じ、動画の隠し元も後片付けする。
+            let result = await Task.detached(priority: .userInitiated) { trash([url]) }.value
+            finishLibraryRemoval([url], removed: result.removed)
+            onArtifactsChange?()
+            if !result.failed.isEmpty { reportTrashFailure(card) }
+        }
     }
     func forgetLibraryFiles(_ urls: Set<URL>) {
         let normalized = Set(urls.map(\.standardizedFileURL))
@@ -203,6 +225,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     var artifact: SharedArtifact
     var screen: NSScreen?
     var onClose: (() -> Void)?
+    var onTrash: (() -> Void)?
     var onRequestKeys: (() -> Void)?
     var onStills: (([VideoStillArtifact], Bool) -> Void)?
     var onEditingChange: ((Bool) -> Void)?
@@ -220,6 +243,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     private var saving = false
     private var editingSuspended = false
     private var removalPending = false
+    private(set) var alerting = false
     private var keyMonitor: Any?
     private var previousApplication: NSRunningApplication?
     private var isKeyboardTarget = false
@@ -243,6 +267,9 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     var makeVideoSession: (SharedArtifact, Int) -> VideoEditSession = { VideoEditSession(artifact: $0, fps: $1) }
     var canEdit: Bool { !finalizing && !removalPending && (artifact.kind == .mp4 || imageState != nil) }
     var canDrag: Bool { !finalizing && !removalPending }
+    var canTrash: Bool { !finalizing && !removalPending && editor == nil && videoEditor == nil && !closed }
+    /// 一覧と同じ2回押しの確認。対象は常にこのカードのファイル1件。
+    private(set) var trashConfirmation = CaptureLibraryDeleteConfirmation()
     private(set) var finalizing: Bool
 
     init(artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, finalizing: Bool, imageState: ImageEditState? = nil) {
@@ -291,6 +318,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         resumeTimer()
     }
     func hide() {
+        disarmTrash(.resignKey)
         showTask?.cancel(); showTask = nil
         visible = false; pauseTimer(); releaseKeys(); hovered = false; panel.orderOut(nil)
     }
@@ -314,6 +342,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         resumeTimer()
     }
     func setRemovalPending(_ value: Bool) {
+        trashConfirmation.interrupt(.otherKey)
         pauseTimer(); removalPending = value; view.refreshControls()
         resumeTimer()
     }
@@ -331,15 +360,48 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         panel.makeKey(); panel.makeFirstResponder(view)
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.isKeyboardTarget, self.visible, self.panel.isKeyWindow, event.window === self.panel,
-                  event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return event }
-            switch event.keyCode {
-            case 36, 76, 14: if !event.isARepeat { self.edit() }; return nil // Enter, テンキーEnter, E
-            case 1: if !event.isARepeat { self.saveAs() }; return nil // S
-            case 31: if !event.isARepeat { self.reveal() }; return nil // O
-            case 7, 53: self.onClose?(); return nil // X, Esc
-            default: return event
-            }
+            guard let self, self.isKeyboardTarget, self.visible, self.panel.isKeyWindow, event.window === self.panel else { return event }
+            return self.handleKey(event) ? nil : event
+        }
+    }
+    /// 物理keyCodeで判定する。ゴミ箱の確認中は、X以外のキーで確認を解除する。Escは解除だけで閉じない。
+    func handleKey(_ event: NSEvent) -> Bool {
+        let plain = event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+        if plain && event.keyCode == 7 { pressTrash(isRepeat: event.isARepeat); return true } // X
+        let wasArmed = disarmTrash(event.keyCode == 53 ? .escape : .otherKey)
+        guard plain else { return false }
+        switch event.keyCode {
+        case 36, 76, 14: if !event.isARepeat { edit() }; return true // Enter, テンキーEnter, E
+        case 1: if !event.isARepeat { saveAs() }; return true // S
+        case 31: if !event.isARepeat { reveal() }; return true // O
+        case 53: if !wasArmed && !event.isARepeat { onClose?() }; return true // Esc
+        default: return false
+        }
+    }
+    @objc func trash() { pressTrash(isRepeat: false) }
+    func pressTrash(isRepeat: Bool) {
+        guard canTrash else { return }
+        let action = trashConfirmation.press(selected: [artifact.url], isRepeat: isRepeat)
+        view.refreshControls()
+        if action == .trash { onTrash?() }
+    }
+    @discardableResult
+    func disarmTrash(_ reason: CaptureLibraryDeleteInterruption) -> Bool {
+        guard trashConfirmation.interrupt(reason) else { return false }
+        view.refreshControls(); return true
+    }
+    func showTrashFailure() {
+        guard !closed, visible else { return }
+        // 説明を読めるように、シートを閉じるまで寿命を止める。ホバーの出入りでは再開しない。
+        alerting = true; pauseTimer()
+        let alert = NSAlert(); alert.messageText = "ゴミ箱へ移せませんでした"
+        alert.informativeText = "ファイルは移動されたか、移す権限がありません。"
+        NSApp.activate()
+        alert.beginSheetModal(for: panel) { [weak self] _ in
+            guard let self else { return }
+            alerting = false
+            hovered = panel.frame.contains(NSEvent.mouseLocation)
+            resumeTimer()
         }
     }
     private func releaseKeys() {
@@ -354,11 +416,10 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     }
     func windowDidResignKey(_ notification: Notification) {
         // 別のアプリをクリックしたときは取り戻さない。次のshowまたは明示的なホバーで再取得する。
-        stopKeys()
+        stopKeys(); trashConfirmation.interrupt(.resignKey)
         view.refreshControls(); view.needsDisplay = true
     }
     func windowDidBecomeKey(_ notification: Notification) { view.refreshControls(); view.needsDisplay = true }
-    @objc func dismiss() { onClose?() }
     func openEditorFromLibrary(onReturn: @escaping () -> Void) {
         libraryEditing = true; onLibraryReturn = onReturn
         if editor != nil || videoEditor != nil { bringForward() } else { startEdit() }
@@ -368,6 +429,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         // 動画はonCloseの後にonCompleteを呼ぶ。ここで起点を消すと静止画カードが出てしまう。
     }
     @objc func edit() {
+        disarmTrash(.click)
         libraryEditing = false; onLibraryReturn = nil
         startEdit()
     }
@@ -463,7 +525,8 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         timer?.invalidate(); timer = nil; started = nil
     }
     private func resumeTimer() {
-        guard visible, editor == nil, videoEditor == nil, !closed, !hovered, !dragging, !saving, !finalizing, !editingSuspended, !removalPending, timer == nil else { return }
+        guard visible, editor == nil, videoEditor == nil, !closed, !hovered, !dragging, !saving, !finalizing, !editingSuspended, !removalPending,
+              !alerting, timer == nil else { return }
         started = Date()
         timer = Timer.scheduledTimer(withTimeInterval: max(0.01, remaining), repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.onClose?() }
@@ -477,17 +540,19 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             // 古いカードでもホバーを契機に受け手を切り替え、ほかのカードはキーを手放す。
             onRequestKeys?()
             claimKeys()
-        } else { resumeTimer() }
+        } else { disarmTrash(.pointerExit); resumeTimer() }
     }
     private func stopKeys() {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
     }
     @objc func reveal() {
+        disarmTrash(.click)
         guard !finalizing else { return }
         NSWorkspace.shared.activateFileViewerSelecting([artifact.url])
     }
     @objc func saveAs() {
+        disarmTrash(.click)
         guard !saving, !finalizing else { return }
         saving = true; pauseTimer(); releaseKeys()
         let save = NSSavePanel()
@@ -545,9 +610,10 @@ final class ThumbnailView: NSView, NSDraggingSource {
             (.annotate, card.artifact.kind == .mp4 ? "scissors" : "pencil", "⏎", card.artifact.kind == .mp4 ? "動画を編集 ⏎" : "注釈 ⏎", #selector(ThumbnailCard.edit)),
             (.save, "square.and.arrow.down", "S", "別名保存 S", #selector(ThumbnailCard.saveAs)),
             (.reveal, "folder", "O", "Finderで表示 O", #selector(ThumbnailCard.reveal)),
-            (.close, "xmark", "×", "閉じる X・Esc", #selector(ThumbnailCard.dismiss))]
+            (.trash, "trash", "X", "ゴミ箱へ移す X を2回", #selector(ThumbnailCard.trash))]
         for (action, symbol, key, label, selector) in definitions {
             let button = CardButton(frame: CardPresentation.button(action))
+            if action == .trash { button.confirmationTitle = "もう一度"; button.confirmationLabel = "もう一度押すとゴミ箱へ移す" }
             button.symbol = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
             button.key = key; button.target = card; button.action = selector
             button.isBordered = false; button.toolTip = label; button.setAccessibilityLabel(label)
@@ -560,7 +626,12 @@ final class ThumbnailView: NSView, NSDraggingSource {
     func refreshControls() {
         guard let card else { return }
         for (action, button) in buttons {
-            button.isEnabled = action == .close || !card.finalizing && (action != .annotate || card.canEdit)
+            switch action {
+            case .annotate: button.isEnabled = !card.finalizing && card.canEdit
+            case .trash: button.isEnabled = card.canTrash
+            case .save, .reveal: button.isEnabled = !card.finalizing
+            }
+            button.confirming = action == .trash && card.trashConfirmation.isArmed
             button.showsKey = card.panel.isKeyWindow; button.needsDisplay = true
         }
         if card.finalizing { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
@@ -575,7 +646,14 @@ final class ThumbnailView: NSView, NSDraggingSource {
     }
     override func mouseEntered(with event: NSEvent) { card?.hover(true) }
     override func mouseExited(with event: NSEvent) { card?.hover(false) }
-    override func mouseDown(with event: NSEvent) { downEvent = event; dragged = false }
+    override func mouseDown(with event: NSEvent) {
+        downEvent = event; dragged = false
+        // ゴミ箱のボタン自身の押下はNSButtonが受ける。ここへ届くのはほかの場所のクリック。
+        card?.disarmTrash(.click)
+    }
+    // 右・中ボタンは別のイベントで届く。どのボタンでもカードを押したら確認を解除する。
+    override func rightMouseDown(with event: NSEvent) { card?.disarmTrash(.click); super.rightMouseDown(with: event) }
+    override func otherMouseDown(with event: NSEvent) { card?.disarmTrash(.click); super.otherMouseDown(with: event) }
     override func mouseUp(with event: NSEvent) {
         defer { downEvent = nil }
         guard !dragged, let card, let downEvent else { return }
@@ -585,7 +663,7 @@ final class ThumbnailView: NSView, NSDraggingSource {
         case .annotate: card.edit()
         case .save: card.saveAs()
         case .reveal: card.reveal()
-        case .close: card.onClose?()
+        case .trash: card.trash()
         case nil: break
         }
     }
@@ -646,10 +724,25 @@ private final class CardButton: NSButton {
     var symbol: NSImage?
     var key = ""
     var showsKey = false
+    var confirmationTitle: String?
+    var confirmationLabel: String?
+    /// 削除の確認中は赤い面へ「もう一度」を出す。赤は削除の確認に使ってよい色。
+    var confirming = false {
+        didSet {
+            guard confirming != oldValue else { return }
+            setAccessibilityLabel(confirming ? confirmationLabel : toolTip)
+        }
+    }
     override var isFlipped: Bool { true }
     override var needsPanelToBecomeKey: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func draw(_ dirtyRect: NSRect) {
+        if confirming, let confirmationTitle {
+            UIDrawing.fill(bounds, color: UITheme.redFace, radius: 6)
+            UIDrawing.text(confirmationTitle, in: CGRect(x: 2, y: 4.5, width: bounds.width - 4, height: 15), size: 10.5,
+                           color: .white, weight: .bold, centered: true)
+            return
+        }
         let alpha: CGFloat = isEnabled ? 1 : 0.3
         UIDrawing.fill(bounds, color: NSColor.white.withAlphaComponent((isHighlighted ? 0.18 : 0.08) * alpha), radius: 6)
         let imageX = showsKey ? bounds.midX - 16 : bounds.midX - 7

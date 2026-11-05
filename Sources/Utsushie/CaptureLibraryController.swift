@@ -442,6 +442,10 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         guard !urls.contains(where: { thumbnails.card(for: $0)?.finalizing == true || statuses[$0] == "書き出し中…" }) else {
             message = "! 書き出し中の項目を含むためドラッグできません"; updateFooter(); return []
         }
+        // カードのゴミ箱で移している最中のファイルは、渡した直後に消えるので渡さない。
+        guard !urls.contains(where: thumbnails.isRemoving) else {
+            message = "! ゴミ箱へ移している項目を含むためドラッグできません"; updateFooter(); return []
+        }
         return urls
     }
     private func dragItems(from url: URL) -> [(URL, NSImage?)] {

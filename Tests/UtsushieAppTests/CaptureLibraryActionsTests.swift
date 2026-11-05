@@ -286,3 +286,134 @@ func libraryCopiesAllImagesAndVideosInDisplayOrderWithoutGeneralPasteboard(_ mod
     #expect(!library.deleteConfirmation.isArmed && library.window?.isVisible == false)
     #expect(FileManager.default.fileExists(atPath: url.path))
 }
+
+@MainActor private func trashCardFixture(finalizing: Bool = false) throws -> (ThumbnailController, URL, URL) {
+    let directory = try actionsDirectory(), image = try actionsImage()
+    let thumbnails = ThumbnailController()
+    thumbnails.editorFocus = .init(activate: {}, restore: { _ in })
+    thumbnails.annotationConfig = { UtsushieConfig() }
+    thumbnails.trashFiles = { urls in
+        CaptureLibraryFileActions.trash(urls) { url in
+            try FileManager.default.moveItem(at: url, to: url.deletingLastPathComponent().appendingPathComponent(".moved-" + url.lastPathComponent))
+        }
+    }
+    let url = try ArtifactStore.save(data: WebPEncoder.encode(image, quality: 80, lossless: true), kind: .webP, directory: directory).url
+    thumbnails.add(SharedArtifact(url: url, kind: .webP, width: 32, height: 24, byteCount: 1),
+        image: image, copied: false, seconds: 100, screen: nil, finalizing: finalizing)
+    return (thumbnails, url, directory)
+}
+
+@MainActor @Test func cardTrashNeedsTwoPressesAndEveryInterruptionCancelsWithoutClosing() async throws {
+    let (thumbnails, url, directory) = try trashCardFixture()
+    defer { for card in thumbnails.cards { thumbnails.remove(card.id) }; try? FileManager.default.removeItem(at: directory) }
+    let card = try #require(thumbnails.card(for: url))
+    let view = try #require(card.panel.contentView)
+    let trashButton = try #require(view.subviews.compactMap { $0 as? NSButton }.max { $0.frame.minX < $1.frame.minX })
+    #expect(trashButton.frame == CardPresentation.button(.trash) && trashButton.isEnabled)
+
+    #expect(card.handleKey(try actionsKey(7)) && card.trashConfirmation.isArmed)
+    #expect(trashButton.accessibilityLabel() == "もう一度押すとゴミ箱へ移す")
+    // 長押しの繰り返しでは消さない。
+    #expect(card.handleKey(try actionsKey(7, repeatKey: true)) && card.trashConfirmation.isArmed)
+    // 確認中のEscは解除だけで、カードを閉じない。
+    #expect(card.handleKey(try actionsKey(53)) && !card.trashConfirmation.isArmed)
+    #expect(thumbnails.card(for: url) === card && trashButton.accessibilityLabel() == "ゴミ箱へ移す X を2回")
+    card.trash()
+    #expect(!card.handleKey(try actionsKey(0, flags: .command)) && !card.trashConfirmation.isArmed)
+    card.trash(); card.hover(false)
+    #expect(!card.trashConfirmation.isArmed)
+    // ボタン以外の場所のクリックでも解除する。
+    card.trash()
+    view.mouseDown(with: try #require(NSEvent.mouseEvent(with: .leftMouseDown, location: CGPoint(x: 100, y: 100), modifierFlags: [],
+        timestamp: 0, windowNumber: card.panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+    #expect(!card.trashConfirmation.isArmed)
+    card.trash()
+    view.rightMouseDown(with: try #require(NSEvent.mouseEvent(with: .rightMouseDown, location: CGPoint(x: 100, y: 100), modifierFlags: [],
+        timestamp: 0, windowNumber: card.panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+    #expect(!card.trashConfirmation.isArmed)
+    card.trash()
+    view.otherMouseDown(with: try #require(NSEvent.mouseEvent(with: .otherMouseDown, location: CGPoint(x: 100, y: 100), modifierFlags: [],
+        timestamp: 0, windowNumber: card.panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+    #expect(!card.trashConfirmation.isArmed)
+    #expect(FileManager.default.fileExists(atPath: url.path))
+
+    card.trash(); card.trash()
+    await thumbnails.trashTask?.value
+    #expect(!FileManager.default.fileExists(atPath: url.path))
+    #expect(thumbnails.card(for: url) == nil && thumbnails.cards.isEmpty)
+}
+
+@MainActor @Test func cardEscClosesOnlyWhenTrashIsNotArmedAndXNoLongerCloses() throws {
+    let (thumbnails, url, directory) = try trashCardFixture()
+    defer { for card in thumbnails.cards { thumbnails.remove(card.id) }; try? FileManager.default.removeItem(at: directory) }
+    let card = try #require(thumbnails.card(for: url))
+    _ = card.handleKey(try actionsKey(7))
+    #expect(thumbnails.card(for: url) === card)
+    _ = card.handleKey(try actionsKey(53))
+    #expect(thumbnails.card(for: url) === card)
+    _ = card.handleKey(try actionsKey(53, repeatKey: true))
+    #expect(thumbnails.card(for: url) === card)
+    _ = card.handleKey(try actionsKey(53))
+    #expect(thumbnails.card(for: url) == nil && FileManager.default.fileExists(atPath: url.path))
+}
+
+@MainActor @Test func cardTrashFailureKeepsCardUsableAndReportsOnce() async throws {
+    let (thumbnails, url, directory) = try trashCardFixture()
+    defer { for card in thumbnails.cards { thumbnails.remove(card.id) }; try? FileManager.default.removeItem(at: directory) }
+    thumbnails.trashFiles = { urls in CaptureLibraryFileActions.trash(urls) { _ in throw CocoaError(.fileWriteNoPermission) } }
+    var reported: [UUID] = []
+    thumbnails.reportTrashFailure = { reported.append($0.id) }
+    let card = try #require(thumbnails.card(for: url))
+    card.trash(); card.trash()
+    #expect(!card.canTrash && !card.canEdit)
+    await thumbnails.trashTask?.value
+    #expect(reported == [card.id] && thumbnails.card(for: url) === card)
+    #expect(card.canTrash && card.canEdit && !card.trashConfirmation.isArmed)
+}
+
+@MainActor @Test func cardTrashFailureSheetKeepsLifetimeStoppedUntilDismissedEvenAfterPointerLeaves() async throws {
+    let (thumbnails, url, directory) = try trashCardFixture()
+    defer { for card in thumbnails.cards { thumbnails.remove(card.id) }; try? FileManager.default.removeItem(at: directory) }
+    let card = try #require(thumbnails.card(for: url))
+    #expect(card.timer != nil)
+    card.showTrashFailure()
+    #expect(card.alerting && card.timer == nil)
+    card.hover(true); card.hover(false)
+    #expect(card.timer == nil)
+    let sheet = try #require(card.panel.attachedSheet)
+    card.panel.endSheet(sheet)
+    for _ in 0..<200 where card.alerting { try await Task.sleep(for: .milliseconds(5)) }
+    #expect(!card.alerting)
+    if !card.panel.frame.contains(NSEvent.mouseLocation) { #expect(card.timer != nil) }
+}
+
+@MainActor @Test func libraryRefusesToDragFilesTheCardIsMovingToTrash() async throws {
+    let (thumbnails, url, directory) = try trashCardFixture()
+    defer { for card in thumbnails.cards { thumbnails.remove(card.id) }; try? FileManager.default.removeItem(at: directory) }
+    let library = CaptureLibraryController(directory: { directory }, config: { UtsushieConfig() }, thumbnails: thumbnails, remembersFrame: false)
+    await library.reload()
+    let listed = try #require(library.files.first?.url)
+    thumbnails.reserveLibraryRemoval([url])
+    #expect(library.dragURLs(from: listed).isEmpty && library.footerStatus?.hasPrefix("!") == true)
+    thumbnails.finishLibraryRemoval([url], removed: [])
+    #expect(library.dragURLs(from: listed) == [listed])
+}
+
+@MainActor @Test func cardTrashIsDisabledWhileExportingOrEditing() throws {
+    let (thumbnails, url, directory) = try trashCardFixture(finalizing: true)
+    defer { for card in thumbnails.cards { thumbnails.remove(card.id) }; try? FileManager.default.removeItem(at: directory) }
+    let card = try #require(thumbnails.card(for: url))
+    let trashButton = try #require(card.panel.contentView?.subviews.compactMap { $0 as? NSButton }.max { $0.frame.minX < $1.frame.minX })
+    #expect(!trashButton.isEnabled)
+    card.trash(); card.trash()
+    #expect(!card.trashConfirmation.isArmed && thumbnails.trashTask == nil)
+
+    let (editing, editingURL, editingDirectory) = try trashCardFixture()
+    defer { for card in editing.cards { editing.remove(card.id) }; try? FileManager.default.removeItem(at: editingDirectory) }
+    let editingCard = try #require(editing.card(for: editingURL))
+    editingCard.edit()
+    defer { editingCard.editor?.window.close() }
+    #expect(editingCard.editor != nil && !editingCard.canTrash)
+    editingCard.trash(); editingCard.trash()
+    #expect(editing.trashTask == nil && FileManager.default.fileExists(atPath: editingURL.path))
+}

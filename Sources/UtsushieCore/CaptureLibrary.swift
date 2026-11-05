@@ -152,8 +152,9 @@ public struct CaptureLibrarySelection: Equatable, Sendable {
 
 public enum CaptureLibrarySelectionMode: Sendable { case single, toggle, range }
 
+/// 共有カードのゴミ箱も同じ確認を使う。pointerExitはカードからカーソルが出たとき。
 public enum CaptureLibraryDeleteInterruption: CaseIterable, Sendable {
-    case escape, selectionChange, otherKey, click, resignKey
+    case escape, selectionChange, otherKey, click, resignKey, pointerExit
 }
 public enum CaptureLibraryDeleteAction: Equatable, Sendable { case ignored, armed, trash }
 

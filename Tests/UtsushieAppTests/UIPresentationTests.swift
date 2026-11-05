@@ -166,6 +166,11 @@ private func uiPixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: bitmap)
         try bitmap.representation(using: .png, properties: [:])?.write(to: url.appendingPathComponent("card.png"))
+        card.trash()
+        let confirming = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: confirming)
+        try confirming.representation(using: .png, properties: [:])?.write(to: url.appendingPathComponent("card-trash.png"))
+        card.disarmTrash(.escape)
         let overlay = OverlayView(frame: CGRect(x: 0, y: 0, width: 1000, height: 350))
         let controller = OverlayController()
         overlay.controller = controller

@@ -51,7 +51,7 @@ public enum OverlayPresentation {
     }
 }
 
-public enum CardAction: Int, CaseIterable, Sendable { case annotate, save, reveal, close }
+public enum CardAction: Int, CaseIterable, Sendable { case annotate, save, reveal, trash }
 public enum CardPresentation {
     /// 最新を隅へ置き、反対の端を超える前に内側の列へ折り返す。上の隅は上端から下へ積む。
     public static func stackOrigin(index: Int, visible: CGRect, cardSize: CGSize = CGSize(width: 264, height: 216),
