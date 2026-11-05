@@ -105,6 +105,13 @@ private func uiPixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     for panel in border.panels {
         #expect((panel.contentView as? RecordingCurtainView)?.selection == CGRect(x: -180, y: 20, width: 100, height: 60))
     }
+    // 解像度を変えて高さが変わっても、録画と同じく画面の左上からの位置を保つ。上端から70pt下。
+    let taller = RecordingBorder.Screen(id: 2, frame: CGRect(x: -200, y: 0, width: 240, height: 180),
+                                        visibleFrame: CGRect(x: -200, y: 0, width: 240, height: 180))
+    border.sync(screens: [main, taller])
+    for panel in border.panels {
+        #expect((panel.contentView as? RecordingCurtainView)?.selection == CGRect(x: -180, y: 50, width: 100, height: 60))
+    }
 }
 
 @MainActor @Test func recordingBadgeMovingToAnAddedDisplayRedrawsTheOldOne() throws {

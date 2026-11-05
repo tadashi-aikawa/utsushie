@@ -16,8 +16,8 @@ final class RecordingBorder: NSObject {
     }
     private var entries: [Entry] = []
     private var rect = CGRect.zero
-    /// 範囲の原点を、範囲と最も広く重なる画面の原点から測った位置。画面の並びを変えても録画の範囲へ付いていく。
-    /// 理由: 録画はディスプレイ内の座標で範囲を固定しているため。
+    /// 範囲の左上を、範囲と最も広く重なる画面の左上から測った位置。画面の並びや高さが変わっても録画の範囲へ付いていく。
+    /// 理由: 録画はディスプレイの左上原点の座標で範囲を固定しているため。
     private var anchor: (id: UInt32, offset: CGPoint)?
     private var elapsed: String?
     private var revealed = false
@@ -60,7 +60,8 @@ final class RecordingBorder: NSObject {
     /// 理由: 録画のフィルターは開始時の窓番号で暗幕を除外しているため。増えた画面は録画中のディスプレイではない。
     func sync(screens: [Screen]) {
         if let anchor, let screen = screens.first(where: { $0.id == anchor.id }) {
-            let moved = CGRect(origin: CGPoint(x: screen.frame.minX + anchor.offset.x, y: screen.frame.minY + anchor.offset.y), size: rect.size)
+            let moved = CGRect(x: screen.frame.minX + anchor.offset.x, y: screen.frame.maxY - anchor.offset.y - rect.height,
+                               width: rect.width, height: rect.height)
             if moved != rect {
                 rect = moved
                 for entry in entries { entry.view.selection = rect; entry.view.needsDisplay = true }
@@ -115,7 +116,7 @@ final class RecordingBorder: NSObject {
     private func updateAnchor() {
         guard let index = RecordingPresentation.badgeScreen(selection: rect, screens: entries.map(\.view.screenFrame)) else { anchor = nil; return }
         let frame = entries[index].view.screenFrame
-        anchor = (entries[index].id, CGPoint(x: rect.minX - frame.minX, y: rect.minY - frame.minY))
+        anchor = (entries[index].id, CGPoint(x: rect.minX - frame.minX, y: frame.maxY - rect.maxY))
     }
     private func updateBadgeScreen() {
         let index = RecordingPresentation.badgeScreen(selection: rect, screens: entries.map(\.view.screenFrame))
