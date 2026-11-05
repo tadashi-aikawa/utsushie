@@ -15,6 +15,32 @@ import Testing
     #expect(label.maxY < screen.maxY)
 }
 
+@Test func recordingBadgeFollowsTheDimensionLabelAndAvoidsTheMenuBarInside() {
+    let screen = CGRect(x: -1000, y: 900, width: 1000, height: 700)
+    let visible = CGRect(x: -1000, y: 900, width: 1000, height: 676)
+    let size = CGSize(width: 60, height: 22)
+    let area = CGRect(x: -600, y: 1000, width: 200, height: 100)
+    #expect(RecordingPresentation.badge(selection: area, visible: visible, size: size)
+        == OverlayPresentation.dimensionLabel(selection: area, screen: visible, size: size))
+    #expect(RecordingPresentation.badge(selection: area, visible: visible, size: size).minY == area.maxY + 10)
+    // 画面全体: メニューバーの下で、内側の鉤(内側4pt+線幅)の右へ置く。
+    let full = RecordingPresentation.badge(selection: screen, visible: visible, size: size)
+    #expect(full == CGRect(x: -992, y: visible.maxY - 30, width: 60, height: 22))
+    // メニューバーのすぐ下まで伸びる範囲も、バッジはメニューバーへ掛けない。
+    let top = CGRect(x: -600, y: 1300, width: 200, height: 300)
+    let inside = RecordingPresentation.badge(selection: top, visible: visible, size: size)
+    #expect(inside.maxY <= visible.maxY - 8 && inside.minX == top.minX + 8 && top.contains(inside))
+    #expect(RecordingPresentation.cornersInside(selection: screen, screen: screen))
+    #expect(!RecordingPresentation.cornersInside(selection: area, screen: screen))
+}
+
+@Test func recordingBadgeGoesToTheScreenWithTheLargestOverlap() {
+    let screens = [CGRect(x: 0, y: 0, width: 1000, height: 800), CGRect(x: 1000, y: 0, width: 1000, height: 800)]
+    #expect(RecordingPresentation.badgeScreen(selection: CGRect(x: 900, y: 100, width: 300, height: 100), screens: screens) == 1)
+    #expect(RecordingPresentation.badgeScreen(selection: CGRect(x: 700, y: 100, width: 400, height: 100), screens: screens) == 0)
+    #expect(RecordingPresentation.badgeScreen(selection: CGRect(x: 3000, y: 100, width: 100, height: 100), screens: screens) == nil)
+}
+
 @Test func dimensionLabelFallsInsideAtScreenTopAndStaysOnScreen() {
     let screen = CGRect(x: -1000, y: 900, width: 1000, height: 700)
     let size = CGSize(width: 100, height: 22)

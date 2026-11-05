@@ -42,14 +42,38 @@ private func uiPixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     #expect(abs(outside[0] - 148) <= 1 && outside[0] == outside[1] && outside[1] == outside[2])
 }
 
-@MainActor @Test func recordingBorderIsSolidRedAndWhiteAndStaysOutside() throws {
-    let rect = CGRect(x: 30, y: 20, width: 90, height: 50)
-    let image = try uiBitmap { UIDrawing.recordingBorder(rect) }
-    #expect(try uiPixel(image, x: 60, y: 17) == [229, 53, 42, 255])
-    #expect(try uiPixel(image, x: 60, y: 15) == [255, 255, 255, 255])
-    for y in 20..<70 { for x in 30..<120 {
-        #expect(try uiPixel(image, x: x, y: y)[3] == 0)
-    }}
+@MainActor @Test func recordingCurtainCarriesTheSelectionLookAndDrawsNothingBeforeReveal() throws {
+    let view = RecordingCurtainView(frame: CGRect(x: 0, y: 0, width: 200, height: 140))
+    view.screenFrame = CGRect(x: 100, y: 50, width: 200, height: 140)
+    view.visibleFrame = CGRect(x: 0, y: 0, width: 200, height: 116)
+    view.selection = CGRect(x: 140, y: 80, width: 100, height: 50)
+    view.showsBadge = true
+    view.setBadge("0:12")
+    let hidden = try uiBitmap(width: 200, height: 140) { view.draw(view.bounds) }
+    for (x, y) in [(10, 10), (36, 35), (52, 101), (90, 55)] { #expect(try uiPixel(hidden, x: x, y: y)[3] == 0) }
+    view.revealed = true
+    let image = try uiBitmap(width: 200, height: 140) { view.draw(view.bounds) }
+    // 範囲選択と同じ42%の暗幕・外側の赤い鉤。範囲の中は透明のまま。
+    #expect(abs(try uiPixel(image, x: 10, y: 10)[3] - 107) <= 1)
+    for y in 30..<80 { for x in 40..<140 { #expect(try uiPixel(image, x: x, y: y)[3] == 0) } }
+    #expect(try uiPixel(image, x: 36, y: 35) == [229, 53, 42, 255])
+    // 寸法のバッジと同じ範囲の上10ptに、赤い●の経過時間。
+    #expect(try uiPixel(image, x: 52, y: 101) == [229, 53, 42, 255])
+    view.showsBadge = false
+    let other = try uiBitmap(width: 200, height: 140) { view.draw(view.bounds) }
+    #expect(try uiPixel(other, x: 52, y: 101) != [229, 53, 42, 255])
+}
+
+@MainActor @Test func recordingCurtainDrawsFullDisplayCornersInside() throws {
+    let view = RecordingCurtainView(frame: CGRect(x: 0, y: 0, width: 200, height: 140))
+    view.screenFrame = CGRect(x: 100, y: 50, width: 200, height: 140)
+    view.visibleFrame = CGRect(x: 0, y: 0, width: 200, height: 116)
+    view.selection = view.screenFrame
+    view.revealed = true
+    let image = try uiBitmap(width: 200, height: 140) { view.draw(view.bounds) }
+    // くり抜きが画面いっぱいなので暗幕は無く、鉤は内側4ptに出る。
+    #expect(try uiPixel(image, x: 100, y: 70)[3] == 0)
+    #expect(try uiPixel(image, x: 4, y: 10) == [229, 53, 42, 255])
 }
 
 @MainActor @Test func cardButtonsUsePresentationFramesAndEnableVideoEditing() throws {

@@ -89,6 +89,25 @@ public enum RecordingPresentation {
         }
     }
     public static func stopsOnClick(phase: RecordingPhase) -> Bool { phase == .recording }
+    /// 範囲がその画面を覆うときは、画面全体の強調と同じく鉤を内側へ描く。
+    public static func cornersInside(selection: CGRect, screen: CGRect) -> Bool { selection.contains(screen) }
+    /// 経過時間のバッジは、範囲と最も広く重なる1画面にだけ出す。
+    public static func badgeScreen(selection: CGRect, screens: [CGRect]) -> Int? {
+        let areas = screens.map { screen -> CGFloat in
+            let overlap = selection.intersection(screen)
+            return overlap.isNull ? 0 : overlap.width * overlap.height
+        }
+        guard let best = areas.indices.max(by: { areas[$0] < areas[$1] }), areas[best] > 0 else { return nil }
+        return best
+    }
+    /// 選択中の寸法のバッジと同じ所へ置く。内側へ回るときは、メニューバーの下と内側の鉤を避ける。
+    public static func badge(selection: CGRect, visible: CGRect, size: CGSize) -> CGRect {
+        var frame = OverlayPresentation.dimensionLabel(selection: selection, screen: visible, size: size)
+        guard frame.minY < selection.maxY else { return frame }
+        frame.origin.y = max(visible.minY + 4, min(frame.minY, visible.maxY - size.height - 8))
+        frame.origin.x = min(max(frame.minX, selection.minX + 8), max(visible.minX + 4, visible.maxX - frame.width - 4))
+        return frame
+    }
 }
 
 public enum HotkeyPresentation {

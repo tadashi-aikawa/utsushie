@@ -207,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             var prepared: RecordingService?
             do {
                 if audio.capturesMicrophone { try await requestMicrophone() }
-                // 赤枠も開始前に窓番号を確保し、撮影用UIだけを除外する。
+                // 録画中の暗幕も開始前に窓番号を確保し、撮影用UIだけを除外する。描くのは選択画面を閉じるときから。
                 borderRect = request.rect; recordingBorder.show(rect: request.rect)
                 let excluded = CaptureWindowExclusion.windows()
                 // 準備中のEscはTaskを取消し、非同期処理の後から録画が始まることを防ぐ。
@@ -220,6 +220,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 prepared = session
                 try Task.checkCancellation()
                 activeRecording = session
+                // 暗幕を消さずに選択画面から引き継ぐ。
+                recordingBorder.reveal()
                 overlay.close()
                 recordingHostStart = ProcessInfo.processInfo.systemUptime
                 try await session.start()
@@ -278,14 +280,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let bounds = info?.first?[kCGWindowBounds as String] as? [String: Any],
                   let cgRect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { stopRecording(); return }
             let rect = ScreenGeometry.appKit(cgRect)
-            if rect != borderRect { borderRect = rect; recordingBorder.show(rect: rect) }
+            if rect != borderRect { borderRect = rect; recordingBorder.move(to: rect) }
         }
     }
     private func updateRecordingStatus() {
         let recording = recordingState.phase == .recording
         statusItem.menu = recording ? nil : statusMenu
         statusItem.length = recordingState.phase == .idle ? NSStatusItem.squareLength : NSStatusItem.variableLength
-        let title = RecordingPresentation.title(phase: recordingState.phase, elapsed: ProcessInfo.processInfo.systemUptime - recordingHostStart)
+        let elapsed = ProcessInfo.processInfo.systemUptime - recordingHostStart
+        let title = RecordingPresentation.title(phase: recordingState.phase, elapsed: elapsed)
+        recordingBorder.setElapsed(recording ? MediaFormatting.elapsed(elapsed) : nil)
         guard let button = statusItem.button else { return }
         button.imagePosition = .imageOnly
         button.title = ""

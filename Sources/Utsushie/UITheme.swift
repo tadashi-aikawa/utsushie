@@ -86,9 +86,16 @@ enum UIDrawing {
         let edge = NSBezierPath(rect: rect.insetBy(dx: edgeInset, dy: edgeInset))
         NSColor.white.withAlphaComponent(0.9).setStroke(); edge.lineWidth = 1; edge.stroke()
     }
-    static func recordingBorder(_ rect: CGRect) {
-        let path = NSBezierPath(rect: rect.insetBy(dx: -3, dy: -3))
-        NSColor.white.setStroke(); path.lineWidth = 4; path.stroke()
-        UITheme.red.setStroke(); path.lineWidth = 2; path.stroke()
+    /// 寸法のバッジと同じ墨の地に、赤い●と経過時間を置く。数字は等幅で、秒が進んでも幅を変えない。
+    private static let recordingBadgeFont = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
+    static func recordingBadgeWidth(_ text: String) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: recordingBadgeFont]).width) + 14 + 16
+    }
+    static func recordingBadge(_ text: String, in rect: CGRect) {
+        fill(rect, color: UITheme.ink.withAlphaComponent(0.94), radius: 6)
+        UITheme.red.setFill()
+        NSBezierPath(ovalIn: CGRect(x: rect.minX + 8, y: rect.midY - 4, width: 8, height: 8)).fill()
+        (text as NSString).draw(at: CGPoint(x: rect.minX + 22, y: rect.minY + 3),
+            withAttributes: [.font: recordingBadgeFont, .foregroundColor: UITheme.text])
     }
 }
