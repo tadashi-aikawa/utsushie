@@ -16,9 +16,15 @@ final class OverlayController {
     /// 画像の撮影だけに使う。動画・要素選択へ切り替えたら今の画面へ戻し、その回は止め直さない。
     private(set) var frozen: [FrozenDisplay]?
     private(set) var last: CGRect?
-    var selection: CGRect? { state.target == .element ? nil : state.gesture.areaPreview }
+    /// 録画を依頼した範囲。録画の暗幕へ引き継いで閉じるまで、この範囲だけをくり抜き続ける。
+    /// 理由: 離した時点で選択が消え、準備の間だけカーソル下の窓の強調や前回枠へ戻ると、点滅して見えるため。
+    private(set) var requested: CGRect?
+    var selection: CGRect? {
+        if let requested { return highlighted == nil ? requested : nil }
+        return state.target == .element ? nil : state.gesture.areaPreview
+    }
     var displayedLast: CGRect? {
-        state.gesture.isSelectingArea ? nil : state.gesture.lastPreview ?? last
+        requested != nil || state.gesture.isSelectingArea ? nil : state.gesture.lastPreview ?? last
     }
     /// 前回枠の移動・リサイズ中だけの枠。ウィンドウの強調が消えるので、代わりに幕をくり抜く。
     var adjustingLast: CGRect? { state.target == .element ? nil : state.gesture.lastPreview }
@@ -71,6 +77,8 @@ final class OverlayController {
     var onCancel: (() -> Void)?
     var onAccessibilityNeeded: (() -> Void)?
     var isVisible: Bool { !panels.isEmpty }
+    /// 録画を依頼した後は、Escのほかは受けない。表示だけが変わり、録画の対象と食い違うため。
+    private var accepting: Bool { isVisible && requested == nil }
 
     init(state: CaptureState = CaptureState()) { self.state = state }
 
@@ -122,6 +130,11 @@ final class OverlayController {
         // local monitorはIMEへ渡る前のkeyDownを受け取る。charactersは読まない。
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.isVisible else { return event }
+            // 録画の準備中はEscの取り消しだけを受ける。ほかの操作では録画の対象が変わらないため。
+            if self.requested != nil {
+                if event.keyCode == 53, !event.isARepeat { self.key(53) }
+                return nil
+            }
             let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
             let arrows = self.state.target == .element && [125, 126].contains(event.keyCode)
             guard modifiers.isEmpty, arrows || self.state.handles(event.keyCode) else {
@@ -143,7 +156,17 @@ final class OverlayController {
         frozen = nil
         registeredCursor = nil
         state.cancelGesture(); highlighted = nil; highlightedApp = ""; highlightedDisplay = false
+        requested = nil
         NSCursor.arrow.set()
+    }
+    /// 撮影・録画を依頼する。録画では、依頼した範囲を準備の間も見せ続ける。
+    private func request(_ request: CaptureRequest, remember: Bool) {
+        if state.output == .video {
+            requested = request.rect
+            // ウィンドウ・画面の強調で依頼したときは、アプリ名ごと残す。それ以外の強調は消す。
+            if highlighted?.rect != request.rect { highlighted = nil; highlightedApp = ""; highlightedDisplay = false }
+        }
+        onCapture?(request, remember, state.output)
     }
     private func unfreeze() {
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -152,6 +175,7 @@ final class OverlayController {
         frozen = nil
     }
     func repeatCapture() {
+        guard requested == nil else { return }
         elementClick = nil; clearElements()
         perform(state.repeatCapture(hasLast: last != nil))
         updateWindow(); redraw()
@@ -196,9 +220,9 @@ final class OverlayController {
         case .none: break
         case .cancel: close(); onCancel?()
         case .captureLast:
-            if let last { onCapture?(.region(last), true, state.output) }
+            if let last { request(.region(last), remember: true) }
         case .captureChrome:
-            do { onCapture?(.region(try ChromeArea.rect()), false, state.output) }
+            do { request(.region(try ChromeArea.rect()), remember: false) }
             catch {
                 state.fallbackToArea(); highlighted = nil; message = error.localizedDescription
                 if !AXIsProcessTrusted() { onAccessibilityNeeded?() }
@@ -207,7 +231,7 @@ final class OverlayController {
         redraw()
     }
     func mouseMoved() {
-        guard isVisible else { return }
+        guard accepting else { return }
         // flagsChangedを取りこぼしても、移動・別画面への進入で現在の⇧・⌥状態へ戻す。
         state.modifiersChanged(shift: NSEvent.modifierFlags.contains(.shift), option: NSEvent.modifierFlags.contains(.option))
         // cursorUpdateとカーソル矩形はキーウィンドウで有効になる。
@@ -224,13 +248,14 @@ final class OverlayController {
         cursor.set()
     }
     func flagsChanged(shift: Bool, option: Bool) {
+        guard requested == nil else { return }
         if confirmingElement { clearElements() }
         state.modifiersChanged(shift: shift, option: option)
         updateWindow(); redraw()
     }
     private func updateWindow(windowOnly: Bool = false) {
         // 離した後の手ぶれでは撮影を取り消さない。確定地点の窓は結果の受領時に検証する。
-        if confirmingElement { return }
+        if confirmingElement || requested != nil { return }
         let previousHighlight = highlighted
         let previousApp = highlightedApp
         let previousQuery = elementQuery
@@ -389,7 +414,7 @@ final class OverlayController {
             // ページ更新・スクロール後の古い枠で撮らない。親へ広げた選択も新しい祖先列と照合する。
             if let current = fresh.candidates.first(where: { ElementSelection.matches($0.rect, click.element.rect) }) {
                 self.redraw()
-                self.onCapture?(.region(ScreenGeometry.appKit(current.rect)), false, self.state.output)
+                self.request(.region(ScreenGeometry.appKit(current.rect)), remember: false)
             } else {
                 self.elementSelection = fresh
                 self.displayElement()
@@ -407,7 +432,7 @@ final class OverlayController {
         }
     }
     func mouseDown(movingLast: Bool = false, selectingDisplay: Bool = false) {
-        guard isVisible else { return }
+        guard accepting else { return }
         var click: (element: CaptureElement, query: AccessibilityElementReader.Query)?
         if state.target == .element,
            let selected = elementSelection.selected, let previous = elementQuery,
@@ -424,13 +449,13 @@ final class OverlayController {
                                          displayFrames: ScreenGeometry.displays.map(\.frame), selectingDisplay: selectingDisplay))
     }
     func mouseDragged() {
-        guard isVisible else { return }
+        guard accepting else { return }
         state.pointerDragged(to: NSEvent.mouseLocation)
         if state.target != .element { elementClick = nil }
         updateWindow(); redraw()
     }
     func mouseUp() {
-        guard isVisible else { return }
+        guard accepting else { return }
         if state.target == .element {
             let click = elementClick; elementClick = nil
             let action = state.pointerUp(at: NSEvent.mouseLocation, hasWindow: click != nil)
@@ -449,9 +474,14 @@ final class OverlayController {
         switch action {
         case .none: break
         case .captureWindow:
-            if let highlighted { onCapture?(highlighted, false, state.output) }
-        case let .captureArea(rect): onCapture?(.region(rect), true, state.output)
-        case let .captureDisplay(rect): onCapture?(.region(rect), false, state.output)
+            if let highlighted { request(highlighted, remember: false) }
+        case let .captureArea(rect): request(.region(rect), remember: true)
+        case let .captureDisplay(rect):
+            // 離す前にウィンドウの強調へ戻っているので、画面の強調を戻してから依頼し、準備中も内側の鉤と画面名を残す。
+            if let screen = NSScreen.screens.first(where: { $0.frame == rect }) {
+                highlighted = .region(rect); highlightedApp = screen.localizedName; highlightedDisplay = true
+            }
+            request(.region(rect), remember: false)
         case let .moveLast(rect):
             if CaptureGeometry.isVisible(rect, displays: ScreenGeometry.displays) {
                 last = rect; onMoveLast?(rect)
@@ -461,7 +491,7 @@ final class OverlayController {
         updateWindow(); redraw()
     }
     func showError(_ error: Error) {
-        message = error.localizedDescription; state.fallbackToArea(); clearElements(); redraw()
+        message = error.localizedDescription; requested = nil; state.fallbackToArea(); clearElements(); redraw()
     }
     func dimensions(_ rect: CGRect, window: Bool = false) -> String {
         let downscale = state.effectiveDownscale(config: config)

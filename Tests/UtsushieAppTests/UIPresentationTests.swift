@@ -188,3 +188,38 @@ private func uiPixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
         try errorBitmap.representation(using: .png, properties: [:])?.write(to: url.appendingPathComponent("overlay-error.png"))
     }
 }
+
+@MainActor @Test func overlayKeepsTheRequestedVideoAreaUntilTheRecordingCurtainTakesOver() throws {
+    let overlay = OverlayController()
+    defer { overlay.close() }
+    let last = CGRect(x: 40, y: 40, width: 120, height: 80)
+    overlay.show(last: last)
+    func key(_ code: UInt16) throws {
+        NSApp.sendEvent(try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: NSApp.keyWindow?.windowNumber ?? 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+            isARepeat: false, keyCode: code)))
+    }
+    try key(48)
+    #expect(overlay.state.output == .video)
+    var requests: [CGRect] = []
+    overlay.onCapture = { request, _, _ in requests.append(request.rect) }
+    overlay.repeatCapture()
+    // 録画の準備の間も、依頼した範囲だけをくり抜き、カーソル下の窓の強調や前回枠へ戻さない。
+    #expect(requests == [last])
+    #expect(overlay.requested == last && overlay.selection == last && overlay.highlighted == nil && overlay.displayedLast == nil)
+    overlay.mouseMoved()
+    #expect(overlay.selection == last && overlay.highlighted == nil)
+    // 準備中は、表示だけが変わって録画の対象と食い違う操作を受けない。
+    try key(48); try key(36)
+    overlay.repeatCapture()
+    #expect(overlay.state.output == .video && requests == [last] && overlay.requested == last)
+    // 開始に失敗したら、選び直せるよう普段の表示へ戻す。
+    overlay.showError(CaptureError.unavailable("失敗"))
+    #expect(overlay.requested == nil && overlay.displayedLast == last)
+    // Escの取り消しは準備中も受ける。
+    var cancelled = false
+    overlay.onCancel = { cancelled = true }
+    overlay.repeatCapture()
+    try key(53)
+    #expect(cancelled && !overlay.isVisible && overlay.requested == nil)
+}
