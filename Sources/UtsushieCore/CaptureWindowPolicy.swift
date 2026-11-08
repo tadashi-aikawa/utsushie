@@ -17,9 +17,9 @@ public struct CaptureWindowPolicy: Sendable {
         excludedWindowIDs.isSubset(of: listedWindowIDs)
     }
 
-    /// スクロール撮影で外すDock本体の窓か。`dockLayer`はDockの窓の層。
+    /// スクロール撮影で外すDock本体のウィンドウか。`dockLayer`はDockのウィンドウのレイヤー。
     /// - 理由: 自動非表示のDockが範囲の下端に出ると、横幅いっぱいではないので固定のフッターにならず、継ぎ目ごとに写り込むため
-    /// - 層: Dockは壁紙の窓も持つので、アプリだけでなく層でも絞る
+    /// - レイヤー: Dockは壁紙のウィンドウも持つので、アプリだけでなくレイヤーでも絞る
     public static func isDock(bundleIdentifier: String?, layer: Int, dockLayer: Int) -> Bool {
         bundleIdentifier == "com.apple.dock" && layer == dockLayer
     }
