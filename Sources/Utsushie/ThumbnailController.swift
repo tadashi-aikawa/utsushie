@@ -17,7 +17,7 @@ final class ThumbnailController {
     var editorFocus = AnnotationApplicationFocus()
     var makeVideoSession: (SharedArtifact, Int) -> VideoEditSession = { VideoEditSession(artifact: $0, fps: $1) }
     var onArtifactsChange: (() -> Void)?
-    /// 表示中のカードの窓が増えた。撮影用UIの除外に使う窓の一覧を取り直す合図にする。
+    /// 表示中のカードのウィンドウが増えた。撮影用UIの除外に使うウィンドウの一覧を取り直す合図にする。
     var onCardAdded: (() -> Void)?
     var onLibraryExportStatus: ((URL, String?) -> Void)?
     /// 保存時の問題をメニューの警告へ出す。

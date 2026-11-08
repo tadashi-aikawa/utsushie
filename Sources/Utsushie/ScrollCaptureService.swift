@@ -2,7 +2,7 @@ import AppKit
 import ScreenCaptureKit
 import UtsushieCore
 
-/// 範囲を流し続け、利用者がスクロールした分を縦長の1枚へつなぐ。録画と同じく撮影用UIは窓番号で除外する。
+/// 範囲を流し続け、利用者がスクロールした分を縦長の1枚へつなぐ。録画と同じく撮影用UIはウィンドウ番号で除外する。
 @MainActor
 final class ScrollCaptureService {
     let displayID: UInt32

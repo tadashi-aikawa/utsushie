@@ -2,7 +2,7 @@ import AppKit
 import ScreenCaptureKit
 import UtsushieCore
 
-/// 撮影操作そのものの窓だけに付ける。新しい編集窓には付けない。
+/// 撮影操作そのもののウィンドウだけに付ける。新しい編集ウィンドウには付けない。
 @MainActor
 protocol CaptureExcludedWindow: AnyObject {}
 
@@ -18,7 +18,7 @@ enum CaptureWindowExclusion {
     }
 
     static func excludedWindows(in content: SCShareableContent, policy: CaptureWindowPolicy) throws -> [SCWindow] {
-        // 窓番号はWindowServer全体で一意。所有アプリ情報が無い窓も番号だけで対応させる。
+        // ウィンドウ番号はWindowServer全体で一意。所有アプリ情報が無いウィンドウも番号だけで対応させる。
         let excluded = content.windows.filter { policy.excludes(windowID: $0.windowID) }
         guard policy.excludedWindowIDs.isSubset(of: Set(excluded.map(\.windowID))) else {
             // 列挙できなかった撮影用UIを黙って含めず、写り込みを防ぐ。

@@ -42,7 +42,7 @@ public struct ElementSelection: Sendable {
             clipped.append(CaptureElement(rect: visible, label: node.label))
         }
         for candidate in clipped.reversed() {
-            // region撮影には手前の窓も写る。隠れた親へ広げず、見えている候補だけを残す。
+            // region撮影には手前のウィンドウも写る。隠れた親へ広げず、見えている候補だけを残す。
             if occludingBounds.contains(where: {
                 let overlap = candidate.rect.intersection($0)
                 return !overlap.isNull && overlap.width > 0 && overlap.height > 0

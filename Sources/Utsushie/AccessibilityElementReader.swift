@@ -161,7 +161,7 @@ final class AccessibilityElementReader {
             guard let role = attribute(element, kAXRoleAttribute) as? String else { return finish("noRole") }
             let bounds = rect(element)
             if role == kAXWindowRole {
-                // 同じ位置の窓は、呼び出し側のCGWindowListとappのAXヒットの両方のz順で絞る。
+                // 同じ位置のウィンドウは、呼び出し側のCGWindowListとappのAXヒットの両方のz順で絞る。
                 guard let bounds, ElementSelection.matches(bounds, query.windowBounds, tolerance: 1) else {
                     return finish("windowMismatch")
                 }

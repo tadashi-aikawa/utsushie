@@ -76,7 +76,7 @@ private func uiPixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     border.move(to: CGRect(x: 20, y: 20, width: 100, height: 60))
     border.setElapsed("0:03")
     let recorded = try #require(border.panels.first)
-    // 録画のフィルターは開始時の窓番号で除外するので、残る画面のパネルは作り直さない。
+    // 録画のフィルターは開始時のウィンドウ番号で除外するので、残る画面のパネルは作り直さない。
     border.sync(screens: [main, added])
     #expect(border.panels.count == 2 && border.panels[0] === recorded)
     let view = try #require(border.panels[1].contentView as? RecordingCurtainView)
@@ -209,7 +209,7 @@ private func uiPixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     var requests: [CGRect] = []
     overlay.onCapture = { request, _, _ in requests.append(request.rect) }
     overlay.repeatCapture()
-    // 録画の準備の間も、依頼した範囲だけをくり抜き、カーソル下の窓の強調や前回枠へ戻さない。
+    // 録画の準備の間も、依頼した範囲だけをくり抜き、カーソル下のウィンドウの強調や前回枠へ戻さない。
     #expect(requests == [last])
     #expect(overlay.requested == last && overlay.selection == last && overlay.highlighted == nil && overlay.displayedLast == nil)
     overlay.mouseMoved()

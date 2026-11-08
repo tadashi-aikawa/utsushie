@@ -26,7 +26,7 @@ final class RecordingBorder: NSObject {
     private var alert = false
     var panels: [RecordingBorderPanel] { entries.map(\.panel) }
 
-    /// 除外する窓番号を録画の準備前に確保するため先に出す。`reveal`までは何も描かない。
+    /// 除外するウィンドウ番号を録画の準備前に確保するため先に出す。`reveal`までは何も描かない。
     func show(rect: CGRect, video: Bool = true) {
         close()
         self.rect = rect; self.video = video
@@ -68,7 +68,7 @@ final class RecordingBorder: NSObject {
         elapsed = nil; revealed = false; anchor = nil; video = true; alert = false
     }
     /// 録画中に画面が増減しても全ディスプレイを暗く保つ。残る画面のパネルは作り直さない。
-    /// 理由: 録画のフィルターは開始時の窓番号で暗幕を除外しているため。増えた画面は録画中のディスプレイではない。
+    /// 理由: 録画のフィルターは開始時のウィンドウ番号で暗幕を除外しているため。増えた画面は録画中のディスプレイではない。
     func sync(screens: [Screen]) {
         if let anchor, let screen = screens.first(where: { $0.id == anchor.id }) {
             let moved = CGRect(x: screen.frame.minX + anchor.offset.x, y: screen.frame.maxY - anchor.offset.y - rect.height,

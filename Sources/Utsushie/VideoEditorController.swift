@@ -647,7 +647,7 @@ private final class VideoEditorPreview: NSView {
         if let videoSize, videoSize.width > 0, videoSize.height > 0 { return AVMakeRect(aspectRatio: videoSize, insideRect: base) }
         return playerLayer.videoRect.offsetBy(dx: base.minX, dy: base.minY)
     }
-    /// 寄る対象の層。演出の層にも同じ変形を掛け、合成後に寄せた見え方にする。
+    /// 寄る対象のレイヤー。演出のレイヤーにも同じ変形を掛け、合成後に寄せた見え方にする。
     private var zoomedLayers: [CALayer] { [playerLayer, beforeLayer, afterLayer, blackLayer] }
     override func layout() {
         super.layout()
@@ -700,10 +700,10 @@ private final class VideoEditorPreview: NSView {
         for layer in zoomedLayers {
             layer.transform = CATransform3DIdentity
             let frame = layer.frame
-            // 層の中心を基準に拡大し、寄せる範囲の中心を映像の中心へ移す。
+            // レイヤーの中心を基準に拡大し、寄せる範囲の中心を映像の中心へ移す。
             let tx = stage.midX - frame.midX + sx * (frame.midX - target.midX)
             let ty = stage.midY - frame.midY + sy * (frame.midY - target.midY)
-            // マスクは層と一緒に変形されるので、寄せる範囲を層の座標で切り抜く。
+            // マスクはレイヤーと一緒に変形されるので、寄せる範囲をレイヤーの座標で切り抜く。
             let mask = layer.mask ?? CALayer()
             mask.backgroundColor = NSColor.black.cgColor
             mask.frame = target.offsetBy(dx: -frame.minX, dy: -frame.minY)

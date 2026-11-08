@@ -8,7 +8,7 @@ import Testing
         #expect(!policy.canSelect(windowID: id, processID: 42, layer: 0, alpha: 1))
         #expect(!policy.canSelect(windowID: id, processID: 42, layer: 25, alpha: 1))
     }
-    // 編集窓・一覧・今後追加する窓を許可する。ホワイトリストにはしない。
+    // 編集ウィンドウ・一覧・今後追加するウィンドウを許可する。ホワイトリストにはしない。
     #expect(!policy.excludes(windowID: 100))
     #expect(!policy.excludes(windowID: 101))
 }

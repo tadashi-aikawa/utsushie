@@ -96,7 +96,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
             if !isFindingPrivacy { privacyMessage = nil }
             update()
         }
-        // 遅れて来たレイアウトや窓のリサイズでは、AIの結果と失敗の案内を消さない。
+        // 遅れて来たレイアウトやウィンドウのリサイズでは、AIの結果と失敗の案内を消さない。
         canvas.onLayout = { [weak self] in self?.update() }
         // トリミングは開き直した画像へ持ち越さない。
         canvas.onToolChange = { tool in if tool != .crop { Self.lastTool = tool } }
@@ -110,7 +110,7 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
         button.title = title; button.target = self; button.action = action
     }
     func show() {
-        // アクティベーションの成否を待たず、通常レベルの窓を開いた時点で前面へ出す。
+        // アクティベーションの成否を待たず、通常レベルのウィンドウを開いた時点で前面へ出す。
         window.orderFrontRegardless(); window.makeKey(); window.makeFirstResponder(canvas)
         applicationFocus.activateEditor()
         AnnotationNavigationDiagnostics.observeFocus("editor shown", isActive: applicationFocus.isActive(),

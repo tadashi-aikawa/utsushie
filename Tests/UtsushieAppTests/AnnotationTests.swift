@@ -1662,7 +1662,7 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     let focus = AnnotationApplicationFocus(isActive: { active }, frontmostApplication: { front },
         activate: { ordinaryRequests += 1 }, activateEditor: {
             requests += 1
-            // アクティベーションを拒否されても、窓の表示と入力先を先に用意している。
+            // アクティベーションを拒否されても、ウィンドウの表示と入力先を先に用意している。
             #expect(openingWindow?.isVisible == true)
             #expect(openingWindow?.firstResponder is AnnotationCanvas)
         }, restore: { _ in restores += 1 })

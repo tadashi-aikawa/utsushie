@@ -59,7 +59,7 @@ import UtsushieCore
     await library.reload()
     content.layoutSubtreeIfNeeded()
     collection.layoutSubtreeIfNeeded()
-    // 空の一覧で列幅を確定し、窓をリサイズせずに内容だけを増やす。
+    // 空の一覧で列幅を確定し、ウィンドウをリサイズせずに内容だけを増やす。
     library.windowDidResize(Notification(name: NSWindow.didResizeNotification, object: window))
     let widthWithoutScroller = scroll.contentSize.width
     let sizeWithoutScroller = layout.itemSize

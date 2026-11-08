@@ -214,7 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             var prepared: RecordingService?
             do {
                 if audio.capturesMicrophone { try await requestMicrophone() }
-                // 録画中の暗幕も開始前に窓番号を確保し、撮影用UIだけを除外する。描くのは選択画面を閉じるときから。
+                // 録画中の暗幕も開始前にウィンドウ番号を確保し、撮影用UIだけを除外する。描くのは選択画面を閉じるときから。
                 borderRect = request.rect; recordingBorder.show(rect: request.rect)
                 let excluded = CaptureWindowExclusion.windows()
                 // 準備中のEscはTaskを取消し、非同期処理の後から録画が始まることを防ぐ。
@@ -469,7 +469,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func take(_ request: CaptureRequest, remember: Bool) {
         guard !busy else { return }
         busy = true
-        // 閉じたパネルも列挙・合成が終わるまで保持し、窓番号で確実に除外する。
+        // 閉じたパネルも列挙・合成が終わるまで保持し、ウィンドウ番号で確実に除外する。
         let excluded = CaptureWindowExclusion.windows()
         let snapshot = config
         let downscale = overlay.state.effectiveDownscale(config: snapshot)

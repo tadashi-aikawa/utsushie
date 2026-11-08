@@ -33,7 +33,7 @@ final class CaptureService {
     static let log = Logger(subsystem: "com.tadashi-aikawa.utsushie", category: "Capture")
     private var prefetched: SCShareableContent?
     private var prefetchTask: Task<Void, Never>?
-    /// 選択画面がカーソル下の窓を覆うと、ホバーで出たポップアップが閉じる。覆う前に全画面を撮る。
+    /// 選択画面がカーソル下のウィンドウを覆うと、ホバーで出たポップアップが閉じる。覆う前に全画面を撮る。
     func freeze(excluding windows: [NSWindow]) async throws -> [FrozenDisplay] {
         let start = ContinuousClock.now
         let policy = CaptureWindowExclusion.policy(for: windows)
@@ -71,7 +71,7 @@ final class CaptureService {
         guard !frozen.isEmpty else { throw CaptureError.unavailable("画面を撮れませんでした") }
         return frozen
     }
-    /// 窓の一覧は取得に約50msかかる。選択画面を開く前に取っておき、ホットキーからの待ちから外す。
+    /// ウィンドウの一覧は取得に約50msかかる。選択画面を開く前に取っておき、ホットキーからの待ちから外す。
     func prefetch() {
         // 画面収録の許可の確認は撮影操作のときに出す。起動時の先読みで許可を求めない。
         guard CGPreflightScreenCaptureAccess() else { return }
@@ -93,7 +93,7 @@ final class CaptureService {
         prefetched = fresh
         return fresh
     }
-    /// 止めた画面から切り出す。ウィンドウは見えているとおりに、手前の窓やポップアップも含めて写す。
+    /// 止めた画面から切り出す。ウィンドウは見えているとおりに、手前のウィンドウやポップアップも含めて写す。
     nonisolated static func image(for request: CaptureRequest, downscale: Bool, frozen: [FrozenDisplay]) throws -> CapturedImage {
         let displays = frozen.map(\.geometry)
         let rect: CGRect
@@ -152,7 +152,7 @@ final class CaptureService {
             canvas.setFillColor(CGColor(gray: 0, alpha: 1))
             canvas.fill(CGRect(x: 0, y: 0, width: size.width, height: size.height))
             let excluded = try CaptureWindowExclusion.excludedWindows(in: shareable, policy: policy)
-            // 隠すタイミングだけに頼らず、撮影用UIを窓単位のフィルターで除外する。
+            // 隠すタイミングだけに頼らず、撮影用UIをウィンドウ単位のフィルターで除外する。
             for geometry in displays {
                 let part = rect.intersection(geometry.frame)
                 guard !part.isNull, part.width > 0, part.height > 0,
