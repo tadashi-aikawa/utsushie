@@ -39,6 +39,14 @@ func ownEditorSheetPopoverAndMenuCanBeSelectedAtAnyLayer(_ layer: Int) {
     #expect(!policy.canSelect(windowID: 100, processID: 99, layer: 0, alpha: 0))
 }
 
+@Test func scrollCaptureExcludesOnlyTheDockItself() {
+    #expect(CaptureWindowPolicy.isDock(bundleIdentifier: "com.apple.dock", layer: 20, dockLayer: 20))
+    // Dockが持つ壁紙の窓は外さない。
+    #expect(!CaptureWindowPolicy.isDock(bundleIdentifier: "com.apple.dock", layer: -2147483624, dockLayer: 20))
+    #expect(!CaptureWindowPolicy.isDock(bundleIdentifier: "com.google.Chrome", layer: 20, dockLayer: 20))
+    #expect(!CaptureWindowPolicy.isDock(bundleIdentifier: nil, layer: 20, dockLayer: 20))
+}
+
 @Test func emptyBlacklistIncludesAllOwnWindows() {
     let policy = CaptureWindowPolicy(ownProcessID: 42, excludedWindowIDs: [])
     #expect(!policy.excludes(windowID: 100))

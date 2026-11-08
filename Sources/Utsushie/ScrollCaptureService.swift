@@ -27,8 +27,13 @@ final class ScrollCaptureService {
             throw CaptureError.unavailable("選択したディスプレイが見つかりません")
         }
         let policy = CaptureWindowExclusion.policy(for: windows)
+        // 下端に出てくるDockはスクロールしても動かず、継ぎ目ごとに写り込むので外す。
+        let dockLayer = Int(CGWindowLevelForKey(.dockWindow))
+        let dock = content.windows.filter {
+            CaptureWindowPolicy.isDock(bundleIdentifier: $0.owningApplication?.bundleIdentifier, layer: $0.windowLayer, dockLayer: dockLayer)
+        }
         let filter = SCContentFilter(display: display,
-            excludingWindows: try CaptureWindowExclusion.excludedWindows(in: content, policy: policy))
+            excludingWindows: try CaptureWindowExclusion.excludedWindows(in: content, policy: policy) + dock)
         let scale = downscale ? 1 : geometry.scale
         let size = CaptureGeometry.outputSize(points: rect.size, scale: geometry.scale, downscale: downscale)
         let config = SCStreamConfiguration()
