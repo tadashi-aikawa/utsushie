@@ -355,3 +355,19 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
         }
     }
 }
+
+@MainActor @Test func rangeToolbarReservesEveryVideoToggleCombination() {
+    func width(_ item: HUDItem) -> CGFloat { ToolbarDrawing.itemWidth(title: item.title, key: item.key, face: .tool) }
+    for downscale in [true, false] {
+        for audio in VideoAudio.allCases {
+            for compression in [VideoCompression.compact, .standard] {
+                let items = [OverlayPresentation.resolutionItem(downscale: downscale),
+                             OverlayPresentation.audioItem(output: .video, audio: audio),
+                             OverlayPresentation.compressionItem(output: .video, compression: compression)].compactMap { $0 }
+                let used = items.map(width).reduce(0, +) + CGFloat(items.count - 1) * 10
+                // 確保した幅に収まれば、Tab・R・A・Sで操作の位置が動かない。
+                #expect(used <= OverlayView.toggleSpace)
+            }
+        }
+    }
+}

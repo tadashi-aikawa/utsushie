@@ -45,9 +45,9 @@ import CoreGraphics
     let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28, audioWidth: 70)
     #expect(plain.audio == nil)
     let audio = try! #require(layout.audio)
-    #expect(audio.minX - layout.tab.maxX == 10 && audio.width == 70)
-    #expect(layout.targetTray.minX - audio.maxX == 10)
-    #expect(layout.width - plain.width == 80)
+    #expect(audio.minX == 8 && audio.width == 70 && audio.midY == layout.items[2].midY)
+    #expect(layout.divider.minX - audio.maxX == 10)
+    #expect(layout.width - plain.width == 70)
     #expect(layout.width - layout.items[6].maxX == 6)
 }
 

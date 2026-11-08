@@ -74,15 +74,15 @@ import Testing
     for audioWidth: CGFloat? in [nil, 70] {
         let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28, resolutionWidth: 54, audioWidth: audioWidth)
         let resolution = try #require(layout.resolution)
-        #expect(resolution.minX == layout.tab.maxX + 10 && resolution.width == 54)
+        #expect(resolution.minX == 8 && resolution.width == 54)
         if let audioWidth {
             let audio = try #require(layout.audio)
             #expect(audio.minX == resolution.maxX + 10 && audio.width == audioWidth)
-            #expect(layout.targetTray.minX == audio.maxX + 10)
-            #expect(layout.width == plain.width + 64 + audioWidth + 10)
+            #expect(layout.divider.minX == audio.maxX + 10)
+            #expect(layout.width == plain.width + 54 + audioWidth + 10)
         } else {
-            #expect(layout.audio == nil && layout.targetTray.minX == resolution.maxX + 10)
-            #expect(layout.width == plain.width + 64)
+            #expect(layout.audio == nil && layout.divider.minX == resolution.maxX + 10)
+            #expect(layout.width == plain.width + 54)
         }
         #expect(layout.outputTray == plain.outputTray && layout.tab == plain.tab)
     }

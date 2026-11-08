@@ -17,7 +17,7 @@ final class OverlayController {
     private(set) var frozen: [FrozenDisplay]?
     private(set) var last: CGRect?
     /// 録画を依頼した範囲。録画の暗幕へ引き継いで閉じるまで、この範囲だけをくり抜き続ける。
-    /// 理由: 離した時点で選択が消え、準備の間だけカーソル下の窓の強調や前回枠へ戻ると、点滅して見えるため。
+    /// 理由: 離した時点で選択が消え、準備の間だけカーソル下のウィンドウの強調や前回枠へ戻ると、点滅して見えるため。
     private(set) var requested: CGRect?
     var selection: CGRect? {
         if let requested { return highlighted == nil ? requested : nil }
@@ -105,7 +105,7 @@ final class OverlayController {
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
             panel.acceptsMouseMovedEvents = true
             panel.animationBehavior = .none
-            // 止めた画面と選択の幕を同じ窓で1度に出す。別の窓に分けると、幕の下で今の画面が動いてから止めた画面へ戻って見える。
+            // 止めた画面と選択の幕を同じウィンドウで1度に出す。別のウィンドウに分けると、幕の下で今の画面が動いてから止めた画面へ戻って見える。
             let container = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
             container.wantsLayer = true
             if let display = self.frozen?.first(where: { $0.geometry.frame == screen.frame }) {
@@ -254,7 +254,7 @@ final class OverlayController {
         updateWindow(); redraw()
     }
     private func updateWindow(windowOnly: Bool = false) {
-        // 離した後の手ぶれでは撮影を取り消さない。確定地点の窓は結果の受領時に検証する。
+        // 離した後の手ぶれでは撮影を取り消さない。確定地点のウィンドウは結果の受領時に検証する。
         if confirmingElement || requested != nil { return }
         let previousHighlight = highlighted
         let previousApp = highlightedApp
@@ -284,7 +284,7 @@ final class OverlayController {
                 elementHint = "この場所の要素は取得できません · Eで戻る"
                 return
             }
-            // 同じ窓・可視範囲の取得待ちだけ、表示を残す。選択候補はupdateElementで別に破棄する。
+            // 同じウィンドウ・可視範囲の取得待ちだけ、表示を残す。選択候補はupdateElementで別に破棄する。
             if let previousQuery, query.hasSameContext(as: previousQuery) {
                 highlighted = previousHighlight
                 highlightedApp = previousApp
@@ -320,7 +320,7 @@ final class OverlayController {
                                               layer: layer, alpha: 1)
             let rect = ScreenGeometry.appKit(cgRect)
             if rect.contains(point), selectable || selectingElement {
-                // 通常の窓選択では無視するPiP等も、要素撮影では背後を撮らないため遮蔽物として扱う。
+                // 通常のウィンドウ選択では無視するPiP等も、要素撮影では背後を撮らないため遮蔽物として扱う。
                 guard selectable else { return nil }
                 guard let pid = item[kCGWindowOwnerPID as String] as? Int32 else { return nil }
                 return PointerWindow(id: id, processID: pid, bounds: cgRect,
@@ -524,6 +524,15 @@ final class OverlayController {
 
 @MainActor
 final class OverlayView: NSView {
+    /// 動画で最も長い切り替えの組の幅。画像でもこの幅を空けておき、Tab・R・A・Sで操作の位置を動かさない。
+    static var toggleSpace: CGFloat {
+        func widest(_ titles: [String], key: String) -> CGFloat {
+            titles.map { ToolbarDrawing.itemWidth(title: $0, key: key, face: .tool) }.max() ?? 0
+        }
+        let resolutions = [true, false].map { OverlayPresentation.resolutionItem(downscale: $0).title }
+        return widest(resolutions, key: "R") + 10 + widest(VideoAudio.allCases.map(\.title), key: "A") + 10
+            + widest([VideoCompression.compact.title, VideoCompression.standard.title], key: "S")
+    }
     weak var controller: OverlayController?
     var screenFrame = CGRect.zero
     override var acceptsFirstResponder: Bool { true }
@@ -597,11 +606,10 @@ final class OverlayView: NSView {
         let audio = OverlayPresentation.audioItem(output: controller.state.output, audio: controller.state.audio)
         let compression = OverlayPresentation.compressionItem(output: controller.state.output, compression: controller.state.compression)
         let resolution = OverlayPresentation.resolutionItem(downscale: controller.state.effectiveDownscale(config: controller.config))
+        func toggleWidth(_ item: HUDItem) -> CGFloat { ToolbarDrawing.itemWidth(title: item.title, key: item.key, recording: false, face: .tool) }
         let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: ToolbarDrawing.keyWidth("Tab"),
-            resolutionWidth: ToolbarDrawing.itemWidth(title: resolution.title, key: resolution.key, recording: false, face: .tool),
-            audioWidth: audio.map { ToolbarDrawing.itemWidth(title: $0.title, key: $0.key, recording: false, face: .tool) },
-            compressionWidth: compression.map { ToolbarDrawing.itemWidth(title: $0.title, key: $0.key, recording: false, face: .tool) },
-            outputCount: 3)
+            resolutionWidth: toggleWidth(resolution), audioWidth: audio.map(toggleWidth), compressionWidth: compression.map(toggleWidth),
+            outputCount: 3, toggleSpace: Self.toggleSpace)
         let stripWidth = layout.width
         let factor = min(1, (visible.width - 24) / stripWidth)
         let hasError = !controller.message.isEmpty
@@ -613,9 +621,10 @@ final class OverlayView: NSView {
                              y: visible.minY + 18 + (hasError ? errorHeight + 10 : 0))
         NSGraphicsContext.saveGraphicsState()
         let transform = NSAffineTransform(); transform.translateX(by: origin.x, yBy: origin.y); transform.scale(by: factor); transform.concat()
-        UIDrawing.fill(CGRect(x: 0, y: 0, width: stripWidth, height: 40), color: UITheme.ink.withAlphaComponent(0.94), radius: 12)
+        UIDrawing.fill(CGRect(x: 0, y: 0, width: stripWidth, height: layout.height), color: UITheme.ink.withAlphaComponent(0.94), radius: 12)
         ToolbarDrawing.tray(layout.outputTray)
         ToolbarDrawing.tray(layout.targetTray)
+        UIDrawing.fill(layout.divider, color: .white.withAlphaComponent(0.22), radius: 0)
         ToolbarDrawing.key("Tab", in: layout.tab)
         if let frame = layout.resolution {
             ToolbarDrawing.item(title: resolution.title, key: resolution.key, in: frame, style: .tool, selected: resolution.selected, recording: false, dimmed: false)
@@ -633,7 +642,7 @@ final class OverlayView: NSView {
         }
         NSGraphicsContext.restoreGraphicsState()
         if !controller.elementHint.isEmpty {
-            label(controller.elementHint, at: CGPoint(x: max(visible.minX + 12, origin.x), y: origin.y + 50))
+            label(controller.elementHint, at: CGPoint(x: max(visible.minX + 12, origin.x), y: origin.y + layout.height * factor + 10))
         }
         if hasError {
             let box = CGRect(x: visible.midX - errorWidth / 2, y: visible.minY + 18, width: errorWidth, height: errorHeight)

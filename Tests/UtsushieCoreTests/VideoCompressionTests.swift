@@ -32,6 +32,6 @@ import Testing
     #expect(audioOnly.compression == nil)
     let audio = try! #require(layout.audio), compression = try! #require(layout.compression)
     #expect(compression.minX - audio.maxX == 10 && compression.width == 60)
-    #expect(layout.targetTray.minX - compression.maxX == 10)
+    #expect(layout.divider.minX - compression.maxX == 10)
     #expect(layout.width - audioOnly.width == 70)
 }
