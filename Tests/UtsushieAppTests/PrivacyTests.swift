@@ -174,6 +174,24 @@ private final class PrivacyTimings: @unchecked Sendable {
     #expect(editor.canvas.document.annotations.count == 4)
 }
 
+@MainActor @Test func privacyResultSurvivesLayoutAfterSearchFinishes() async throws {
+    let line = PrivacyTextLine(id: 1, text: "secret", rect: CGRect(x: 100, y: 100, width: 200, height: 30))
+    let service = PrivacyDetectionService(recognize: { _ in PrivacyRecognition(lines: [line]) }, select: { _, _ in privacyResponse([1]) })
+    var config = PrivacyConfig(); config.ai = true
+    let editor = AnnotationEditorController(image: try privacyImage(), document: AnnotationDocument(), screen: nil, privacyConfig: config, privacyService: service)
+    defer { editor.window.close() }
+    editor.findPrivacy()
+    try await waitForPrivacy(editor)
+    #expect(editor.hintText == "1 か所にモザイクを入れました")
+    // 負荷が高いと最初のレイアウトが検索の完了より後になる。操作ではないので結果を消さない。
+    editor.canvas.needsLayout = true
+    editor.canvas.layoutSubtreeIfNeeded()
+    #expect(editor.hintText == "1 か所にモザイクを入れました")
+    editor.window.setContentSize(CGSize(width: editor.window.frame.width + 40, height: editor.window.frame.height + 40))
+    editor.window.layoutIfNeeded()
+    #expect(editor.hintText == "1 か所にモザイクを入れました")
+}
+
 @MainActor @Test func privacyEscapeAndCloseDiscardLateResults() async throws {
     let line = PrivacyTextLine(id: 1, text: "secret", rect: CGRect(x: 100, y: 100, width: 200, height: 30))
     let service = PrivacyDetectionService(recognize: { _ in PrivacyRecognition(lines: [line]) }, select: { _, _ in

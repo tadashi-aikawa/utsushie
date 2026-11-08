@@ -96,6 +96,8 @@ final class AnnotationEditorController: NSObject, NSWindowDelegate {
             if !isFindingPrivacy { privacyMessage = nil }
             update()
         }
+        // 遅れて来たレイアウトや窓のリサイズでは、AIの結果と失敗の案内を消さない。
+        canvas.onLayout = { [weak self] in self?.update() }
         // トリミングは開き直した画像へ持ち越さない。
         canvas.onToolChange = { tool in if tool != .crop { Self.lastTool = tool } }
         canvas.onFinish = { [weak self] in self?.finish() }
@@ -377,6 +379,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private(set) var history: AnnotationHistory
     var tool: AnnotationTool { didSet { updateCursor(); needsDisplay = true } }
     var onChange: (() -> Void)?
+    /// レイアウトは操作ではないので、onChangeと分けて表示だけを決め直す。
+    var onLayout: (() -> Void)?
     var onUserOperation: (() -> Void)?
     var onFinish: (() -> Void)?
     var onPrivacy: (() -> Void)?
@@ -528,7 +532,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         clipsToBounds = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func layout() { super.layout(); layoutText(); needsDisplay = true; onChange?() }
+    override func layout() { super.layout(); layoutText(); needsDisplay = true; onLayout?() }
     override func updateTrackingAreas() {
         super.updateTrackingAreas(); trackingAreas.forEach(removeTrackingArea)
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeInKeyWindow, .inVisibleRect], owner: self))
