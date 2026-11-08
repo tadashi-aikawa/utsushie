@@ -1,7 +1,20 @@
 import Foundation
 import CoreGraphics
 
-public enum CaptureOutput: String, Sendable { case image, video }
+/// scrollは利用者がスクロールした分を縦長の1枚の画像につなぐ。出来るのは画像だが、撮り方は録画と同じく止めずに続ける。
+public enum CaptureOutput: String, Sendable {
+    case image, video, scroll
+    /// Tabで画像→動画→スクロール→画像と回す。開くたびに画像へ戻るので、Tab1回で動画になる手順は変えない。
+    public var next: CaptureOutput {
+        switch self {
+        case .image: .video
+        case .video: .scroll
+        case .scroll: .image
+        }
+    }
+    /// 止めた画面を使わず、今の画面を流し続けて撮る。範囲は1つのディスプレイに限る。
+    public var streams: Bool { self != .image }
+}
 public enum CaptureTarget: String, Sendable { case area, last, chrome, element }
 public enum CaptureCursor: Equatable, Sendable { case crosshair, arrow, openHand, closedHand, resize(LastFrameEdges) }
 public enum CaptureAction: Equatable, Sendable { case none, cancel, captureLast, captureChrome }
@@ -70,7 +83,7 @@ public struct CaptureState: Sendable {
         switch code {
         case 53: return .cancel
         case 48:
-            output = output == .image ? .video : .image
+            output = output.next
             return .none
         case 8:
             target = .chrome; return .captureChrome
@@ -97,7 +110,7 @@ public struct CaptureState: Sendable {
         }
         selectArea()
         gesture.begin(at: point, last: last, movingLast: movingLast, displayFrames: displayFrames,
-                      constrainToDisplay: output == .video, selectingDisplay: selectingDisplay)
+                      constrainToDisplay: output.streams, selectingDisplay: selectingDisplay)
         return .none
     }
     public mutating func pointerDragged(to point: CGPoint) {

@@ -20,6 +20,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let recordingBorder = RecordingBorder()
     private var recordingState = RecordingState()
     private var activeRecording: RecordingService?
+    /// スクロール撮影。録画と同じ`recordingState`・暗幕・メニューバーのバッジを使う。
+    private var activeScroll: ScrollCaptureService?
+    private var scrolling = false
+    private var scrollProgress = ScrollCaptureService.Progress(height: 0, lost: false, reachedLimit: false)
     private var recordingStartTask: Task<Void, Never>?
     private var recordingToken: UUID?
     private var recordingTimer: Timer?
@@ -64,8 +68,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         libraryHotkey.onPress = { [weak self] in self?.openLibrary() }
         overlay.onCapture = { [weak self] request, remember, output in
             guard let self else { return }
-            if output == .video { self.startRecording(request, remember: remember) }
-            else { self.take(request, remember: remember) }
+            switch output {
+            case .video: self.startRecording(request, remember: remember)
+            case .scroll: self.startScroll(request.rect, remember: remember)
+            case .image: self.take(request, remember: remember)
+            }
         }
         overlay.onMoveLast = { [weak self] rect in self?.persistLast(rect) }
         overlay.onCancel = { [weak self] in
@@ -253,6 +260,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
     }
+    /// 範囲はウィンドウ・要素で選んでも、決めた時点の枠に固定する。ウィンドウが動いても追わない。
+    private func startScroll(_ rect: CGRect, remember: Bool) {
+        guard !busy else { return }
+        guard VideoGeometry.display(containing: rect, displays: ScreenGeometry.displays) != nil else {
+            overlay.showError(CaptureError.unavailable("スクロール撮影は1つのディスプレイの中で選んでください")); return
+        }
+        guard recordingState.begin() else { return }
+        busy = true; stopWhenStarted = false; scrolling = true
+        let token = UUID(); recordingToken = token
+        recordingConfig = config; recordingDate = Date()
+        let downscale = overlay.state.effectiveDownscale(config: config)
+        scrollProgress = .init(height: 0, lost: false, reachedLimit: false)
+        updateRecordingStatus()
+        recordingStartTask = Task {
+            var prepared: ScrollCaptureService?
+            do {
+                borderRect = rect; recordingBorder.show(rect: rect, video: false)
+                let excluded = CaptureWindowExclusion.windows()
+                let session = try await ScrollCaptureService.prepare(rect: rect, downscale: downscale, excluding: excluded,
+                    onProgress: { [weak self] progress in
+                        guard let self, self.recordingToken == token else { return }
+                        self.scrollProgressed(progress)
+                    }, onStop: { [weak self] in
+                        guard let self, self.recordingToken == token else { return }
+                        self.streamStopped()
+                    })
+                prepared = session
+                try Task.checkCancellation()
+                activeScroll = session
+                recordingBorder.reveal()
+                overlay.close()
+                try await session.start()
+                recordingState.didStart()
+                if remember { persistLast(rect) }
+                // 撮っている範囲へカードを写さないよう、止めるまでカードを隠したままにする。
+                updateRecordingStatus()
+                recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.recordingTick() }
+                }
+                recordingStartTask = nil
+                if stopWhenStarted || quitAfterRecording { stopRecording() }
+            } catch {
+                await prepared?.stop()
+                activeScroll = nil; scrolling = false; recordingToken = nil; recordingState.reset(); busy = false
+                recordingBorder.close(); borderRect = nil; thumbnails.setSuspended(false)
+                recordingStartTask = nil; updateRecordingStatus()
+                if !(error is CancellationError) {
+                    if overlay.isVisible { overlay.showError(error) }
+                    else { alert("スクロール撮影を開始できませんでした", error.localizedDescription) }
+                }
+                if quitAfterRecording { NSApp.terminate(nil) }
+            }
+        }
+    }
+    private func scrollProgressed(_ progress: ScrollCaptureService.Progress) {
+        scrollProgress = progress
+        updateRecordingStatus()
+        if progress.reachedLimit { stopRecording() }
+    }
+    private func stopScroll() {
+        guard let session = activeScroll, recordingState.stop() else { return }
+        recordingTimer?.invalidate(); recordingTimer = nil
+        recordingBorder.close(); borderRect = nil; updateRecordingStatus()
+        let screen = NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == session.displayID }
+        let snapshot = recordingConfig
+        Task {
+            await session.stop()
+            if let result = await session.finish() {
+                do {
+                    let image = result.image
+                    let (data, saved) = try await Task.detached(priority: .userInitiated) {
+                        let data = try WebPEncoder.encode(image, quality: snapshot.quality, lossless: snapshot.lossless)
+                        let saved = try ArtifactStore.save(data: data, kind: .webP, directory: snapshot.outputURL(), pattern: snapshot.fileName)
+                        return (data, saved)
+                    }.value
+                    if saved.usedDefaultName { addWarning(CaptureFileNaming.fallbackWarning) }
+                    let artifact = SharedArtifact(url: saved.url, kind: .webP, width: image.width, height: image.height,
+                        byteCount: data.count, pixelScale: session.pixelScale)
+                    let copied = snapshot.clipboard.copiesAutomatically && ClipboardWriter.copy(artifact, data: data, mode: snapshot.clipboard)
+                    thumbnails.setSuspended(false)
+                    thumbnails.add(artifact, image: image, copied: copied, seconds: snapshot.thumbnailSeconds, screen: screen,
+                        notice: result.reachedLimit ? ScrollPresentation.limitNotice : nil)
+                } catch {
+                    thumbnails.setSuspended(false)
+                    alert("撮影できませんでした", error.localizedDescription)
+                }
+            } else { thumbnails.setSuspended(false) }
+            activeScroll = nil; scrolling = false; recordingToken = nil; recordingState.reset(); busy = false; updateRecordingStatus()
+            if quitAfterRecording { NSApp.terminate(nil) }
+        }
+    }
     private func requestMicrophone() async throws {
         let denied = CaptureError.unavailable("マイクの許可が必要です。システム設定の「プライバシーとセキュリティ → マイク」でUTSUSHIEを許可してください")
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -272,6 +370,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         else { stopRecording() }
     }
     private func recordingTick() {
+        if let scroll = activeScroll {
+            guard recordingState.phase == .recording else { return }
+            if !ScreenGeometry.displays.contains(where: { $0.id == scroll.displayID }) { stopRecording() }
+            return
+        }
         guard recordingState.phase == .recording, let session = activeRecording else { return }
         updateRecordingStatus()
         guard ScreenGeometry.displays.contains(where: { $0.id == session.displayID }) else { stopRecording(); return }
@@ -288,8 +391,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = recording ? nil : statusMenu
         statusItem.length = recordingState.phase == .idle ? NSStatusItem.squareLength : NSStatusItem.variableLength
         let elapsed = ProcessInfo.processInfo.systemUptime - recordingHostStart
-        let title = RecordingPresentation.title(phase: recordingState.phase, elapsed: elapsed)
-        recordingBorder.setElapsed(recording ? MediaFormatting.elapsed(elapsed) : nil)
+        var title = RecordingPresentation.title(phase: recordingState.phase, elapsed: elapsed)
+        if scrolling {
+            if recording { title = ScrollPresentation.status(height: scrollProgress.height) }
+            let badge = scrollProgress.lost ? ScrollPresentation.lost : ScrollPresentation.badge(height: scrollProgress.height)
+            recordingBorder.setBadge(recording ? badge : nil, alert: recording && scrollProgress.lost)
+        } else {
+            recordingBorder.setElapsed(recording ? MediaFormatting.elapsed(elapsed) : nil)
+        }
         guard let button = statusItem.button else { return }
         button.imagePosition = .imageOnly
         button.title = ""
@@ -297,7 +406,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold), .foregroundColor: NSColor.white]
             let textSize = (title as NSString).size(withAttributes: attributes)
             button.image = NSImage(size: CGSize(width: ceil(textSize.width) + 12, height: 18), flipped: false) { rect in
-                UIDrawing.fill(rect, color: UITheme.redFace, radius: 5)
+                // スクロール撮影は画像なので、録画の赤ではなく藍の面にする。
+                UIDrawing.fill(rect, color: self.scrolling ? UITheme.indigo : UITheme.redFace, radius: 5)
                 (title as NSString).draw(at: CGPoint(x: 6, y: (18 - textSize.height) / 2), withAttributes: attributes)
                 return true
             }
@@ -315,6 +425,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if RecordingPresentation.stopsOnClick(phase: recordingState.phase) { stopRecording() }
     }
     private func stopRecording() {
+        if activeScroll != nil { stopScroll(); return }
         guard let session = activeRecording, recordingState.stop() else { return }
         let stoppedAt = ProcessInfo.processInfo.systemUptime
         let duration = max(0, stoppedAt - recordingHostStart)

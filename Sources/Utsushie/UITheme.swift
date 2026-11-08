@@ -101,4 +101,20 @@ enum UIDrawing {
         (text as NSString).draw(at: CGPoint(x: rect.minX + 22, y: rect.minY + 3),
             withAttributes: [.font: recordingBadgeFont, .foregroundColor: UITheme.text])
     }
+    /// スクロール撮影のバッジ。画像なので録画の赤い点は付けず、重なりを見失ったときだけ「!」の赤い面を添える。
+    static func scrollBadgeWidth(_ text: String, alert: Bool) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: recordingBadgeFont]).width) + 16 + (alert ? 22 : 0)
+    }
+    static func scrollBadge(_ text: String, alert: Bool, in rect: CGRect) {
+        fill(rect, color: UITheme.ink.withAlphaComponent(0.94), radius: 6)
+        var x = rect.minX + 8
+        if alert {
+            let mark = CGRect(x: x, y: rect.midY - 7, width: 14, height: 14)
+            fill(mark, color: UITheme.redFace, radius: 7)
+            self.text("!", in: mark, size: 10.5, color: .white, weight: .bold, centered: true)
+            x += 22
+        }
+        (text as NSString).draw(at: CGPoint(x: x, y: rect.minY + 3),
+            withAttributes: [.font: recordingBadgeFont, .foregroundColor: UITheme.text])
+    }
 }

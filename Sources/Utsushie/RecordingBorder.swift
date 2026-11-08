@@ -21,12 +21,15 @@ final class RecordingBorder: NSObject {
     private var anchor: (id: UInt32, offset: CGPoint)?
     private var elapsed: String?
     private var revealed = false
+    /// 録画なら白の下地と赤の鉤。スクロール撮影は画像と同じ生成りと藍の鉤にする。
+    private var video = true
+    private var alert = false
     var panels: [RecordingBorderPanel] { entries.map(\.panel) }
 
     /// 除外する窓番号を録画の準備前に確保するため先に出す。`reveal`までは何も描かない。
-    func show(rect: CGRect) {
+    func show(rect: CGRect, video: Bool = true) {
         close()
-        self.rect = rect
+        self.rect = rect; self.video = video
         sync(screens: Self.currentScreens())
         updateAnchor()
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
@@ -51,10 +54,18 @@ final class RecordingBorder: NSObject {
         elapsed = text
         for entry in entries where entry.view.showsBadge { entry.view.setBadge(text) }
     }
+    /// スクロール撮影のバッジ。`alert`は重なりを見失ったときの「!」。
+    func setBadge(_ text: String?, alert: Bool) {
+        guard text != elapsed || alert != self.alert else { return }
+        self.alert = alert
+        for entry in entries { entry.view.alert = alert }
+        elapsed = text
+        for entry in entries where entry.view.showsBadge { entry.view.setBadge(text, force: true) }
+    }
     func close() {
         NotificationCenter.default.removeObserver(self, name: NSApplication.didChangeScreenParametersNotification, object: nil)
         entries.forEach { $0.panel.orderOut(nil) }; entries.removeAll()
-        elapsed = nil; revealed = false; anchor = nil
+        elapsed = nil; revealed = false; anchor = nil; video = true; alert = false
     }
     /// 録画中に画面が増減しても全ディスプレイを暗く保つ。残る画面のパネルは作り直さない。
     /// 理由: 録画のフィルターは開始時の窓番号で暗幕を除外しているため。増えた画面は録画中のディスプレイではない。
@@ -111,6 +122,7 @@ final class RecordingBorder: NSObject {
         view.screenFrame = screen.frame
         view.visibleFrame = local(screen.visibleFrame, in: screen.frame)
         view.selection = rect
+        view.video = video; view.alert = alert
     }
     private func local(_ rect: CGRect, in frame: CGRect) -> CGRect { rect.offsetBy(dx: -frame.minX, dy: -frame.minY) }
     private func updateAnchor() {
@@ -136,12 +148,17 @@ final class RecordingCurtainView: NSView {
     var selection = CGRect.zero
     var revealed = false
     var showsBadge = false
+    var video = true
+    var alert = false
     private(set) var badgeText: String?
+    /// 直前に描いたバッジの矩形。「!」の有無で幅が変わっても、古い矩形を消す。
+    private var drawnBadge: CGRect?
 
     /// 表示先の切り替えも、古いバッジの矩形を測ってから変え、前後の両方を描き直す。
-    func setBadge(_ text: String?, shows: Bool? = nil) {
+    func setBadge(_ text: String?, shows: Bool? = nil, force: Bool = false) {
         let shows = shows ?? showsBadge
-        guard text != badgeText || shows != showsBadge else { return }
+        guard force || text != badgeText || shows != showsBadge else { return }
+        if let drawnBadge { setNeedsDisplay(drawnBadge.insetBy(dx: -2, dy: -2)) }
         if let old = badgeFrame() { setNeedsDisplay(old.insetBy(dx: -2, dy: -2)) }
         badgeText = text; showsBadge = shows
         if let new = badgeFrame() { setNeedsDisplay(new.insetBy(dx: -2, dy: -2)) }
@@ -149,16 +166,20 @@ final class RecordingCurtainView: NSView {
     private var local: CGRect { selection.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY) }
     func badgeFrame() -> CGRect? {
         guard showsBadge, let badgeText else { return nil }
-        let size = CGSize(width: UIDrawing.recordingBadgeWidth(badgeText), height: 22)
-        return RecordingPresentation.badge(selection: local, visible: visibleFrame, size: size)
+        let width = video ? UIDrawing.recordingBadgeWidth(badgeText) : UIDrawing.scrollBadgeWidth(badgeText, alert: alert)
+        return RecordingPresentation.badge(selection: local, visible: visibleFrame, size: CGSize(width: width, height: 22))
     }
     override func draw(_ dirtyRect: NSRect) {
         guard revealed else { return }
         let area = local
         UIDrawing.curtain(bounds, selection: area)
         if area.intersects(bounds.insetBy(dx: -10, dy: -10)) {
-            UIDrawing.selection(area, video: true, inside: RecordingPresentation.cornersInside(selection: area, screen: bounds))
+            UIDrawing.selection(area, video: video, inside: RecordingPresentation.cornersInside(selection: area, screen: bounds))
         }
-        if let frame = badgeFrame(), let badgeText { UIDrawing.recordingBadge(badgeText, in: frame) }
+        drawnBadge = badgeFrame()
+        if let frame = drawnBadge, let badgeText {
+            if video { UIDrawing.recordingBadge(badgeText, in: frame) }
+            else { UIDrawing.scrollBadge(badgeText, alert: alert, in: frame) }
+        }
     }
 }

@@ -161,7 +161,7 @@ final class OverlayController {
     }
     /// 撮影・録画を依頼する。録画では、依頼した範囲を準備の間も見せ続ける。
     private func request(_ request: CaptureRequest, remember: Bool) {
-        if state.output == .video {
+        if state.output.streams {
             requested = request.rect
             // ウィンドウ・画面の強調で依頼したときは、アプリ名ごと残す。それ以外の強調は消す。
             if highlighted?.rect != request.rect { highlighted = nil; highlightedApp = ""; highlightedDisplay = false }
@@ -211,7 +211,7 @@ final class OverlayController {
         clearElements()
         perform(state.key(code, hasLast: last != nil))
         // 録画と要素選択は今の画面を撮る・読む。止めた絵と食い違う枠を出さない。
-        if state.output == .video || state.target == .element, frozen != nil { unfreeze() }
+        if state.output.streams || state.target == .element, frozen != nil { unfreeze() }
         updateWindow()
         redraw()
     }
@@ -600,7 +600,8 @@ final class OverlayView: NSView {
         let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: ToolbarDrawing.keyWidth("Tab"),
             resolutionWidth: ToolbarDrawing.itemWidth(title: resolution.title, key: resolution.key, recording: false, face: .tool),
             audioWidth: audio.map { ToolbarDrawing.itemWidth(title: $0.title, key: $0.key, recording: false, face: .tool) },
-            compressionWidth: compression.map { ToolbarDrawing.itemWidth(title: $0.title, key: $0.key, recording: false, face: .tool) })
+            compressionWidth: compression.map { ToolbarDrawing.itemWidth(title: $0.title, key: $0.key, recording: false, face: .tool) },
+            outputCount: 3)
         let stripWidth = layout.width
         let factor = min(1, (visible.width - 24) / stripWidth)
         let hasError = !controller.message.isEmpty

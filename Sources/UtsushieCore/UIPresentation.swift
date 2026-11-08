@@ -17,6 +17,7 @@ public enum OverlayPresentation {
     public static func items(output: CaptureOutput, target: CaptureTarget, hasLast: Bool) -> [HUDItem] {
         [HUDItem(title: "画像", key: nil, selected: output == .image, recording: false, enabled: true),
          HUDItem(title: "動画", key: nil, selected: output == .video, recording: output == .video, enabled: true),
+         HUDItem(title: "スクロール", key: nil, selected: output == .scroll, recording: false, enabled: true),
          HUDItem(title: "範囲", key: "ドラッグ", selected: target == .area, recording: false, enabled: true),
          HUDItem(title: "前回", key: "⏎", selected: target == .last, recording: false, enabled: hasLast),
          HUDItem(title: "Chrome", key: "C", selected: target == .chrome, recording: false, enabled: true),
@@ -69,8 +70,11 @@ public enum CardPresentation {
     public static func action(at point: CGPoint) -> CardAction? {
         CardAction.allCases.first { button($0).contains(point) }
     }
-    public static func status(copied: Bool, finalizing: Bool) -> String {
-        finalizing ? "書き出し中" : copied ? "コピー済み" : "保存のみ"
+    /// `notice`は保存の状態に添える知らせ。スクロール撮影が上限で止まったときなど。
+    public static func status(copied: Bool, finalizing: Bool, notice: String? = nil) -> String {
+        let status = finalizing ? "書き出し中" : copied ? "コピー済み" : "保存のみ"
+        guard !finalizing, let notice else { return status }
+        return "\(status) ・ \(notice)"
     }
     public static func info(format: String, width: Int, height: Int, bytes: Int) -> String {
         let capacity = bytes <= 0 ? "—" : bytes >= 1_048_576 ? String(format: "%.1f MB", Double(bytes) / 1_048_576)

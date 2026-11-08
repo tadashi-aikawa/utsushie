@@ -83,15 +83,16 @@ public struct OverlayToolbarLayout: Equatable, Sendable {
     public let compression: CGRect?
     public let width: CGFloat
 
+    /// `outputCount`は先頭から出力の台へ入れる項目の数。残りの末尾1つを除いた項目が対象の台へ入る。
     public init(itemWidths: [CGFloat], tabWidth: CGFloat, resolutionWidth: CGFloat? = nil, audioWidth: CGFloat? = nil,
-                compressionWidth: CGFloat? = nil) {
-        precondition(itemWidths.count >= 6)
+                compressionWidth: CGFloat? = nil, outputCount: Int = 2) {
+        precondition(itemWidths.count >= outputCount + 4)
         let lastIndex = itemWidths.count - 1
         var frames: [CGRect] = []
         var x: CGFloat = 8
-        for index in 0..<2 {
+        for index in 0..<outputCount {
             frames.append(CGRect(x: x, y: 6, width: itemWidths[index], height: 28))
-            x += itemWidths[index] + (index == 0 ? 2 : 0)
+            x += itemWidths[index] + (index < outputCount - 1 ? 2 : 0)
         }
         outputTray = CGRect(x: 6, y: 4, width: x + 2 - 6, height: 32)
         tab = CGRect(x: outputTray.maxX + 6, y: 11.5, width: tabWidth, height: 17)
@@ -108,7 +109,7 @@ public struct OverlayToolbarLayout: Equatable, Sendable {
         compression = compressionFrame
         let targetX = (compressionFrame?.maxX ?? audioFrame?.maxX ?? resolutionFrame?.maxX ?? tab.maxX) + 10
         x = targetX + 2
-        for index in 2..<lastIndex {
+        for index in outputCount..<lastIndex {
             frames.append(CGRect(x: x, y: 6, width: itemWidths[index], height: 28))
             x += itemWidths[index] + (index < lastIndex - 1 ? 2 : 0)
         }

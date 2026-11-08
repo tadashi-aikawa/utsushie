@@ -160,6 +160,11 @@ func onlyVideoPreviousAreaStopsAtItsCenterDisplay(_ video: Bool, _ end: CGPoint)
     #expect(state.key(48, hasLast: false) == .none)
     #expect(state.gesture.areaPreview == nil)
     #expect(state.pointerUp(at: CGPoint(x: 150, y: 150)) == .none)
+    // スクロール撮影も1つのディスプレイに留める。
+    #expect(state.output == .scroll)
+    _ = state.pointerDown(at: CGPoint(x: 50, y: 50), last: nil, displayFrames: [display])
+    #expect(state.pointerUp(at: CGPoint(x: 150, y: 150)) == .captureArea(CGRect(x: 50, y: 50, width: 50, height: 50)))
+    _ = state.key(48, hasLast: false)
     _ = state.pointerDown(at: CGPoint(x: 50, y: 50), last: nil, displayFrames: [display])
     #expect(state.pointerUp(at: CGPoint(x: 150, y: 150)) == .captureArea(CGRect(x: 50, y: 50, width: 100, height: 100)))
 }
@@ -421,8 +426,8 @@ func optionDragOnPreviousBorderResizesOnlyGrabbedEdges(_ video: Bool) {
     let last = CGRect(x: 100, y: 100, width: 400, height: 300)
     _ = state.pointerDown(at: CGPoint(x: 500, y: 400), last: last, movingLast: true, displayFrames: displays)
     #expect(state.pointerUp(at: CGPoint(x: 1000, y: 1000)) == .moveLast(CGRect(x: 100, y: 100, width: 500, height: 700)))
-    // 画像は画面を跨いで広げられる。
-    _ = state.key(48, hasLast: true)
+    // 画像は画面を跨いで広げられる。Tabは動画→スクロール→画像と回る。
+    _ = state.key(48, hasLast: true); _ = state.key(48, hasLast: true)
     _ = state.pointerDown(at: CGPoint(x: 500, y: 400), last: last, movingLast: true, displayFrames: displays)
     #expect(state.pointerUp(at: CGPoint(x: 1000, y: 1000)) == .moveLast(CGRect(x: 100, y: 100, width: 900, height: 900)))
 }

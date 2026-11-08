@@ -29,8 +29,9 @@ final class ThumbnailController {
 
     @discardableResult
     func add(_ artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, screen: NSScreen?, finalizing: Bool = false,
-             imageState: ImageEditState? = nil, libraryOnly: Bool = false) -> UUID {
+             imageState: ImageEditState? = nil, libraryOnly: Bool = false, notice: String? = nil) -> UUID {
         let card = ThumbnailCard(artifact: artifact, image: image, copied: copied, seconds: seconds, finalizing: finalizing, imageState: imageState)
+        card.notice = notice
         card.screen = screen ?? NSScreen.main ?? NSScreen.screens.first
         card.editorFocus = editorFocus
         card.makeVideoSession = makeVideoSession
@@ -234,6 +235,11 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     private var onLibraryReturn: (() -> Void)?
     private(set) var libraryEditing = false
     private var view: ThumbnailView!
+    /// 保存の状態に添える知らせ。表示中に変えたら描き直す。
+    var notice: String? {
+        get { view.notice }
+        set { view.notice = newValue; view.needsDisplay = true }
+    }
     private(set) var timer: Timer?
     private var remaining: Double
     private var started: Date?
@@ -600,6 +606,8 @@ final class ThumbnailView: NSView, NSDraggingSource {
     weak var card: ThumbnailCard?
     var image: NSImage?
     var copied = false
+    /// 保存の状態に添える知らせ。
+    var notice: String?
     private var downEvent: NSEvent?
     private var dragged = false
     private var buttons: [CardAction: CardButton] = [:]
@@ -705,7 +713,7 @@ final class ThumbnailView: NSView, NSDraggingSource {
             UIDrawing.fill(badge, color: UITheme.ink.withAlphaComponent(0.85), radius: 4)
             UIDrawing.text(durationText, in: badge.insetBy(dx: 6, dy: 2), size: 10.5, color: .white)
         }
-        let status = CardPresentation.status(copied: copied, finalizing: card.finalizing)
+        let status = CardPresentation.status(copied: copied, finalizing: card.finalizing, notice: notice)
         let statusWidth = ceil((status as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .semibold)]).width) + 14 + (card.finalizing ? 17 : 0)
         let chip = CGRect(x: 12, y: 160, width: statusWidth, height: 20)
         UIDrawing.fill(chip, color: copied && !card.finalizing ? UITheme.indigo : NSColor.white.withAlphaComponent(0.12), radius: 5)
