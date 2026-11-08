@@ -20,14 +20,15 @@ enum ToolbarDrawing {
     static func tray(_ rect: CGRect) {
         UIDrawing.fill(rect, color: NSColor.white.withAlphaComponent(0.055), radius: 9)
     }
+    /// `selectedFill`は選んだときの面の色。省くと録画は赤、ほかは白の面にする。
     static func face(_ rect: CGRect, style: Face, selected: Bool = false, recording: Bool = false,
-                     armed: Bool = false, dimmed: Bool = false, highlighted: Bool = false) {
+                     armed: Bool = false, dimmed: Bool = false, highlighted: Bool = false, selectedFill: NSColor? = nil) {
         let fill: NSColor?
         switch style {
         case .primary: fill = UITheme.indigo
         case .secondary: fill = .white.withAlphaComponent(armed ? 0.2 : 0.1)
         case .zoom: fill = .white.withAlphaComponent(0.08)
-        default: fill = selected ? (recording ? UITheme.redFace : .white.withAlphaComponent(0.17)) : nil
+        default: fill = selected ? (selectedFill ?? (recording ? UITheme.redFace : .white.withAlphaComponent(0.17))) : nil
         }
         if let fill { UIDrawing.fill(rect, color: fill, radius: 7) }
         if highlighted { UIDrawing.fill(rect, color: .white.withAlphaComponent(0.08), radius: 7) }
@@ -49,8 +50,10 @@ enum ToolbarDrawing {
     }
     static func item(title: String, key: String?, symbol: NSImage? = nil, in rect: CGRect,
                      style: Face = .tool, selected: Bool = false, recording: Bool = false,
-                     armed: Bool = false, dimmed: Bool = false, highlighted: Bool = false, centered: Bool = false) {
-        face(rect, style: style, selected: selected, recording: recording, armed: armed, dimmed: dimmed, highlighted: highlighted)
+                     armed: Bool = false, dimmed: Bool = false, highlighted: Bool = false, centered: Bool = false,
+                     selectedFill: NSColor? = nil) {
+        face(rect, style: style, selected: selected, recording: recording, armed: armed, dimmed: dimmed, highlighted: highlighted,
+             selectedFill: selectedFill)
         let color: NSColor = dimmed ? UITheme.key : selected || armed || style == .primary ? .white : UITheme.text
         var x = centered ? rect.midX - contentWidth(title: title, key: key, symbol: symbol != nil, recording: recording) / 2
             : rect.minX + (style == .secondary || style == .primary ? 11 : 6)

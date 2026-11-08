@@ -78,10 +78,10 @@ import Testing
         if let audioWidth {
             let audio = try #require(layout.audio)
             #expect(audio.minX == resolution.maxX + 10 && audio.width == audioWidth)
-            #expect(layout.divider.minX == audio.maxX + 10)
+            #expect(layout.targetTray.minX == audio.maxX + 16)
             #expect(layout.width == plain.width + 54 + audioWidth + 10)
         } else {
-            #expect(layout.audio == nil && layout.divider.minX == resolution.maxX + 10)
+            #expect(layout.audio == nil && layout.targetTray.minX == resolution.maxX + 16)
             #expect(layout.width == plain.width + 54)
         }
         #expect(layout.outputTray == plain.outputTray && layout.tab == plain.tab)

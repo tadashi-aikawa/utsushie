@@ -69,7 +69,7 @@ public enum VideoToolbarPresentation {
     }
 }
 
-/// 範囲選択のツールバー。AppKitの左下原点で、1段目に出力の台とTab、2段目の左に切り替え・右に操作を置く。
+/// 範囲選択のツールバー。AppKitの左下原点で、1段目の左に出力の台とTab・右端にやめる、2段目の左に切り替え・右端に対象の台を置く。
 /// フォントの実測値はApp側から渡す。台の内側2pt、項目間2pt、外側6ptを共通に保つ。
 public struct OverlayToolbarLayout: Equatable, Sendable {
     public static let height: CGFloat = 80
@@ -82,23 +82,25 @@ public struct OverlayToolbarLayout: Equatable, Sendable {
     public let resolution: CGRect?
     public let audio: CGRect?
     public let compression: CGRect?
-    /// 切り替えと操作の境目の縦線。
-    public let divider: CGRect
     public let width: CGFloat
     public var height: CGFloat { Self.height }
 
-    /// `outputCount`は先頭から出力の台へ入れる項目の数。残りの末尾1つを除いた項目が対象の台へ入り、末尾がやめる。
-    /// `toggleSpace`は切り替えに確保する幅。動画で最も長い切り替えの組を渡すと、Tab・A・Sで操作の位置が動かない。
+    /// `outputCount`は先頭から出力の台へ入れる項目の数。出力は最も広い項目の幅にそろえる。
+    /// 残りの末尾1つを除いた項目が対象の台へ入り、末尾がやめる。
+    /// `toggleSpace`は切り替えに確保する幅。最も長い切り替えの組を渡すと、Tab・R・A・Sで対象の台が動かない。
     public init(itemWidths: [CGFloat], tabWidth: CGFloat, resolutionWidth: CGFloat? = nil, audioWidth: CGFloat? = nil,
                 compressionWidth: CGFloat? = nil, outputCount: Int = 2, toggleSpace: CGFloat = 0) {
         precondition(itemWidths.count >= outputCount + 4)
         let lastIndex = itemWidths.count - 1
         let top: CGFloat = 46, bottom: CGFloat = 6
+        // 切り替えとの間、出力とやめるの間。切り替え同士の10ptより広く、余白だけでまとまりを分ける。
+        let groupGap: CGFloat = 16
         var frames: [CGRect] = []
+        let outputWidth = itemWidths[0..<outputCount].max() ?? 0
         var x: CGFloat = 8
         for index in 0..<outputCount {
-            frames.append(CGRect(x: x, y: top, width: itemWidths[index], height: 28))
-            x += itemWidths[index] + (index < outputCount - 1 ? 2 : 0)
+            frames.append(CGRect(x: x, y: top, width: outputWidth, height: 28))
+            x += outputWidth + (index < outputCount - 1 ? 2 : 0)
         }
         outputTray = CGRect(x: 6, y: top - 2, width: x + 2 - 6, height: 32)
         tab = CGRect(x: outputTray.maxX + 6, y: top + 5.5, width: tabWidth, height: 17)
@@ -117,22 +119,20 @@ public struct OverlayToolbarLayout: Equatable, Sendable {
 
         let targetWidths = itemWidths[outputCount..<lastIndex]
         let targetTrayWidth = targetWidths.reduce(0, +) + CGFloat(targetWidths.count - 1) * 2 + 4
-        let operationsWidth = targetTrayWidth + 10 + itemWidths[lastIndex]
-        // 2段目は 8 + 切り替え + 10 + 縦線1 + 10 + 操作 + 6。
-        let bottomWidth = 8 + togglesWidth + 21 + operationsWidth + 6
-        let topWidth = tab.maxX + 6
+        let stopWidth = itemWidths[lastIndex]
+        let topWidth = tab.maxX + groupGap + stopWidth + 6
+        let bottomWidth = 8 + togglesWidth + groupGap + targetTrayWidth + 6
         width = max(topWidth, bottomWidth)
 
-        // 操作は右端へそろえる。切り替えが短いときは、切り替えと縦線のあいだが空く。
-        let targetX = width - 6 - operationsWidth
-        divider = CGRect(x: targetX - 11, y: bottom + 2, width: 1, height: 24)
+        // 対象の台は右端へそろえる。切り替えが短いときは、切り替えと対象の台のあいだが空く。
+        let targetX = width - 6 - targetTrayWidth
         x = targetX + 2
         for index in outputCount..<lastIndex {
             frames.append(CGRect(x: x, y: bottom, width: itemWidths[index], height: 28))
             x += itemWidths[index] + (index < lastIndex - 1 ? 2 : 0)
         }
         targetTray = CGRect(x: targetX, y: bottom - 2, width: targetTrayWidth, height: 32)
-        frames.append(CGRect(x: targetTray.maxX + 10, y: bottom, width: itemWidths[lastIndex], height: 28))
+        frames.append(CGRect(x: width - 6 - stopWidth, y: top, width: stopWidth, height: 28))
         items = frames
     }
 }

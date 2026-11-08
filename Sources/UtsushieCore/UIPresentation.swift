@@ -27,15 +27,15 @@ public enum OverlayPresentation {
     public static func resolutionItem(downscale: Bool) -> HUDItem {
         HUDItem(title: downscale ? "1x" : "2x", key: "R", selected: !downscale, recording: false, enabled: true)
     }
-    /// 画像では出さない。音を入れるときだけ選択の面にする。
-    public static func audioItem(output: CaptureOutput, audio: VideoAudio) -> HUDItem? {
-        guard output == .video else { return nil }
-        return HUDItem(title: audio.title, key: "A", selected: audio != .none, recording: false, enabled: true)
+    /// 動画のときだけ効く。ほかの出力でも薄く出し、ツールバーの形を出力によらず保つ。音を入れるときだけ選択の面にする。
+    public static func audioItem(output: CaptureOutput, audio: VideoAudio) -> HUDItem {
+        let enabled = output == .video
+        return HUDItem(title: audio.title, key: "A", selected: enabled && audio != .none, recording: false, enabled: enabled)
     }
-    /// 画像では出さない。既定の小から外したときだけ選択の面にする。
-    public static func compressionItem(output: CaptureOutput, compression: VideoCompression) -> HUDItem? {
-        guard output == .video else { return nil }
-        return HUDItem(title: compression.title, key: "S", selected: compression != .compact, recording: false, enabled: true)
+    /// 動画のときだけ効く。ほかの出力でも薄く出す。既定の小から外したときだけ選択の面にする。
+    public static func compressionItem(output: CaptureOutput, compression: VideoCompression) -> HUDItem {
+        let enabled = output == .video
+        return HUDItem(title: compression.title, key: "S", selected: enabled && compression != .compact, recording: false, enabled: enabled)
     }
     /// AppKit座標。上端に置けない札は範囲内へ戻し、画面の左右へも収める。
     public static func dimensionLabel(selection: CGRect, screen: CGRect, size: CGSize) -> CGRect {

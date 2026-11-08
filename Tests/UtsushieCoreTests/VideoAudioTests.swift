@@ -35,20 +35,23 @@ import CoreGraphics
     #expect(!VideoAudio.none.capturesSystem && !VideoAudio.none.capturesMicrophone)
 }
 
-@Test func audioItemAppearsOnlyForVideoAndShiftsTargets() {
-    #expect(OverlayPresentation.audioItem(output: .image, audio: .both) == nil)
+@Test func audioItemDimsOutsideVideoAndShiftsTargets() {
+    for output in [CaptureOutput.image, .scroll] {
+        let dimmed = OverlayPresentation.audioItem(output: output, audio: .both)
+        #expect(dimmed.title == "音 両方" && !dimmed.enabled && !dimmed.selected)
+    }
     let off = OverlayPresentation.audioItem(output: .video, audio: .none)
-    #expect(off?.title == "音 なし" && off?.key == "A" && off?.selected == false)
-    #expect(OverlayPresentation.audioItem(output: .video, audio: .system)?.selected == true)
+    #expect(off.title == "音 なし" && off.key == "A" && !off.selected && off.enabled)
+    #expect(OverlayPresentation.audioItem(output: .video, audio: .system).selected)
     let widths: [CGFloat] = [40, 56, 87, 63, 90, 80, 91]
     let plain = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28)
     let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28, audioWidth: 70)
     #expect(plain.audio == nil)
     let audio = try! #require(layout.audio)
     #expect(audio.minX == 8 && audio.width == 70 && audio.midY == layout.items[2].midY)
-    #expect(layout.divider.minX - audio.maxX == 10)
+    #expect(layout.targetTray.minX - audio.maxX == 16)
     #expect(layout.width - plain.width == 70)
-    #expect(layout.width - layout.items[6].maxX == 6)
+    #expect(layout.width - layout.targetTray.maxX == 6)
 }
 
 @Test func audioStartsAtFirstFrameAndDropsEarlierSound() {

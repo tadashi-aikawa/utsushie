@@ -92,10 +92,11 @@ import Testing
 @Test func elementToolbarFitsAddedTargetBeforeEscape() {
     let widths: [CGFloat] = [40, 56, 87, 63, 90, 80, 91]
     let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28)
-    #expect(layout.items.map(\.width) == widths)
+    #expect(Array(layout.items.map(\.width)[2...]) == Array(widths[2...]))
     #expect(layout.targetTray.contains(layout.items[5]))
-    #expect(layout.items[6].minX - layout.targetTray.maxX == 10)
-    #expect(layout.width - layout.items[6].maxX == 6)
+    #expect(layout.width - layout.targetTray.maxX == 6)
+    // やめるは1段目の右端。
+    #expect(layout.items[6].minY > layout.targetTray.maxY && layout.width - layout.items[6].maxX == 6)
 }
 
 @Test func elementSelectionStopsBeforeParentHiddenByAnotherWindow() {

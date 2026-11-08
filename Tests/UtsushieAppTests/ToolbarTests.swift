@@ -70,17 +70,34 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
     }
 }
 
-@MainActor @Test func toolbarVideoIndicatorIsRedAndOnlyDrawnWhenSelected() throws {
-    for output in [CaptureOutput.image, .video] {
-        let item = try #require(OverlayPresentation.items(output: output, target: .area, hasLast: false).first { $0.title == "動画" })
-        let image = try toolbarBitmap(width: 80, height: 28) {
-            ToolbarDrawing.item(title: item.title, key: nil, in: CGRect(x: 0, y: 0, width: 80, height: 28), selected: item.selected, recording: item.recording)
-        }
+@MainActor @Test func rangeToolbarOutputsUseOwnColorOnlyWhenSelectedWithoutRecordingDot() throws {
+    func pixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
         let bytes = try #require(image.dataProvider?.data) as Data
-        let offset = 14 * image.bytesPerRow + 10 * 4
-        let dot = Array(bytes[offset..<(offset + 4)])
-        if output == .video { #expect(dot == [229, 53, 42, 255]) }
-        else { #expect(dot[0] == dot[1]) }
+        let offset = y * image.bytesPerRow + x * 4
+        return bytes[offset..<(offset + 3)].map(Int.init)
+    }
+    // 墨の背景の上で、面の左端の中ほどを見る。
+    let background = try pixel(try toolbarBitmap(width: 100, height: 28) {}, x: 3, y: 14)
+    for (index, output) in OverlayView.outputs.enumerated() {
+        for selectedOutput in OverlayView.outputs {
+            let item = OverlayPresentation.items(output: selectedOutput, target: .area, hasLast: false)[index]
+            let image = try toolbarBitmap(width: 100, height: 28) {
+                OverlayView.drawOutput(item, output: output, in: CGRect(x: 0, y: 0, width: 100, height: 28))
+            }
+            let face = try pixel(image, x: 3, y: 14)
+            if output == selectedOutput {
+                let color = try #require(UITheme.outputFace(output).usingColorSpace(.sRGB))
+                let expected = [color.redComponent, color.greenComponent, color.blueComponent].enumerated().map { channel, value in
+                    Int((value * color.alphaComponent * 255 + CGFloat(background[channel]) * (1 - color.alphaComponent)).rounded())
+                }
+                #expect(zip(face, expected).allSatisfy { abs($0 - $1) <= 2 }, "\(output) \(face) \(expected)")
+            } else {
+                #expect(face == background, "\(output)")
+            }
+            // 動画を選んでも録画の赤い●は描かない。中央寄せで位置が動くので、描画領域全体で探す。
+            let pixels = try (0..<image.height).flatMap { y in try (0..<image.width).map { x in try pixel(image, x: x, y: y) } }
+            #expect(!pixels.contains { zip($0, [229, 53, 42]).allSatisfy { abs($0 - $1) <= 6 } }, "\(output)")
+        }
     }
 }
 
@@ -363,9 +380,9 @@ private func brightToolbarColumns(_ image: CGImage) throws -> [Int] {
             for compression in [VideoCompression.compact, .standard] {
                 let items = [OverlayPresentation.resolutionItem(downscale: downscale),
                              OverlayPresentation.audioItem(output: .video, audio: audio),
-                             OverlayPresentation.compressionItem(output: .video, compression: compression)].compactMap { $0 }
+                             OverlayPresentation.compressionItem(output: .video, compression: compression)]
                 let used = items.map(width).reduce(0, +) + CGFloat(items.count - 1) * 10
-                // 確保した幅に収まれば、Tab・R・A・Sで操作の位置が動かない。
+                // 確保した幅に収まれば、Tab・R・A・Sで対象の台が動かない。
                 #expect(used <= OverlayView.toggleSpace)
             }
         }

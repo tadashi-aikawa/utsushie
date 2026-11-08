@@ -47,56 +47,57 @@ import Testing
     let samples: [[CGFloat]] = [[40, 56, 87, 63, 90, 91], [100, 100, 100, 100, 100, 100], [20, 20, 20, 20, 20, 20]]
     for widths in samples {
         let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28, resolutionWidth: 50)
+        let output = max(widths[0], widths[1])
         #expect(layout.height == 80)
-        #expect(layout.items.map(\.width) == widths)
-        // 1段目: 出力の台とTab。
+        #expect(layout.items.map(\.width) == [output, output] + widths[2...])
+        // 1段目: 左に出力の台とTab、右端にやめる。
         #expect(layout.outputTray.minX == 6 && layout.outputTray.maxY == 76)
         #expect(layout.items[0].minX - layout.outputTray.minX == 2)
+        #expect(layout.items[1].minX - layout.items[0].maxX == 2)
         #expect(layout.outputTray.maxX - layout.items[1].maxX == 2)
         #expect(layout.tab.minX - layout.outputTray.maxX == 6 && layout.tab.midY == layout.items[0].midY)
-        // 2段目: 左に切り替え、縦線、右に対象の台とやめる。
+        #expect(layout.items[5].midY == layout.items[0].midY && layout.width - layout.items[5].maxX == 6)
+        #expect(layout.items[5].minX - layout.tab.maxX >= 16)
+        // 2段目: 左に切り替え、右端に対象の台。
         #expect(layout.targetTray.minY == 4 && layout.targetTray.maxY < layout.outputTray.minY)
         #expect(layout.resolution?.minX == 8 && layout.resolution?.midY == layout.items[2].midY)
-        #expect(layout.divider.minX - layout.resolution!.maxX == 10)
-        #expect(layout.targetTray.minX - layout.divider.maxX == 10)
+        #expect(layout.targetTray.minX - layout.resolution!.maxX >= 16)
         #expect(layout.items[2].minX - layout.targetTray.minX == 2)
         #expect(layout.targetTray.maxX - layout.items[4].maxX == 2)
-        #expect(layout.items[5].minX - layout.targetTray.maxX == 10)
-        #expect(layout.width - layout.items[5].maxX == 6)
-        for index in [0, 2, 3] { #expect(layout.items[index + 1].minX - layout.items[index].maxX == 2) }
+        #expect(layout.width - layout.targetTray.maxX == 6)
+        for index in [2, 3] { #expect(layout.items[index + 1].minX - layout.items[index].maxX == 2) }
     }
     let compact = OverlayToolbarLayout(itemWidths: Array(repeating: 20, count: 6), tabWidth: 28)
     #expect(compact.width < 620)
 }
 
-@Test func overlayToolbarWidthTracksSecondRowWithoutExtraTrailingSpace() {
-    let baseline = OverlayToolbarLayout(itemWidths: Array(repeating: 50, count: 6), tabWidth: 28)
+@Test func overlayToolbarWidthFitsTheWiderRowWithoutExtraTrailingSpace() {
     for index in 0..<6 {
-        var widths: [CGFloat] = Array(repeating: 50, count: 6); widths[index] += 37
-        let expanded = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28)
-        // 出力は2段目より短い1段目にあるので、幅を変えない。
-        #expect(expanded.width - baseline.width == (index < 2 ? 0 : 37))
-        #expect(expanded.width - expanded.items[5].maxX == 6)
+        var widths: [CGFloat] = Array(repeating: 50, count: 6); widths[index] += 200
+        let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28)
+        // どちらの段も右端の余白を6ptに保ち、狭い段だけが中で空く。
+        #expect(layout.width - layout.items[5].maxX == 6 && layout.width - layout.targetTray.maxX == 6)
+        #expect(layout.items[5].minX - layout.tab.maxX >= 16 && layout.targetTray.minX >= 8 + 16)
+        #expect(min(layout.items[5].minX - layout.tab.maxX, layout.targetTray.minX - 8) == 16)
+        // 出力は最も広い幅にそろう。
+        #expect(layout.items[0].width == layout.items[1].width)
     }
 }
 
-@Test func overlayToolbarKeepsOperationsInPlaceWithinToggleSpace() {
+@Test func overlayToolbarKeepsTargetsInPlaceWithinToggleSpace() {
     let widths: [CGFloat] = [40, 56, 87, 63, 90, 80, 91]
-    // 確保する幅は 40 + 10 + 80 + 10 + 70。
-    let image = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28, resolutionWidth: 40, outputCount: 3, toggleSpace: 210)
-    let video = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28, resolutionWidth: 40, audioWidth: 80, compressionWidth: 70,
-                                     outputCount: 3, toggleSpace: 210)
-    #expect(image.width == video.width)
-    #expect(image.targetTray == video.targetTray && image.divider == video.divider)
-    #expect(Array(image.items[3...]) == Array(video.items[3...]))
-    #expect(image.resolution == video.resolution)
-    // 画像では切り替えが短く、縦線との間が空く。
-    #expect(image.divider.minX - image.resolution!.maxX == 180)
-    #expect(video.divider.minX - video.compression!.maxX == 10)
+    // 確保する幅は 44 + 10 + 100 + 10 + 74。
+    let compact = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28, resolutionWidth: 40, audioWidth: 80, compressionWidth: 70,
+                                       outputCount: 3, toggleSpace: 238)
+    let longest = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28, resolutionWidth: 44, audioWidth: 100, compressionWidth: 74,
+                                       outputCount: 3, toggleSpace: 238)
+    #expect(compact.width == longest.width && compact.items == longest.items && compact.targetTray == longest.targetTray)
+    #expect(compact.targetTray.minX - compact.compression!.maxX == 44)
+    #expect(longest.targetTray.minX - longest.compression!.maxX == 16)
     // 確保より長い切り替えは幅を広げる。
-    let wide = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28, resolutionWidth: 40, audioWidth: 120, compressionWidth: 70,
-                                    outputCount: 3, toggleSpace: 210)
-    #expect(wide.width - video.width == 40)
+    let wide = OverlayToolbarLayout(itemWidths: widths, tabWidth: 28, resolutionWidth: 44, audioWidth: 140, compressionWidth: 74,
+                                    outputCount: 3, toggleSpace: 238)
+    #expect(wide.width - longest.width == 40)
 }
 
 @Test func videoToolbarShowsCompletionAndDurationWithoutDiscardHint() {

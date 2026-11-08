@@ -21,6 +21,15 @@ enum UITheme {
         }
     }
     static func inkFace(_ choice: InkColor) -> NSColor { choice == .red ? redFace : ink(choice) }
+    /// 範囲選択で選んだ出力の面。出力ごとに色を分け、墨の上で沈ませる。
+    static func outputFace(_ output: CaptureOutput) -> NSColor {
+        let base: NSColor = switch output {
+        case .image: indigo
+        case .video: red
+        case .scroll: ink(.green)
+        }
+        return base.withAlphaComponent(0.6)
+    }
     static func inkEdge(_ choice: InkColor) -> NSColor { choice == .white ? ink : .white }
     static func inkText(_ choice: InkColor) -> NSColor { choice == .white ? ink : .white }
     static func highlighter(_ choice: HighlighterColor) -> NSColor {

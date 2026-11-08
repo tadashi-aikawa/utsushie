@@ -524,7 +524,18 @@ final class OverlayController {
 
 @MainActor
 final class OverlayView: NSView {
-    /// 動画で最も長い切り替えの組の幅。画像でもこの幅を空けておき、Tab・R・A・Sで操作の位置を動かさない。
+    /// `OverlayPresentation.items`の先頭に並ぶ出力の順。
+    static let outputs: [CaptureOutput] = [.image, .video, .scroll]
+    static func symbol(_ output: CaptureOutput) -> NSImage? {
+        let name = switch output { case .image: "photo"; case .video: "video"; case .scroll: "scroll" }
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil)
+    }
+    /// 出力の項目。●の代わりにアイコンを置き、選んだときは出力ごとの色の面にする。
+    static func drawOutput(_ item: HUDItem, output: CaptureOutput, in rect: CGRect) {
+        ToolbarDrawing.item(title: item.title, key: item.key, symbol: symbol(output), in: rect, style: .tool,
+                            selected: item.selected, centered: true, selectedFill: UITheme.outputFace(output))
+    }
+    /// 最も長い切り替えの組の幅。この幅を空けておき、Tab・R・A・Sで対象の台を動かさない。
     static var toggleSpace: CGFloat {
         func widest(_ titles: [String], key: String) -> CGFloat {
             titles.map { ToolbarDrawing.itemWidth(title: $0, key: key, face: .tool) }.max() ?? 0
@@ -600,16 +611,19 @@ final class OverlayView: NSView {
     private func drawHUD(_ controller: OverlayController, visible: CGRect) {
         let items = OverlayPresentation.items(output: controller.state.output, target: controller.state.target, hasLast: controller.last != nil)
         let font = NSFont.systemFont(ofSize: 12.5, weight: .medium)
-        let widths = items.map { item in
-            ToolbarDrawing.itemWidth(title: item.title, key: item.key, recording: item.recording, face: item.title == "やめる" ? .secondary : .tool)
+        let outputCount = Self.outputs.count
+        let widths = items.enumerated().map { index, item in
+            // 出力は●の代わりにアイコンを置く。
+            index < outputCount ? ToolbarDrawing.itemWidth(title: item.title, key: item.key, symbol: true)
+                : ToolbarDrawing.itemWidth(title: item.title, key: item.key, face: item.title == "やめる" ? .secondary : .tool)
         }
         let audio = OverlayPresentation.audioItem(output: controller.state.output, audio: controller.state.audio)
         let compression = OverlayPresentation.compressionItem(output: controller.state.output, compression: controller.state.compression)
         let resolution = OverlayPresentation.resolutionItem(downscale: controller.state.effectiveDownscale(config: controller.config))
         func toggleWidth(_ item: HUDItem) -> CGFloat { ToolbarDrawing.itemWidth(title: item.title, key: item.key, recording: false, face: .tool) }
         let layout = OverlayToolbarLayout(itemWidths: widths, tabWidth: ToolbarDrawing.keyWidth("Tab"),
-            resolutionWidth: toggleWidth(resolution), audioWidth: audio.map(toggleWidth), compressionWidth: compression.map(toggleWidth),
-            outputCount: 3, toggleSpace: Self.toggleSpace)
+            resolutionWidth: toggleWidth(resolution), audioWidth: toggleWidth(audio), compressionWidth: toggleWidth(compression),
+            outputCount: outputCount, toggleSpace: Self.toggleSpace)
         let stripWidth = layout.width
         let factor = min(1, (visible.width - 24) / stripWidth)
         let hasError = !controller.message.isEmpty
@@ -624,21 +638,18 @@ final class OverlayView: NSView {
         UIDrawing.fill(CGRect(x: 0, y: 0, width: stripWidth, height: layout.height), color: UITheme.ink.withAlphaComponent(0.94), radius: 12)
         ToolbarDrawing.tray(layout.outputTray)
         ToolbarDrawing.tray(layout.targetTray)
-        UIDrawing.fill(layout.divider, color: .white.withAlphaComponent(0.22), radius: 0)
         ToolbarDrawing.key("Tab", in: layout.tab)
-        if let frame = layout.resolution {
-            ToolbarDrawing.item(title: resolution.title, key: resolution.key, in: frame, style: .tool, selected: resolution.selected, recording: false, dimmed: false)
-        }
-        if let audio, let frame = layout.audio {
-            ToolbarDrawing.item(title: audio.title, key: audio.key, in: frame, style: .tool, selected: audio.selected, recording: false, dimmed: false)
-        }
-        if let compression, let frame = layout.compression {
-            ToolbarDrawing.item(title: compression.title, key: compression.key, in: frame, style: .tool,
-                                selected: compression.selected, recording: false, dimmed: false)
+        for (item, frame) in [(resolution, layout.resolution), (audio, layout.audio), (compression, layout.compression)] {
+            guard let frame else { continue }
+            ToolbarDrawing.item(title: item.title, key: item.key, in: frame, style: .tool, selected: item.selected, dimmed: !item.enabled)
         }
         for (index, item) in items.enumerated() {
-            ToolbarDrawing.item(title: item.title, key: item.key, in: layout.items[index],
-                style: item.title == "やめる" ? .secondary : .tool, selected: item.selected, recording: item.recording, dimmed: !item.enabled)
+            if index < outputCount {
+                Self.drawOutput(item, output: Self.outputs[index], in: layout.items[index])
+            } else {
+                ToolbarDrawing.item(title: item.title, key: item.key, in: layout.items[index],
+                    style: item.title == "やめる" ? .secondary : .tool, selected: item.selected, dimmed: !item.enabled)
+            }
         }
         NSGraphicsContext.restoreGraphicsState()
         if !controller.elementHint.isEmpty {
