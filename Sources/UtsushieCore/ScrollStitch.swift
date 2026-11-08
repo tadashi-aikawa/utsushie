@@ -99,6 +99,9 @@ public struct ScrollStitcher: Sendable {
         case let .shift(shift):
             lost = false
             guard shift != 0 else { self.reference = frame; return ScrollStep() }
+            if header == nil {
+                bottom += ScrollMatcher.edgeRows(reference, frame, top: top, bottom: bottom, shift: shift)
+            }
             return accept(frame, shift: shift, top: top, bottom: bottom)
         }
     }
@@ -171,6 +174,9 @@ public enum ScrollMatch: Equatable, Sendable {
 public enum ScrollMatcher {
     /// 1値あたりの平均の差がこれ以下なら同じ行とみなす。
     static let sameRow = 1
+    /// 末尾の固定部分の上で、中身と一緒に動かない縁の行を探す行数。
+    /// 理由: 縮小で混ざる行やフッターの影は数行に収まり、広く探すほど照合する範囲を削るため。
+    static let edgeWindow = 24
     /// 重なりの差を、両方のコマの中身の量で割った割合。これを超えたら重なりは見つからないとする。
     /// 理由: 全部の値の平均では、白地の多い画面で違う文字同士の差が白に薄まり、重なりが無くても一致に見えるため。
     ///     割合なら、一致は0、無関係な中身同士はおよそ1になる。1xへの縮小で残る半画素のずれの分だけゆとりを持たせる。
@@ -212,6 +218,40 @@ public enum ScrollMatcher {
         var bottom = 0
         while bottom < min(limit, height - top), same(height - 1 - bottom) { bottom += 1 }
         return (top, bottom)
+    }
+
+    /// 末尾の固定部分の上で、中身と一緒に動かない行の数。固定部分に足すと、継ぎ目ごとに足す行へ入らない。
+    ///
+    /// - 対象: フッターの縁や影、1xへの縮小でフッターと下を流れる中身が混ざった行。コマごとに変わるので`fixedRows`では固定にならない
+    /// - 判定: 中身の側のコマで、その行の中身が動いた先の行と比べる。`edgeWindow`行のうち、食い違う最も上の行までを数える
+    ///     - 中身の側: 下へ進んだら基準のコマ、上へ戻したら今のコマ。動いた先の行は混ざる前の中身なので、混ざった行だけが食い違う
+    ///     - 間: 縮小で混ざった行は、間に混ざらない行を挟んで離れて出ることがある。一致する行で止めない
+    ///     - 基準: 動いた先が範囲に収まる行の食い違いの、小さいほうから1/4の値を超えた分で測る
+    ///         - 理由: 縮小で全体の明るさが僅かにずれると、どの行も同じだけ食い違い、縁と取り違えるため
+    ///         - 1/4: 初回に大きく動くと重なりが少なく、縁の行が半分を超えることがある。3/4未満なら基準は中身の行で決まる
+    ///         - 縮小のにじみ: 文字の行ほど食い違うので、基準を超えた中身の行も縁に入りうる。取りすぎても照合する範囲が狭まるだけ
+    /// - 上限: `edgeWindow`行と、動く範囲の1/4の小さいほう
+    ///     - 理由: 中身の行を固定部分に取り違えても、中身はその後のコマで上側を通って足されるので崩れない。ただ照合する範囲は狭まる
+    public static func edgeRows(_ reference: ScrollLuma, _ current: ScrollLuma, top: Int, bottom: Int, shift: Int) -> Int {
+        let height = reference.height
+        let (content, moved) = shift > 0 ? (reference, current) : (current, reference)
+        let distance = abs(shift)
+        let region = height - top - bottom
+        let limit = min(edgeWindow, region / 4, region - minimumRegion)
+        guard limit > 0 else { return 0 }
+        func difference(_ row: Int) -> Int { rowDifference(content, row, moved, row - distance) }
+        // 動いた先が範囲に収まる行。探す行も含める。
+        // 理由: 大きく動くと探す行より上に行が残らず、基準を測れないため。
+        let lower = top + distance, upper = height - bottom
+        guard lower < upper else { return 0 }
+        let base = (lower..<upper).map(difference).sorted()[(upper - lower) / 4]
+        var edge = 0
+        for count in 0..<limit {
+            let row = height - bottom - 1 - count
+            guard row - distance >= top else { break }
+            if difference(row) > base + sameRow * content.width { edge = count + 1 }
+        }
+        return edge
     }
 
     /// 基準のコマから今のコマへ、中身が何行上へ動いたか。`columns`の列だけで比べる。

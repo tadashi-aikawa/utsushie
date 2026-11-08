@@ -56,6 +56,94 @@ private struct Rig {
     #expect(rig.output == header + Array(source[0..<(offset + 80)]) + footer)
 }
 
+/// フッターの上端の行は、下を流れる中身と混ざってコマごとに変わる。1xへの縮小やフッターの影で起きる。
+private func blended(_ row: [UInt8]) -> [UInt8] { row.map { UInt8((Int($0) + 220) / 2) } }
+
+@Test(arguments: [[0, 20, 20, 20, 20], [0, 3, 20, 7, 33], [0, 60, 20], [0, 66, 10]])
+func footerEdgeMixedWithContentIsNotRepeatedAtSeams(_ steps: [Int]) {
+    let source = page(width: 24, height: 600)
+    let footer = page(width: 24, height: 9, seed: 13)
+    func frame(_ offset: Int) -> [[UInt8]] {
+        Array(source[offset..<(offset + 78)]) + source[(offset + 78)..<(offset + 80)].map(blended) + footer
+    }
+    var rig = Rig(width: 24)
+    var offset = 0
+    for step in steps { offset += step; rig.add(frame(offset)) }
+    // 混ざった行は最後のコマの分だけ、フッターと一緒に1回入る。
+    #expect(rig.output == Array(source[0..<(offset + 78)]) + source[(offset + 78)..<(offset + 80)].map(blended) + footer)
+}
+
+@Test func separatedFaintEdgeRowsAboveFooterAreAllKeptOnce() {
+    let source = page(width: 24, height: 600)
+    let footer = page(width: 24, height: 9, seed: 13)
+    // 実測の形: 濃い行、混ざらない2行、薄くだけ明るい行の順にフッターへ続く。
+    func frame(_ offset: Int) -> [[UInt8]] {
+        var rows = Array(source[offset..<(offset + 80)])
+        rows[76] = blended(rows[76])
+        rows[79] = rows[79].map { UInt8(min(255, Int($0) + 3)) }
+        return rows + footer
+    }
+    var rig = Rig(width: 24)
+    var offset = 0
+    for step in [0, 20, 20, 20, 20] { offset += step; rig.add(frame(offset)) }
+    #expect(rig.output == Array(source[0..<(offset + 76)]) + frame(offset)[76...])
+}
+
+@Test(arguments: [20, 65, -65])
+func uniformBrightnessShiftFromDownscalingIsNotAnEdge(_ shift: Int) {
+    let source = page(width: 24, height: 300)
+    let brighter = source.map { row in row.map { UInt8(min(255, Int($0) + 3)) } }
+    let reference = ScrollLuma(width: 24, height: 100, values: Array(source[100..<200]).flatMap { $0 })
+    let current = ScrollLuma(width: 24, height: 100, values: Array(brighter[(100 + shift)..<(200 + shift)]).flatMap { $0 })
+    #expect(ScrollMatcher.edgeRows(reference, current, top: 0, bottom: 0, shift: shift) == 0)
+}
+
+@Test func faintEdgeHalfOfOverlapIsFound() {
+    let source = page(width: 24, height: 300)
+    let footer = page(width: 24, height: 9, seed: 13)
+    func frame(_ offset: Int) -> [[UInt8]] {
+        var rows = Array(source[offset..<(offset + 32)])
+        for row in 24..<32 { rows[row] = rows[row].map { UInt8(min(255, Int($0) + 3)) } }
+        return rows + footer
+    }
+    var rig = Rig(width: 24)
+    var offset = 0
+    for step in [0, 16, 10] { offset += step; rig.add(frame(offset)) }
+    #expect(rig.output == Array(source[0..<(offset + 24)]) + frame(offset)[24...])
+}
+
+@Test func faintEdgeIsFoundEvenWhenItOutnumbersOverlapOnLargeFirstMovement() {
+    let source = page(width: 24, height: 600)
+    let footer = page(width: 24, height: 9, seed: 13)
+    func frame(_ offset: Int) -> [[UInt8]] {
+        var rows = Array(source[offset..<(offset + 80)])
+        for row in 72..<80 { rows[row] = rows[row].map { UInt8(min(255, Int($0) + 3)) } }
+        return rows + footer
+    }
+    var rig = Rig(width: 24)
+    var offset = 0
+    for step in [0, 66, 10] { offset += step; rig.add(frame(offset)) }
+    #expect(rig.output == Array(source[0..<(offset + 72)]) + frame(offset)[72...])
+}
+
+@Test(arguments: [80, -80, 100, -100])
+func edgeSearchWithLargeMovementDoesNotCrash(_ shift: Int) {
+    let source = page(width: 24, height: 300)
+    let frame = ScrollLuma(width: 24, height: 100, values: Array(source[100..<200]).flatMap { $0 })
+    #expect(ScrollMatcher.edgeRows(frame, frame, top: 0, bottom: 0, shift: shift) >= 0)
+}
+
+@Test func footerEdgeMixedWithContentIsFoundOnFirstMovementUpward() {
+    let source = page(width: 24, height: 600)
+    let footer = page(width: 24, height: 9, seed: 13)
+    func frame(_ offset: Int) -> [[UInt8]] {
+        Array(source[offset..<(offset + 78)]) + source[(offset + 78)..<(offset + 80)].map(blended) + footer
+    }
+    var rig = Rig(width: 24)
+    for offset in [100, 70, 130] { rig.add(frame(offset)) }
+    #expect(rig.output == Array(source[100..<208]) + source[208..<210].map(blended) + footer)
+}
+
 @Test func scrollingBackUpAddsNothingAndContinuesBelow() {
     let source = page(width: 24, height: 600)
     var rig = Rig(width: 24)
