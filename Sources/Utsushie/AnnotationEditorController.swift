@@ -983,6 +983,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         input.delegate = self
         input.onCommit = { [weak self] in self?.commitText() }
         input.onEscape = { [weak self] in self?.escape() }
+        input.onMarkedTextChange = { [weak self] in self?.layoutText(); self?.changed() }
         textInput = input; addSubview(input); layoutText()
         window?.makeFirstResponder(input); input.setSelectedRange(NSRange(location: input.string.utf16.count, length: 0))
         changed()
@@ -1082,7 +1083,13 @@ final class AnnotationTextView: NSTextView {
     weak var navigationCanvas: AnnotationCanvas?
     var onCommit: (() -> Void)?
     var onEscape: (() -> Void)?
+    /// 変換中の文字の変化はtextDidChangeへ届かないので、入力欄の幅を測り直すコールバックを別に持つ。
+    var onMarkedTextChange: (() -> Void)?
     private var markedAtKeyDown = false
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        onMarkedTextChange?()
+    }
     // 確定済みの文字編集を、次に開いた文字の⌘Zへ持ち越さない。
     private let textUndoManager = UndoManager()
     override var undoManager: UndoManager? { textUndoManager }

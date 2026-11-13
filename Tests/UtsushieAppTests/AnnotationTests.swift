@@ -890,6 +890,35 @@ func annotationSizeToolbarSwitchClearsSelectionAndImmediatelyShowsRememberedSize
     #expect(editor.canvas.document.annotations.first?.text.contains("変換") == true)
 }
 
+@MainActor @Test func annotationTextInputWidensForMarkedTextWithoutWrapping() throws {
+    let canvas = AnnotationCanvas(image: try annotationFixture(width: 960, height: 600), document: AnnotationDocument(), tool: .text)
+    canvas.frame = CGRect(x: 0, y: 0, width: 960, height: 600)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 20)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 20, y: 20)))
+    let input = try #require(canvas.subviews.compactMap { $0 as? AnnotationTextView }.first)
+    let none = NSRange(location: NSNotFound, length: 0)
+    input.insertText("ほげ", replacementRange: none)
+    let committedWidth = input.frame.width
+    func lineCount() throws -> Int {
+        let layout = try #require(input.layoutManager), container = try #require(input.textContainer)
+        layout.ensureLayout(for: container)
+        var lines = 0
+        layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { _, _, _, _, _ in lines += 1 }
+        return lines
+    }
+    #expect(try lineCount() == 1)
+    // IMEの変換中の文字は、確定前でも入力欄の幅へ含めて1行に収める。
+    input.setMarkedText("へんかんちゅうのながいもじ", selectedRange: NSRange(location: 13, length: 0), replacementRange: none)
+    #expect(input.hasMarkedText())
+    #expect(input.frame.width > committedWidth)
+    #expect(try lineCount() == 1)
+    // 変換を取り消したら、確定済みの文字の幅へ戻す。
+    input.setMarkedText("", selectedRange: NSRange(location: 0, length: 0), replacementRange: none)
+    input.unmarkText()
+    #expect(abs(input.frame.width - committedWidth) < 0.5)
+    #expect(try lineCount() == 1)
+}
+
 @MainActor @Test func annotationFinishUsesUnmodifiedEnterAndEscapeAndIgnoresRepeat() throws {
     let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .rectangle)
     var finishes = 0
