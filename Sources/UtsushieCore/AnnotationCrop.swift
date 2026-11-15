@@ -21,7 +21,7 @@ extension AnnotationDocument {
         let delta = CGPoint(x: -local.minX, y: -local.minY)
         var result = self
         result.crop = AnnotationCrop(rect: local.offsetBy(dx: crop?.rect.minX ?? 0, dy: crop?.rect.minY ?? 0))
-        // 番号は残った注釈で振り直る。札の幅を測る前に一覧を入れ替える。
+        // 番号は残った注釈で振り直る。ラベルの幅を測る前に一覧を入れ替える。
         result.annotations = annotations.filter { kept.contains($0.id) }.map { annotation in
             var moved = annotation.translated(by: delta)
             moved.leaderTarget = annotation.leaderTarget.map { CGPoint(x: $0.x + delta.x, y: $0.y + delta.y) }

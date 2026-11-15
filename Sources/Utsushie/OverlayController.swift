@@ -596,7 +596,7 @@ final class OverlayView: NSView {
             label(title, in: placement)
         }
         guard screenFrame.contains(NSEvent.mouseLocation) else { return }
-        // Dockの上に置き、失敗の札を帯の下へ確保する。
+        // Dockの上に置き、失敗のバッジを帯の下へ確保する。
         let visible = local(NSScreen.screens.first { $0.frame == screenFrame }?.visibleFrame ?? screenFrame)
         drawHUD(controller, visible: visible)
     }

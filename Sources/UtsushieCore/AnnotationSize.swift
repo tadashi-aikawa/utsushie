@@ -39,7 +39,7 @@ extension AnnotationDocument {
         return (first?.size ?? defaultSize).stepped(direction)
     }
 
-    /// 文字の実測はApp側から渡す。Coreだけでは既存の札を倍率比で拡縮する。
+    /// 文字の実測はApp側から渡す。Coreだけでは既存のラベルを倍率比で拡縮する。
     public func settingSize(_ ids: Set<UUID>, size: AnnotationSize, imageSize: CGSize,
                             measureText: ((String, AnnotationStyle) -> CGSize)? = nil) -> AnnotationDocument {
         var result = self

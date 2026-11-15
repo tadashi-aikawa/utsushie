@@ -70,7 +70,7 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     /// 注釈を作るツール。選択とトリミングは作らない。
     public var createsAnnotation: Bool { self != .selection && self != .crop }
     /// 置かれる注釈の見本をカーソルにする。始点を合わせて引く枠・矢印などは十字のまま。
-    /// 文字は引き出し線の起点を押した点に合わせるため十字。札の見本はドラッグで札の位置とずれる。
+    /// 文字は引き出し線の起点を押した点に合わせるため十字。ラベルの見本はドラッグでラベルの位置とずれる。
     public var usesSampleCursor: Bool { [.freehand, .highlighter, .number].contains(self) }
 }
 
@@ -209,7 +209,7 @@ public struct Annotation: Equatable, Sendable, Identifiable {
                       width: (xs.max() ?? start.x) - (xs.min() ?? start.x),
                       height: (ys.max() ?? start.y) - (ys.min() ?? start.y))
     }
-    /// 札だけの移動では指す点を残す。線や複数選択で動かすときだけ指す点も動かす。
+    /// ラベルだけの移動では指す点を残す。線や複数選択で動かすときだけ指す点も動かす。
     public func translated(by delta: CGPoint, movingLeader: Bool = false) -> Annotation {
         var result = self
         result.start.x += delta.x; result.start.y += delta.y
@@ -297,7 +297,7 @@ public struct AnnotationDocument: Equatable, Sendable {
         let rect = bounds(of: annotation, style: style)
         return AnnotationGeometry.leaderSegment(for: annotation, radius: annotation.tool == .number ? rect.height / 2 : style.radius, bounds: rect)
     }
-    /// 札の上は札として扱う。線の途中だけを、指す点ごと動かす場所にする。
+    /// ラベルの上はラベルとして扱う。線の途中だけを、指す点ごと動かす場所にする。
     public func hitsLeaderLine(_ annotation: Annotation, at point: CGPoint, style: AnnotationStyle, tolerance: Double) -> Bool {
         let style = style.forAnnotation(annotation)
         guard let segment = leaderSegment(for: annotation, style: style),
@@ -305,7 +305,7 @@ public struct AnnotationDocument: Equatable, Sendable {
         return AnnotationGeometry.distance(point, toSegmentFrom: segment.target, to: segment.labelEdge) <= max(tolerance, style.lineWidth / 2 + style.edge)
     }
     public func hit(at point: CGPoint, style: AnnotationStyle, tolerance: Double, includeAreaInterior: Bool = false) -> UUID? {
-        // 札を線より先に判定する。別の札の上を通る線が入力を奪わない。
+        // ラベルを線より先に判定する。別のラベルの上を通る線が入力を奪わない。
         if let label = ordered.reversed().first(where: { annotation in
             let style = style.forAnnotation(annotation)
             return [.text, .number].contains(annotation.tool) && bounds(of: annotation, style: style).insetBy(dx: -style.edge, dy: -style.edge).contains(point)
@@ -352,7 +352,7 @@ public struct AnnotationDocument: Equatable, Sendable {
             else if [.rectangle, .mosaic].contains(annotation.tool) { band = max(tolerance, style.lineWidth / 2 + style.edge) }
             else { band = tolerance }
             if selected.count <= 1, let handle = AnnotationGeometry.resizeHandle(at: point, annotation: annotation, tolerance: tolerance, edgeTolerance: band) {
-                // 札に隠れた指す点は、選択してつまみが見えるまでは札の移動を奪わない。
+                // ラベルに隠れた指す点は、選択してつまみが見えるまではラベルの移動を奪わない。
                 if handle != .leaderTarget || selected.contains(annotation.id) || leaderSegment(for: annotation, style: style) != nil {
                     return .resize(id, handle)
                 }
@@ -362,7 +362,7 @@ public struct AnnotationDocument: Equatable, Sendable {
         }
         return tool == .selection ? .none : .create
     }
-    /// 余白は保存せず、外に中心がある札・枠と、外に端点がある矢印・外に点がある手書きから毎回求める。
+    /// 余白は保存せず、外に中心があるラベル・枠と、外に端点がある矢印・外に点がある手書きから毎回求める。
     public func exportLayout(imageSize: CGSize) -> AnnotationExportLayout {
         let image = CGRect(origin: .zero, size: imageSize)
         var minX = image.minX, minY = image.minY, maxX = image.maxX, maxY = image.maxY
@@ -406,7 +406,7 @@ public enum AnnotationResizeHandle: Equatable, Sendable {
     case topLeft, topRight, bottomRight, bottomLeft, top, right, bottom, left, arrowStart, arrowEnd, leaderTarget
 }
 public enum AnnotationInteraction: Equatable, Sendable {
-    /// leaderは引き出し線の途中をつかんだこと。札と指す点をまとめて動かす。
+    /// leaderは引き出し線の途中をつかんだこと。ラベルと指す点をまとめて動かす。
     case none, create, move(UUID, leader: Bool = false), resize(UUID, AnnotationResizeHandle)
     public func cursor(tool: AnnotationTool) -> AnnotationCursor {
         switch self {
@@ -426,7 +426,7 @@ public enum AnnotationInteraction: Equatable, Sendable {
 }
 public enum AnnotationCursor: Equatable, Sendable {
     case arrow, crosshair, move, horizontal, vertical, diagonalDown, diagonalUp
-    /// ツールの見本。手書きはインクの点、蛍光ペンは縦の帯、番号は半透明の札。
+    /// ツールの見本。手書きはインクの点、蛍光ペンは縦の帯、番号は半透明のラベル。
     case sample
 }
 
@@ -497,7 +497,7 @@ public enum AnnotationGeometry {
     public static func clamped(_ point: CGPoint, to imageSize: CGSize) -> CGPoint {
         CGPoint(x: max(0, min(imageSize.width, point.x)), y: max(0, min(imageSize.height, point.y)))
     }
-    /// 制限前の中心で外への配置を判定する。札の移動で指す点は変えない。
+    /// 制限前の中心で外への配置を判定する。ラベルの移動で指す点は変えない。
     public static func placed(_ annotation: Annotation, bounds: CGRect, imageSize: CGSize, scale: Double = 1) -> Annotation {
         let image = CGRect(origin: .zero, size: imageSize)
         var result = annotation
@@ -546,7 +546,7 @@ public enum AnnotationGeometry {
         case .selection, .crop, .mosaic: return bounds
         }
     }
-    /// 中心に向かう直線と角丸札の交点。札の中に指す点があれば描かない。
+    /// 中心に向かう直線と角丸ラベルの交点。ラベルの中に指す点があれば描かない。
     public static func leaderSegment(for annotation: Annotation, radius: Double, bounds: CGRect? = nil) -> (target: CGPoint, labelEdge: CGPoint)? {
         guard [.text, .number].contains(annotation.tool), let target = annotation.leaderTarget else { return nil }
         let rect = bounds ?? annotation.rect

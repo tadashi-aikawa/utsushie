@@ -641,7 +641,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         if gesture == nil, tool == .crop { return .crosshair }
         let interaction: AnnotationInteraction
         switch gesture {
-        // 引き出し線を引いている間は札が描かれる。カーソルの見本を重ねない。
+        // 引き出し線を引いている間はラベルが描かれる。カーソルの見本を重ねない。
         case .label where preview != nil: return .crosshair
         case .create, .label: interaction = .create
         case .move(_, _, let id, let leader): interaction = .move(id, leader: leader)

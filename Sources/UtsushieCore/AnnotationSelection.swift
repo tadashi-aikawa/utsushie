@@ -60,7 +60,7 @@ extension AnnotationDocument {
     }
 
     /// 全体へ同じ移動量を適用し、画像内に留める道具との相対位置も保つ。
-    /// 指す点は、引き出し線をつかんだときか複数選択のときだけ札と一緒に動かす。
+    /// 指す点は、引き出し線をつかんだときか複数選択のときだけラベルと一緒に動かす。
     public func moving(_ ids: Set<UUID>, by delta: CGPoint, imageSize: CGSize, grabbedLeader: Bool = false) -> AnnotationDocument {
         let style = self.style()
         let movingLeader = grabbedLeader || ids.count > 1
@@ -76,7 +76,7 @@ extension AnnotationDocument {
             let proposed = annotation.translated(by: delta, movingLeader: movingLeader)
             let placed = AnnotationGeometry.placed(proposed, bounds: bounds(of: proposed, style: style), imageSize: imageSize, scale: scale)
             limit(annotation.start, placed.start)
-            // 指す点は画像の中に留まる。札との相対位置を保つため、端で全体を止める。
+            // 指す点は画像の中に留まる。ラベルとの相対位置を保つため、端で全体を止める。
             if movingLeader, let target = annotation.leaderTarget, let placedTarget = placed.leaderTarget { limit(target, placedTarget) }
         }
         // トリミングで画像より大きくなった蛍光ペンは、外接矩形が重なっても線が画像から外れ得る。
@@ -92,7 +92,7 @@ extension AnnotationDocument {
                 guard ids.contains(annotation.id) else { return annotation }
                 let moved = annotation.translated(by: movement)
                 var placed = AnnotationGeometry.placed(moved, bounds: bounds(of: moved, style: style), imageSize: imageSize, scale: scale)
-                // 余白の札は中心が画像へ入ると押し戻される。指す点も札が実際に動いた量だけ動かす。
+                // 余白のラベルは中心が画像へ入ると押し戻される。指す点もラベルが実際に動いた量だけ動かす。
                 if movingLeader, let target = annotation.leaderTarget {
                     let followed = CGPoint(x: target.x + placed.start.x - annotation.start.x, y: target.y + placed.start.y - annotation.start.y)
                     fits = fits && AnnotationGeometry.contains(followed, in: image)
@@ -105,7 +105,7 @@ extension AnnotationDocument {
         var result = self
         if let placed = placing(movement) { result.annotations = placed; return result }
         // 押し戻した分で指す点が画像から出るなら、収まる所まで全体の移動を縮める。
-        // 札の中心が画像の縁を跨ぐと押し戻しの有無が変わり、収まる倍率は1つの区間にならない。刻んで探してから詰める。
+        // ラベルの中心が画像の縁を跨ぐと押し戻しの有無が変わり、収まる倍率は1つの区間にならない。刻んで探してから詰める。
         func scaled(_ t: Double) -> CGPoint { CGPoint(x: movement.x * t, y: movement.y * t) }
         let steps = 64
         guard let step = (0..<steps).reversed().first(where: { placing(scaled(Double($0) / Double(steps))) != nil }) else { return self }

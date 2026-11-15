@@ -65,7 +65,7 @@ enum AnnotationRenderer {
         for annotation in document.ordered where annotation.tool.layer <= AnnotationTool.arrow.layer && annotation.tool != .highlighter {
             draw(annotation, document: document, style: style, context: context)
         }
-        // すべての線をすべての札より下へ置く。
+        // すべての線をすべてのラベルより下へ置く。
         for annotation in document.ordered where [.text, .number].contains(annotation.tool) {
             drawLeader(annotation, document: document, style: style, context: context)
         }
@@ -242,7 +242,7 @@ enum AnnotationRenderer {
             let rect = style.numberRect(at: annotation.start, number: number)
             context.setShadow(offset: CGSize(width: 0, height: 1), blur: 3, color: CGColor(gray: 0, alpha: 0.35))
             let path = CGPath(roundedRect: rect, cornerWidth: rect.height / 2, cornerHeight: rect.height / 2, transform: nil)
-            // 線はパスの中心に出る。2倍幅の縁の上から札の面を塗り、外側へedgeだけ残す。
+            // 線はパスの中心に出る。2倍幅の縁の上からラベルの面を塗り、外側へedgeだけ残す。
             context.setFillColor(UITheme.inkFace(annotation.inkColor).cgColor); context.setStrokeColor(UITheme.inkEdge(annotation.inkColor).cgColor); context.setLineWidth(style.edge * 2)
             context.addPath(path)
             context.drawPath(using: .fillStroke)

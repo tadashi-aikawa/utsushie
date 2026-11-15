@@ -37,7 +37,7 @@ public enum OverlayPresentation {
         let enabled = output == .video
         return HUDItem(title: compression.title, key: "S", selected: enabled && compression != .compact, recording: false, enabled: enabled)
     }
-    /// AppKit座標。上端に置けない札は範囲内へ戻し、画面の左右へも収める。
+    /// AppKit座標。上端に置けないバッジは範囲内へ戻し、画面の左右へも収める。
     public static func dimensionLabel(selection: CGRect, screen: CGRect, size: CGSize) -> CGRect {
         let width = min(size.width, max(0, screen.width - 8))
         let outside = selection.maxY + 10

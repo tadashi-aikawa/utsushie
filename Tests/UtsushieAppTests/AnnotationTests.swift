@@ -304,14 +304,14 @@ private func annotationMouseEvent(_ canvas: AnnotationCanvas, type: NSEvent.Even
     let delta = CGPoint(x: 10, y: 5)
     let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [first, second]), tool: .selection)
     canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
-    // 札: 指す点は残る。
+    // ラベル: 指す点は残る。
     try drag(canvas, from: first.start, by: delta)
     #expect(canvas.document.annotations[0].start == CGPoint(x: 110, y: 35) && canvas.document.annotations[0].leaderTarget == first.leaderTarget)
-    // 線の途中: 札と指す点がまとめて動き、選択はその1件。
+    // 線の途中: ラベルと指す点がまとめて動き、選択はその1件。
     try drag(canvas, from: CGPoint(x: 50, y: 70), by: delta)
     #expect(canvas.selection == [second.id])
     #expect(canvas.document.annotations[1].start == CGPoint(x: 110, y: 75) && canvas.document.annotations[1].leaderTarget == CGPoint(x: 30, y: 75))
-    // 複数選択: 札をつかんでも全件の指す点が動く。1回の取り消しで戻る。
+    // 複数選択: ラベルをつかんでも全件の指す点が動く。1回の取り消しで戻る。
     canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 110, y: 35), flags: .shift))
     canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 110, y: 35), flags: .shift))
     #expect(canvas.selection == [first.id, second.id])
@@ -1994,7 +1994,7 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     let highlighter = try #require(toolCursor(.highlighter))
     #expect(near(highlighter.image.size.height, style.highlighterWidth + 2))
     #expect(highlighter.image.size.width < highlighter.image.size.height)
-    // 番号は札の中心がクリックの点になる。
+    // 番号はラベルの中心がクリックの点になる。
     let margin = style.edge + 4
     let badge = style.numberRect(at: .zero, number: 1)
     let number = try #require(toolCursor(.number))
@@ -2073,12 +2073,12 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     #expect(try pixel(cross, x: 120, y: 50) == single)
 }
 @MainActor @Test func toolCursorStaysVisibleWhenZoomedOutAndFollowsNumberAndColor() throws {
-    // 縮めすぎても札の高さ12ptを下回らない。
+    // 縮めすぎてもラベルの高さ12ptを下回らない。
     let margin = AnnotationStyle().edge + 4
     let badge = AnnotationStyle().numberRect(at: .zero, number: 1)
     let tiny = try #require(toolCursor(.number, displayScale: 0.05))
     #expect(tiny.image.size.height >= (12 * (badge.height + margin * 2) / badge.height).rounded(.down))
-    // 2桁の番号は札が横へ伸びる。
+    // 2桁の番号はラベルが横へ伸びる。
     let two = try #require(toolCursor(.number, number: 2)).image.size.width
     #expect(try #require(toolCursor(.number, number: 12)).image.size.width > two)
     // 大きすぎる見本はカーソルとして扱える大きさへ収める。

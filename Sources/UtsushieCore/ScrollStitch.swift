@@ -473,7 +473,7 @@ public enum ScrollPresentation {
         "↓ \(grouped(height)) / \(grouped(limit))px"
     }
     public static let lost = "速すぎます 少し戻してください"
-    /// メニューバーの札。押すと止める。
+    /// メニューバーのバッジ。押すと止める。
     public static func status(height: Int) -> String { "■ ↓ \(grouped(height))px" }
     /// 上限で止めたときにカードへ出す。
     public static let limitNotice = "上限で止めた"
