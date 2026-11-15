@@ -52,7 +52,7 @@ public enum OverlayPresentation {
     }
 }
 
-public enum CardAction: Int, CaseIterable, Sendable { case annotate, save, reveal, trash }
+public enum CardAction: Int, CaseIterable, Sendable { case annotate, pin, save, reveal, trash }
 public enum CardPresentation {
     /// 最新を隅へ置き、反対の端を超える前に内側の列へ折り返す。上の隅は上端から下へ積む。
     public static func stackOrigin(index: Int, visible: CGRect, cardSize: CGSize = CGSize(width: 264, height: 216),
@@ -63,9 +63,10 @@ public enum CardPresentation {
         return CGPoint(x: corner.isLeft ? visible.minX + 18 + column : visible.maxX - 18 - cardSize.width - column,
                        y: corner.isTop ? visible.maxY - 18 - cardSize.height - row : visible.minY + 18 + row)
     }
-    // カードは左上原点。4ボタンとも同じ幅で、描画と当たり判定に同じ矩形を使う。
+    // カードは左上原点。5ボタンとも同じ幅で、描画と当たり判定に同じ矩形を使う。
+    public static let buttonWidth = (240 - 6 * Double(CardAction.allCases.count - 1)) / Double(CardAction.allCases.count)
     public static func button(_ action: CardAction) -> CGRect {
-        CGRect(x: 12 + Double(action.rawValue) * 61.5, y: 186, width: 55.5, height: 24)
+        CGRect(x: 12 + Double(action.rawValue) * (buttonWidth + 6), y: 186, width: buttonWidth, height: 24)
     }
     public static func action(at point: CGPoint) -> CardAction? {
         CardAction.allCases.first { button($0).contains(point) }

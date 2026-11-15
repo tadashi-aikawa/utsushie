@@ -61,6 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         thumbnails.onArtifactsChange = { [weak self] in self?.captureLibrary?.refresh() }
         thumbnails.onLibraryExportStatus = { [weak self] url, status in self?.captureLibrary?.setExportStatus(url, status: status) }
         thumbnails.onWarning = { [weak self] in self?.addWarning($0) }
+        thumbnails.onPinFailure = { [weak self] in self?.alert("画像を浮かべられませんでした", $0.localizedDescription) }
+        thumbnails.pins.onAdded = { [weak self] in self?.capture.prefetch() }
         reloadConfig()
         VideoEditStore.cleanupAtLaunch(directory: config.outputURL()).forEach { addWarning($0) }
         updateWarnings()
@@ -495,7 +497,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let url = saved.url
                 if saved.usedDefaultName { addWarning(CaptureFileNaming.fallbackWarning) }
                 let artifact = SharedArtifact(url: url, kind: .webP, width: image.width, height: image.height, byteCount: data.count,
-                    pixelScale: captured.scale)
+                    pixelScale: captured.scale, captureFrame: request.rect)
                 let copied = snapshot.clipboard.copiesAutomatically && ClipboardWriter.copy(artifact, data: data, mode: snapshot.clipboard)
                 if remember { persistLast(request.rect) }
                 thumbnails.setSuspended(false)

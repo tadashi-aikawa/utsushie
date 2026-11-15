@@ -247,6 +247,7 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         case 31:
             if !event.isARepeat, requireSingleSelection(), let url = singleSelectedURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
             return true
+        case 35: if !event.isARepeat { pinSelected() }; return true // P
         case 49: if !event.isARepeat { togglePreview() }; return true
         case 12, 53: if !event.isARepeat { closeFromKeyboard() }; return true
         default: return false
@@ -348,6 +349,17 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
                     applicationFocus.activate(); window.makeKeyAndOrderFront(nil); window.makeFirstResponder(collection); refresh()
                 }
             } catch { if !Task.isCancelled { fail(error) } }
+        }
+    }
+    /// 一覧のある画面に出す。撮った範囲が分かるのは、カードが残っている画像だけ。
+    private func pinSelected() {
+        guard requireSingleSelection(), let url = singleSelectedURL, actionTask == nil else { return }
+        message = nil; updateFooter()
+        let screen = window?.screen
+        actionTask = Task { [weak self] in
+            guard let self else { return }; defer { actionTask = nil }
+            do { try await thumbnails.pin(url, screen: screen) }
+            catch { if !Task.isCancelled { fail(error) } }
         }
     }
     private func copySelected() {
@@ -693,7 +705,7 @@ private final class LibraryFooter: NSView {
         let closeHint = (deleteArmed ? "Esc" : "Q Esc", deleteArmed ? "確認解除" : "閉じる")
         var hints = multiple
             ? [("⇧←↓↑→", "範囲"), ("⌘A", "全選択"), ("X", "ゴミ箱"), ("⌘C", "コピー"), closeHint]
-            : [("←↓↑→ HJKL", "移動"), ("⏎", "編集"), ("S", "保存"), ("O", "Finder"), ("X", "ゴミ箱"), ("⌘C", "コピー"), ("Space", "プレビュー"), closeHint]
+            : [("←↓↑→ HJKL", "移動"), ("⏎", "編集"), ("S", "保存"), ("O", "Finder"), ("P", "浮かべる"), ("X", "ゴミ箱"), ("⌘C", "コピー"), ("Space", "プレビュー"), closeHint]
         func measure(_ hints: [(String, String)]) -> [(CGFloat, CGFloat)] {
             hints.map { key, label in
                 (max(17, ceil((key as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 10.5, weight: .medium)]).width) + 8),
@@ -706,7 +718,7 @@ private final class LibraryFooter: NSView {
         let reserved = status == nil ? CGFloat(180) : min(bounds.width - 120, max(300, labelWidth + 48))
         var sizes = measure(hints), hintWidth = width(sizes)
         // ファイル名に132ptを残す。閉じる手引きは最後まで落とさず、他はこの順で省く。
-        for key in ["←↓↑→ HJKL", "⇧←↓↑→", "⌘A", "O", "S", "Space", "⏎", "⌘C", "X"] where hintWidth > bounds.width - reserved {
+        for key in ["←↓↑→ HJKL", "⇧←↓↑→", "⌘A", "O", "P", "S", "Space", "⏎", "⌘C", "X"] where hintWidth > bounds.width - reserved {
             hints.removeAll { $0.0 == key }; sizes = measure(hints); hintWidth = width(sizes)
         }
         UIDrawing.text(label, in: CGRect(x: 16, y: 12, width: max(60, bounds.width - hintWidth - 48), height: 18), size: 11.5,

@@ -79,12 +79,13 @@ import Testing
 @Test func cardButtonsUseEqualWidthsAndDoNotHitGapsOrPreview() {
     for action in CardAction.allCases {
         let rect = CardPresentation.button(action)
-        #expect(rect.width == 55.5 && rect.height == 24)
+        #expect(abs(rect.width - 43.2) < 0.001 && rect.height == 24)
         #expect(CardPresentation.action(at: CGPoint(x: rect.midX, y: rect.midY)) == action)
         #expect(CardPresentation.action(at: CGPoint(x: rect.midX, y: rect.minY - 1)) == nil)
         #expect(CardPresentation.action(at: CGPoint(x: rect.midX, y: rect.maxY + 1)) == nil)
     }
-    #expect(CardPresentation.action(at: CGPoint(x: 70, y: 198)) == nil)
+    #expect(CardPresentation.button(.trash).maxX - 252 < 0.001)
+    #expect(CardPresentation.action(at: CGPoint(x: 58, y: 198)) == nil)
     #expect(CardPresentation.action(at: CGPoint(x: 263, y: 198)) == nil)
     #expect(CardPresentation.action(at: CGPoint(x: 120, y: 70)) == nil)
 }

@@ -22,6 +22,8 @@ struct SharedArtifact: Sendable {
     var videoCompression: VideoCompression? = nil
     /// 撮影時の1ptあたりの画素数。保存済みファイルから読んだものは分からないのでnil。
     var pixelScale: Double? = nil
+    /// 撮った範囲。AppKitの画面座標のpt。浮かべた画像をここへ重ねる。保存済みファイルから読んだものはnil。
+    var captureFrame: CGRect? = nil
 }
 
 struct ClipboardEntry: Sendable {

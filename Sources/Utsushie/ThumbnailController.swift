@@ -26,6 +26,9 @@ final class ThumbnailController {
     var trashFiles: @Sendable ([URL]) -> CaptureLibraryTrashResult = { CaptureLibraryFileActions.trash($0) }
     var reportTrashFailure: (ThumbnailCard) -> Void = { $0.showTrashFailure() }
     private(set) var trashTask: Task<Void, Never>?
+    let pins = ImagePinController()
+    /// 浮かべる画像の読み込みや表示に失敗した。
+    var onPinFailure: ((Error) -> Void)?
 
     @discardableResult
     func add(_ artifact: SharedArtifact, image: CGImage?, copied: Bool, seconds: Double, screen: NSScreen?, finalizing: Bool = false,
@@ -78,6 +81,13 @@ final class ThumbnailController {
         card.onTrash = { [weak self, weak card] in
             guard let self, let card else { return }
             trash(card)
+        }
+        card.onPin = { [weak self, weak card] in
+            guard let self, let card else { return }
+            Task {
+                do { try await self.pin(card.artifact.url, screen: card.screen) }
+                catch { self.onPinFailure?(error) }
+            }
         }
         card.onClose = { [weak self, weak card] in
             guard let self, let card else { return }
@@ -137,6 +147,17 @@ final class ThumbnailController {
     }
     func closeLibrarySessions() {
         for card in libraryCards { card.onClose?() }
+    }
+    /// 保存済みのWebPを読み直して浮かべる。撮った範囲と倍率はカードがあればそこから取り、無ければ1xで画面の中央に出す。
+    func pin(_ url: URL, screen: NSScreen?) async throws {
+        guard url.pathExtension.lowercased() == ArtifactKind.webP.fileExtension else {
+            throw CaptureError.unavailable("浮かべられるのは画像だけです")
+        }
+        guard !removingURLs.contains(url.standardizedFileURL) else { throw CaptureError.unavailable("ゴミ箱へ移しています") }
+        let artifact = card(for: url)?.artifact
+        pins.beforeShowing = beforeShowingCard
+        try await pins.pin(url: url, scale: artifact?.pixelScale ?? recentImages.state(for: url)?.history.document.scale,
+                           anchor: artifact?.captureFrame, screen: screen)
     }
     func pruneMemory(to files: [RecentCaptureFile]) { recentImages.retain(files) }
     func isRemoving(_ url: URL) -> Bool { removingURLs.contains(url.standardizedFileURL) }
@@ -227,6 +248,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     var screen: NSScreen?
     var onClose: (() -> Void)?
     var onTrash: (() -> Void)?
+    var onPin: (() -> Void)?
     var onRequestKeys: (() -> Void)?
     var onStills: (([VideoStillArtifact], Bool) -> Void)?
     var onEditingChange: ((Bool) -> Void)?
@@ -274,6 +296,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     var canEdit: Bool { !finalizing && !removalPending && (artifact.kind == .mp4 || imageState != nil) }
     var canDrag: Bool { !finalizing && !removalPending }
     var canTrash: Bool { !finalizing && !removalPending && editor == nil && videoEditor == nil && !closed }
+    var canPin: Bool { artifact.kind == .webP && !finalizing && !removalPending && !closed }
     /// 一覧と同じ2回押しの確認。対象は常にこのカードのファイル1件。
     private(set) var trashConfirmation = CaptureLibraryDeleteConfirmation()
     private(set) var finalizing: Bool
@@ -380,11 +403,17 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         case 36, 76, 14: if !event.isARepeat { edit() }; return true // Enter, テンキーEnter, E
         case 1: if !event.isARepeat { saveAs() }; return true // S
         case 31: if !event.isARepeat { reveal() }; return true // O
+        case 35: if !event.isARepeat { pin() }; return true // P
         case 53: if !wasArmed && !event.isARepeat { onClose?() }; return true // Esc
         default: return false
         }
     }
     @objc func trash() { pressTrash(isRepeat: false) }
+    @objc func pin() {
+        disarmTrash(.click)
+        guard canPin else { return }
+        onPin?()
+    }
     func pressTrash(isRepeat: Bool) {
         guard canTrash else { return }
         let action = trashConfirmation.press(selected: [artifact.url], isRepeat: isRepeat)
@@ -616,6 +645,7 @@ final class ThumbnailView: NSView, NSDraggingSource {
         guard let card else { return }
         let definitions: [(CardAction, String, String, String, Selector)] = [
             (.annotate, card.artifact.kind == .mp4 ? "scissors" : "pencil", "⏎", card.artifact.kind == .mp4 ? "動画を編集 ⏎" : "注釈 ⏎", #selector(ThumbnailCard.edit)),
+            (.pin, "pin", "P", "画面に浮かべる P", #selector(ThumbnailCard.pin)),
             (.save, "square.and.arrow.down", "S", "別名保存 S", #selector(ThumbnailCard.saveAs)),
             (.reveal, "folder", "O", "Finderで表示 O", #selector(ThumbnailCard.reveal)),
             (.trash, "trash", "X", "ゴミ箱へ移す X を2回", #selector(ThumbnailCard.trash))]
@@ -637,6 +667,7 @@ final class ThumbnailView: NSView, NSDraggingSource {
             switch action {
             case .annotate: button.isEnabled = !card.finalizing && card.canEdit
             case .trash: button.isEnabled = card.canTrash
+            case .pin: button.isEnabled = card.canPin
             case .save, .reveal: button.isEnabled = !card.finalizing
             }
             button.confirming = action == .trash && card.trashConfirmation.isArmed
@@ -671,6 +702,7 @@ final class ThumbnailView: NSView, NSDraggingSource {
         case .annotate: card.edit()
         case .save: card.saveAs()
         case .reveal: card.reveal()
+        case .pin: card.pin()
         case .trash: card.trash()
         case nil: break
         }
@@ -747,7 +779,12 @@ private final class CardButton: NSButton {
     override func draw(_ dirtyRect: NSRect) {
         if confirming, let confirmationTitle {
             UIDrawing.fill(bounds, color: UITheme.redFace, radius: 6)
-            UIDrawing.text(confirmationTitle, in: CGRect(x: 2, y: 4.5, width: bounds.width - 4, height: 15), size: 10.5,
+            // 5つのボタンでは幅が狭いので、「もう一度」が切れない大きさまで字を縮める。
+            var size: CGFloat = 10.5
+            while size > 8 && (confirmationTitle as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: size, weight: .bold)]).width > bounds.width - 4 {
+                size -= 0.5
+            }
+            UIDrawing.text(confirmationTitle, in: CGRect(x: 2, y: 4.5 + (10.5 - size) / 2, width: bounds.width - 4, height: 15), size: size,
                            color: .white, weight: .bold, centered: true)
             return
         }

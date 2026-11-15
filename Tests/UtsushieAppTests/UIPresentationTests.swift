@@ -152,13 +152,15 @@ private func uiPixel(_ image: CGImage, x: Int, y: Int) throws -> [Int] {
     defer { card.panel.close() }
     let view = try #require(card.panel.contentView as? ThumbnailView)
     let buttons = view.subviews.compactMap { $0 as? NSButton }.sorted { $0.frame.minX < $1.frame.minX }
-    #expect(buttons.count == 4)
+    #expect(buttons.count == 5)
     for (index, action) in CardAction.allCases.enumerated() {
         #expect(buttons[index].frame == CardPresentation.button(action))
         #expect(buttons[index].acceptsFirstMouse(for: nil))
     }
     #expect(buttons[0].isEnabled)
-    #expect(buttons[1...3].allSatisfy { $0.isEnabled })
+    // 動画は浮かべられない。
+    #expect(!buttons[1].isEnabled && buttons[1].toolTip == "画面に浮かべる P")
+    #expect(buttons[2...4].allSatisfy { $0.isEnabled })
     // 任意のプレビュー出力先は検証用。実際のカードを表示せずに描画する。
     if let directory = ProcessInfo.processInfo.environment["UTSUSHIE_UI_PREVIEW_DIR"] {
         let url = URL(fileURLWithPath: directory, isDirectory: true)
