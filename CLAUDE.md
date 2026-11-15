@@ -1037,3 +1037,9 @@ open .build/UTSUSHIE.app
   - 出力: `dist/UTSUSHIE-<version>.zip`
   - 署名: 既定の固定証明書は`utsushie-dev`です。CIでは専用証明書の署名を必須にします。
 - `scripts/render_cask.sh <version> <sha256>`でCaskを標準出力へ書き出せます。
+- semantic-releaseとプラグインは`.github/release/`の`package.json`と`pnpm-lock.yaml`で、推移的な依存まで固定します。
+  - 入れ方: workflowは`pnpm install --frozen-lockfile --dir .github/release`で入れ、根で`.github/release/node_modules/.bin/semantic-release`を動かします。
+  - 理由: 署名の証明書と`TAP_GITHUB_TOKEN`と同じジョブで動くため、実行のたびに新しいバージョンを取ってきません。
+  - 上げるとき: `package.json`のバージョンを変え、`pnpm install --dir .github/release`でlockfileを作り直してコミットします。
+- pnpmのバージョンはrelease.ymlの`npm install --global pnpm@x.y.z`と、`.github/release/package.json`の`packageManager`の2か所で指定します。
+  - 上げるとき: 2か所をそろえ、lockfileを作り直します。
