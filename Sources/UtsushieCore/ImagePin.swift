@@ -13,8 +13,9 @@ public enum ImagePinGeometry {
     public static let mat: Double = 0
     /// 画像の外の透明な余白。影と押しピンの頭をパネルの中に描くため。
     /// 影の範囲は半透明なのでクリックを下へ通さない。完全に透明な所のクリックは下へ通る。
-    /// 遠くへ落とす影はぼかし28pt・下へ10ptまで、押しピンの頭は画像の上端から約27pt上まで出る。
-    public static let shadowMargin: Double = 40
+    /// 遠くへ落とす影はぼかし28pt・下へ10ptまで、押しピンの頭は画像の上端から約26pt上まで出る。
+    /// 出てくるときのピンは2.4倍から縮むので、頭は上端から約67pt上まで出る。
+    public static let shadowMargin: Double = 80
 
     /// 画像の枠から、台紙と影を含むパネルの枠へ。
     public static func panelFrame(image: CGRect) -> CGRect {
@@ -97,4 +98,72 @@ public enum ImagePinGeometry {
     public static func opacityLabel(_ opacity: Double) -> String {
         "不透明度 \(Int((opacity * 100).rounded()))%"
     }
+}
+
+/// 浮かべた画像の出てき方。押しピンが手前から縮んで刺さり、刺さった瞬間から影が広がって画像が持ち上がる。
+/// 画像は最初から影なしで出ているので、撮った範囲にぴったり重なっていれば初めは何も変わらないように見える。
+public enum ImagePinEntrance {
+    /// ピンが手前から刺さるまで。
+    public static let approach: Double = 0.24
+    /// 刺さった後に少し沈んで戻るまで。影と並んで進む。
+    public static let settle: Double = 0.09
+    /// 刺さった瞬間から、影が広がりきるまで。
+    public static let lift: Double = 0.36
+    public static var duration: Double { approach + lift }
+    /// 手前にいるときのピンの大きさ。
+    public static let startScale: Double = 2.4
+    /// 刺さった瞬間に沈む大きさ。
+    public static let impactScale: Double = 0.9
+    /// 持ち上がる途中で画像が膨らむ大きさ。撮った範囲から一瞬ずれるが、近づいた感じを出す。
+    public static let swell: Double = 1.025
+    /// 膨らみきる位置。持ち上がる長さのうちの割合。
+    static let swellPeak: Double = 0.45
+    /// ピンが見えるようになるまで。
+    static let fadeIn: Double = 0.05
+
+    public struct Frame: Equatable, Sendable {
+        /// ピンの大きさ。針の先を中心に掛ける。
+        public var pinScale: Double
+        public var pinOpacity: Double
+        /// ピンがどれだけ画面に近いか。0は手前、1は刺さった所。ピンの影の遠さに使う。
+        public var pinNear: Double
+        /// 画像の影と外縁の進み具合。0は影なし、1は止まったときの影。
+        public var lift: Double
+        /// 画像の大きさ。中心を保って掛ける。
+        public var imageScale: Double
+
+        public static let rest = Frame(pinScale: 1, pinOpacity: 1, pinNear: 1, lift: 1, imageScale: 1)
+    }
+
+    /// 浮かべてから`time`秒後の見た目。範囲の外は止まったときの見た目にする。
+    public static func frame(at time: Double) -> Frame {
+        guard time.isFinite, time < duration else { return .rest }
+        let t = max(0, time)
+        var frame = Frame.rest
+        guard t >= approach else {
+            // 加速しながら近づき、画面に当たる。
+            let near = easeIn(t / approach)
+            frame.pinScale = startScale + (1 - startScale) * near
+            frame.pinNear = near
+            frame.pinOpacity = min(1, t / fadeIn)
+            frame.lift = 0
+            return frame
+        }
+        let after = t - approach
+        let half = settle / 2
+        if after < half {
+            frame.pinScale = 1 + (impactScale - 1) * easeOut(after / half)
+        } else if after < settle {
+            frame.pinScale = impactScale + (1 - impactScale) * ((after - half) / half)
+        }
+        let rise = after / lift
+        frame.lift = easeOut(rise)
+        let grow = rise < swellPeak ? smoothstep(rise / swellPeak) : 1 - smoothstep((rise - swellPeak) / (1 - swellPeak))
+        frame.imageScale = 1 + (swell - 1) * grow
+        return frame
+    }
+
+    static func easeIn(_ x: Double) -> Double { let y = min(1, max(0, x)); return y * y * y }
+    static func easeOut(_ x: Double) -> Double { let y = 1 - min(1, max(0, x)); return 1 - y * y * y }
+    static func smoothstep(_ x: Double) -> Double { let y = min(1, max(0, x)); return y * y * (3 - 2 * y) }
 }

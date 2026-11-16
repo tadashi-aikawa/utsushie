@@ -18,6 +18,8 @@ final class ImagePinController {
     /// クリックで前面にする。macOSは前面にないアプリへピンチを渡さないため。
     /// 非推奨APIだが、編集画面と同じく別アプリの協調に依存せず前面化を要求する。
     var activate: () -> Void = { if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) } }
+    /// ピンが刺さり影が浮き出る演出を付けるか。視差効果を減らす設定では、止まった見た目でその場に出す。
+    var animatesEntrance: () -> Bool = { !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     private var localMagnify: Any?
     private var globalMagnify: Any?
 
@@ -67,6 +69,7 @@ final class ImagePinController {
         let pin = ImagePin(image: image, natural: natural,
                            frame: ImagePinGeometry.initialFrame(size: natural, anchor: anchor, visible: visible))
         pin.activate = activate
+        pin.animatesEntrance = animatesEntrance()
         pin.onClose = { [weak self, weak pin] in
             guard let self, let pin else { return }
             pins.removeAll { $0 === pin }
@@ -109,6 +112,7 @@ final class ImagePin {
     let natural: CGSize
     var onClose: (() -> Void)?
     var activate: () -> Void = {}
+    var animatesEntrance = true
     private let view: ImagePinView
     private(set) var closed = false
 
@@ -137,11 +141,13 @@ final class ImagePin {
     }
     func show() {
         guard !closed else { return }
+        if animatesEntrance { view.beginEntrance() }
         panel.orderFrontRegardless()
     }
     func close() {
         guard !closed else { return }
         closed = true
+        view.endEntrance()
         panel.orderOut(nil); panel.close()
         onClose?(); onClose = nil
     }
@@ -172,14 +178,33 @@ final class ImagePinPanel: NSPanel, CaptureExcludedWindow {
     override var canBecomeMain: Bool { false }
 }
 
+/// 浮かべた画像。下から影、画像、縁・ピン・×・値のバッジの3枚に分けて重ねる。
+/// 出てくる演出で画像が膨らむ間は、大きい画像を毎回描き直すと間に合わないので、画像のビューの層を引き伸ばす。
 @MainActor
 final class ImagePinView: NSView {
     weak var pin: ImagePin?
-    var image: NSImage?
+    var image: NSImage? { didSet { imageView.image = image } }
     private(set) var hovered = false
     private var pressedClose = false
     private(set) var label: String?
     private var labelTimer: Timer?
+    /// 出してからの秒数。演出の間だけ値を持ち、止まった見た目ではnil。
+    var entranceTime: Double? { didSet { layoutParts(); redraw() } }
+    private var entranceLink: CADisplayLink?
+    private var entranceStart: CFTimeInterval?
+    private var entranceDeadline: Task<Void, Never>?
+    private let imageView = ImagePinImageView()
+    private let overlay = ImagePinOverlayView()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        addSubview(imageView)
+        overlay.owner = self
+        addSubview(overlay)
+        layoutParts()
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
     /// 影・ピン・縁の見た目。
     @MainActor enum Style {
@@ -200,9 +225,25 @@ final class ImagePinView: NSView {
         static let pin = ImagePinLook.orange
     }
     /// 台紙と外縁の色。見た目の案を差し替えて描けるよう、ビューごとに持つ。
-    var paper: NSColor = Style.paper { didSet { needsDisplay = true } }
-    var edgeColor: NSColor = Style.edge { didSet { needsDisplay = true } }
-    var edgeWidth: CGFloat = 1 { didSet { needsDisplay = true } }
+    var paper: NSColor = Style.paper { didSet { redraw() } }
+    var edgeColor: NSColor = Style.edge { didSet { redraw() } }
+    var edgeWidth: CGFloat = 1 { didSet { redraw() } }
+    /// 影と、縁・ピン・×・値のバッジを描き直す。画像は寸法が変わったときだけ描き直す。
+    private func redraw() { needsDisplay = true; overlay.needsDisplay = true }
+    /// 今の見た目。演出の外では止まった見た目。
+    var entrance: ImagePinEntrance.Frame { entranceTime.map(ImagePinEntrance.frame(at:)) ?? .rest }
+    /// 演出で膨らんだ画像の枠。中心を保つ。
+    var shownImageRect: CGRect {
+        let swell = CGFloat(entrance.imageScale), base = imageRect
+        return base.insetBy(dx: -base.width * (swell - 1) / 2, dy: -base.height * (swell - 1) / 2)
+    }
+    private func layoutParts() {
+        overlay.frame = bounds
+        let rest = imageRect, shown = shownImageRect
+        // 止まった寸法が変わったときだけ描き直す。膨らむ間は描いた中身を層で引き伸ばす。
+        if imageView.restSize != rest.size { imageView.restSize = rest.size; imageView.needsDisplay = true }
+        imageView.frame = shown
+    }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -222,7 +263,7 @@ final class ImagePinView: NSView {
         addTrackingArea(NSTrackingArea(rect: matRect, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways], owner: self))
     }
     override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize); updateTrackingAreas(); window?.invalidateCursorRects(for: self)
+        super.setFrameSize(newSize); layoutParts(); updateTrackingAreas(); window?.invalidateCursorRects(for: self)
     }
     /// どこを持っても動かせるので開いた手にする。前回枠やズームの枠の移動と同じ手。押すボタンの×だけ矢印。
     func cursor(at point: CGPoint) -> NSCursor? {
@@ -238,11 +279,11 @@ final class ImagePinView: NSView {
         cursor(at: convert(event.locationInWindow, from: nil))?.set()
     }
     override func mouseEntered(with event: NSEvent) {
-        hovered = true; needsDisplay = true; window?.invalidateCursorRects(for: self); updateCursor(event)
+        hovered = true; redraw(); window?.invalidateCursorRects(for: self); updateCursor(event)
     }
     override func mouseMoved(with event: NSEvent) { updateCursor(event) }
     override func mouseExited(with event: NSEvent) {
-        hovered = false; needsDisplay = true; window?.invalidateCursorRects(for: self); NSCursor.arrow.set()
+        hovered = false; redraw(); window?.invalidateCursorRects(for: self); NSCursor.arrow.set()
     }
     override func mouseDown(with event: NSEvent) {
         let wasActive = NSApp.isActive
@@ -284,35 +325,76 @@ final class ImagePinView: NSView {
         default: super.scrollWheel(with: event)
         }
     }
-    /// 変えた値を左下へ1秒だけ出す。
-    func flash(_ text: String) {
-        label = text; needsDisplay = true
-        labelTimer?.invalidate()
-        labelTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.label = nil; self?.needsDisplay = true }
+    /// ピンが手前から刺さり、影が浮き出る演出を始める。画面の更新ごとに描き直す。
+    func beginEntrance() {
+        endEntrance()
+        entranceTime = 0
+        let link = displayLink(target: self, selector: #selector(stepEntrance(_:)))
+        link.add(to: .main, forMode: .common)
+        entranceLink = link
+        // 画面の更新が届かなくても、止まった見た目へ必ず戻す。ピンと影が出ないまま残らないため。
+        entranceDeadline = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(ImagePinEntrance.duration + 0.5))
+            guard !Task.isCancelled else { return }
+            self?.endEntrance()
         }
     }
-    override func draw(_ dirtyRect: NSRect) {
-        NSGraphicsContext.current?.imageInterpolation = .high
-        // 枠で囲わず、強い影で画像そのものを浮かせる。元の画面に枠線を足しただけに見えないため。
-        let mat = matRect
-        for layer in Style.shadows {
-            NSGraphicsContext.saveGraphicsState()
-            let shadow = NSShadow()
-            shadow.shadowColor = layer.color; shadow.shadowOffset = layer.offset; shadow.shadowBlurRadius = layer.blur
-            shadow.set()
-            paper.setFill(); mat.fill()
-            NSGraphicsContext.restoreGraphicsState()
+    @objc private func stepEntrance(_ link: CADisplayLink) {
+        let start = entranceStart ?? link.timestamp
+        entranceStart = start
+        let time = link.targetTimestamp - start
+        if time >= ImagePinEntrance.duration { endEntrance() } else { entranceTime = time }
+    }
+    func endEntrance() {
+        entranceLink?.invalidate(); entranceLink = nil
+        entranceDeadline?.cancel(); entranceDeadline = nil
+        entranceStart = nil
+        if entranceTime != nil { entranceTime = nil }
+    }
+    /// 変えた値を左下へ1秒だけ出す。
+    func flash(_ text: String) {
+        label = text; redraw()
+        labelTimer?.invalidate()
+        labelTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.label = nil; self?.redraw() }
         }
-        image?.draw(in: imageRect, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
-        let imageEdge = NSBezierPath(rect: imageRect.insetBy(dx: -0.5, dy: -0.5))
-        imageEdge.lineWidth = 1; Style.imageEdge.setStroke(); imageEdge.stroke()
-        let darkEdge = NSBezierPath(rect: imageRect.insetBy(dx: -1.5, dy: -1.5))
-        darkEdge.lineWidth = 1; Style.darkEdge.setStroke(); darkEdge.stroke()
+    }
+    /// 一番下の影。画像は上の画像のビューが描く。
+    override func draw(_ dirtyRect: NSRect) {
+        let entrance = entrance
+        let mat = shownImageRect.insetBy(dx: -ImagePinGeometry.mat, dy: -ImagePinGeometry.mat)
+        let lift = CGFloat(entrance.lift)
+        // 枠で囲わず、強い影で画像そのものを浮かせる。元の画面に枠線を足しただけに見えないため。
+        // 出てくるときは、画面にくっついた細く薄い影から、下へずれながらぼけて広がる。
+        if lift > 0 {
+            for layer in Style.shadows {
+                NSGraphicsContext.saveGraphicsState()
+                let shadow = NSShadow()
+                shadow.shadowColor = layer.color.withAlphaComponent(layer.color.alphaComponent * (0.2 + 0.8 * lift))
+                shadow.shadowOffset = CGSize(width: layer.offset.width * lift, height: layer.offset.height * lift)
+                shadow.shadowBlurRadius = layer.blur * lift
+                shadow.set()
+                paper.setFill(); mat.fill()
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            // 画像の下は抜いておく。透明な部分のある画像で、影を落とすための下地を透かさないため。
+            shownImageRect.fill(using: .clear)
+        }
+    }
+    /// 画像の上に重ねる縁・ピン・×・値のバッジ。
+    func drawOverlay() {
+        let entrance = entrance
+        let shown = shownImageRect
+        let mat = shown.insetBy(dx: -ImagePinGeometry.mat, dy: -ImagePinGeometry.mat)
+        let lift = CGFloat(entrance.lift)
+        let imageEdge = NSBezierPath(rect: shown.insetBy(dx: -0.5, dy: -0.5))
+        imageEdge.lineWidth = 1; Style.imageEdge.withAlphaComponent(Style.imageEdge.alphaComponent * lift).setStroke(); imageEdge.stroke()
+        let darkEdge = NSBezierPath(rect: shown.insetBy(dx: -1.5, dy: -1.5))
+        darkEdge.lineWidth = 1; Style.darkEdge.withAlphaComponent(Style.darkEdge.alphaComponent * lift).setStroke(); darkEdge.stroke()
         let edge = NSBezierPath(rect: mat.insetBy(dx: edgeWidth / 2, dy: edgeWidth / 2))
-        edge.lineWidth = edgeWidth; edgeColor.setStroke(); edge.stroke()
+        edge.lineWidth = edgeWidth; edgeColor.withAlphaComponent(edgeColor.alphaComponent * lift).setStroke(); edge.stroke()
         // 針の先を画像の上端から3pt内側に刺す。頭は上の透明な余白へ出る。
-        drawPin(tip: CGPoint(x: mat.midX, y: mat.minY + 3))
+        drawPin(tip: CGPoint(x: mat.midX, y: mat.minY + 3), entrance: entrance)
         if hovered {
             let button = closeRect
             UITheme.ink.withAlphaComponent(0.85).setFill(); NSBezierPath(ovalIn: button).fill()
@@ -333,17 +415,26 @@ final class ImagePinView: NSView {
     }
     /// 台紙の上辺に刺した押しピン。頭(つまみ・くびれ・つば)と灰の針を分けて塗り、1色の記号に見せない。
     /// `tip`は針の先。頭は時計回りに傾けて右上へ出し、紙のすぐ上に立つ硬い影を落とす。
-    private func drawPin(tip: CGPoint) {
+    /// 出てくるときは針の先を中心に手前で大きく、影は遠く薄く落とし、刺さるにつれて止まったときの影へ寄せる。
+    private func drawPin(tip: CGPoint, entrance: ImagePinEntrance.Frame = .rest) {
         let look = Style.pin
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        guard entrance.pinOpacity > 0, let context = NSGraphicsContext.current?.cgContext else { return }
         context.saveGState()
+        // 透明レイヤーは切り抜きの大きさで作られる。大きい画像で毎コマ全体を合成すると重いので、ピンと影の周りへ絞る。
+        let reach = 40 * look.length / 22 * entrance.pinScale + 30
+        context.clip(to: CGRect(x: tip.x - reach, y: tip.y - reach, width: reach * 2, height: reach * 2))
+        context.setAlpha(entrance.pinOpacity)
         context.translateBy(x: tip.x, y: tip.y)
         // ビューは上下を反転しているので、正の角度で時計回りになる。
         context.rotate(by: look.angle * .pi / 180)
         // 形は22ptで組み、lengthまで拡大する。影はCTMの影響を受けないので値のまま効く。
-        context.scaleBy(x: look.length / 22, y: look.length / 22)
+        let scale = look.length / 22 * entrance.pinScale
+        context.scaleBy(x: scale, y: scale)
+        let near = CGFloat(entrance.pinNear), far = 1 - near
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.35); shadow.shadowOffset = CGSize(width: 3, height: 3); shadow.shadowBlurRadius = 3
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.35 * near + 0.12 * far)
+        shadow.shadowOffset = CGSize(width: 3 * near + 14 * far, height: 3 * near + 18 * far)
+        shadow.shadowBlurRadius = 3 * near + 9 * far
         shadow.set()
         // 影を部品ごとに重ねないよう、ピン全体を1枚にまとめてから影を落とす。
         context.beginTransparencyLayer(auxiliaryInfo: nil)
@@ -366,6 +457,37 @@ final class ImagePinView: NSView {
         context.endTransparencyLayer()
         context.restoreGState()
     }
+}
+
+/// 浮かべた画像そのもの。止まった寸法で1回描き、演出で膨らむ間は描き直さずに層の中身を引き伸ばす。
+@MainActor
+final class ImagePinImageView: NSView {
+    var image: NSImage? { didSet { needsDisplay = true } }
+    /// 描いた寸法。これが変わったときだけ描き直す。
+    var restSize: CGSize = .zero
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        layerContentsPlacement = .scaleAxesIndependently
+    }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+    override var isFlipped: Bool { true }
+    // 操作は下の浮かべた画像のビューが受ける。
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.current?.imageInterpolation = .high
+        image?.draw(in: bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+    }
+}
+
+/// 画像の上に重ねる縁・ピン・×・値のバッジ。描くのは浮かべた画像のビューで、状態もそちらが持つ。
+@MainActor
+final class ImagePinOverlayView: NSView {
+    weak var owner: ImagePinView?
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) { owner?.drawOverlay() }
 }
 
 /// 押しピンの見た目。頭の色・縁・明るい面・傾き。

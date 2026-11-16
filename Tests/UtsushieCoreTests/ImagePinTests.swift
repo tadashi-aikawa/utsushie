@@ -70,6 +70,39 @@ import Testing
     #expect(ImagePinGeometry.margin >= ImagePinGeometry.mat)
 }
 
+@Test func pinEntranceDrivesThePinInFromTheFrontThenLiftsAndSwellsTheImage() {
+    typealias E = ImagePinEntrance
+    // 出した瞬間は、ピンが手前で大きく見えず、画像は影なしで撮った範囲にぴったり重なる。
+    let start = E.frame(at: 0)
+    #expect(start.pinScale == E.startScale && start.pinOpacity == 0 && start.pinNear == 0)
+    #expect(start.lift == 0 && start.imageScale == 1)
+    // 近づく間は加速して縮み、影はまだ出さない。
+    let early = E.frame(at: E.approach * 0.3), late = E.frame(at: E.approach * 0.9)
+    #expect(early.pinScale > late.pinScale && late.pinScale > 1)
+    let middle = E.frame(at: E.approach / 2).pinScale
+    #expect(E.startScale - middle < middle - 1)
+    #expect(early.lift == 0 && late.lift == 0 && late.pinOpacity == 1)
+    // 刺さった瞬間に少し沈んで戻る。
+    let impact = E.frame(at: E.approach + E.settle / 2)
+    #expect(abs(impact.pinScale - E.impactScale) < 0.0001 && impact.pinNear == 1)
+    #expect(E.frame(at: E.approach + E.settle + 0.001).pinScale == 1)
+    // 刺さった瞬間から影が広がり、画像は途中で膨らんで元へ戻る。
+    let lifts = stride(from: E.approach, through: E.duration, by: 0.02).map { E.frame(at: $0) }
+    #expect(zip(lifts, lifts.dropFirst()).allSatisfy { $0.lift <= $1.lift })
+    let peak = E.frame(at: E.approach + E.lift * 0.45)
+    #expect(abs(peak.imageScale - E.swell) < 0.0001)
+    #expect(lifts.allSatisfy { $0.imageScale >= 1 && $0.imageScale <= E.swell })
+    // 止まったときの見た目は、演出の無い浮かべた画像と同じ。
+    #expect(E.frame(at: E.duration) == .rest && E.frame(at: 10) == .rest && E.frame(at: .nan) == .rest)
+    #expect(abs(E.duration - 0.6) < 0.0001)
+}
+
+@Test func pinMarginHoldsThePinWhileItComesFromTheFront() {
+    // 針の先は画像の上端から3pt内側。頭は30ptの長さで30°傾き、手前では2.4倍になる。
+    let head = 30 * (22 * cos(Double.pi / 6) + 4.5 * sin(Double.pi / 6)) / 22
+    #expect(head * ImagePinEntrance.startScale - 3 < ImagePinGeometry.shadowMargin)
+}
+
 @Test func pinCloseButtonStaysInsideSmallPins() {
     #expect(ImagePinGeometry.closeButton(in: CGSize(width: 300, height: 200)) == CGRect(x: 270, y: 8, width: 22, height: 22))
     let small = ImagePinGeometry.closeButton(in: CGSize(width: 48, height: 30))

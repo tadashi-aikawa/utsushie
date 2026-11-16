@@ -45,6 +45,7 @@ import UtsushieCore
     let controller = ImagePinController()
     // 浮かべると前面になる。試験ではアプリを前面へ出さない。
     controller.activate = {}
+    controller.animatesEntrance = { false }
     defer { controller.closeAll() }
     let screen = try #require(NSScreen.main)
     let pin = controller.show(try pinImage(width: 200, height: 100), scale: 1, anchor: nil, screen: screen)
@@ -113,6 +114,8 @@ import UtsushieCore
             let controller = ImagePinController()
             // 浮かべると前面になる。試験ではアプリを前面へ出さない。
             controller.activate = {}
+            // 止まった見た目を描く。
+            controller.animatesEntrance = { false }
             defer { controller.closeAll() }
             let pin = controller.show(source, scale: 2, anchor: nil, screen: NSScreen.main)
             let view = try #require(pin.panel.contentView as? ImagePinView)
@@ -121,6 +124,112 @@ import UtsushieCore
             view.cacheDisplay(in: view.bounds, to: bitmap)
             try bitmap.representation(using: .png, properties: [:])?.write(to: url.appendingPathComponent("frame-\(name)-\(sourceName).png"))
         }
+    }
+}
+
+@MainActor @Test func pinPlaysTheEntranceOnceAndSettlesToTheRestingLook() async throws {
+    let controller = ImagePinController()
+    // 浮かべると前面になる。試験ではアプリを前面へ出さない。
+    controller.activate = {}
+    controller.animatesEntrance = { true }
+    defer { controller.closeAll() }
+    let pin = controller.show(try pinImage(width: 200, height: 100), scale: 1, anchor: nil, screen: NSScreen.main)
+    let view = try #require(pin.panel.contentView as? ImagePinView)
+    // 出した直後から演出が進み、止まった見た目へ戻る。画像の枠は演出の間も動かさない。
+    let frame = pin.imageFrame
+    #expect(view.entranceTime != nil)
+    let started = ContinuousClock.now
+    try await waitFor { view.entranceTime == nil }
+    // 画面の更新で進めて止まる。保険の時間切れ(演出の長さ+0.5秒)より前に終わる。
+    #expect(ContinuousClock.now - started < .seconds(ImagePinEntrance.duration + 0.3))
+    #expect(pin.imageFrame == frame)
+    // 演出の途中で閉じても、画面の更新を止める。
+    let second = controller.show(try pinImage(width: 200, height: 100), scale: 1, anchor: nil, screen: NSScreen.main)
+    let secondView = try #require(second.panel.contentView as? ImagePinView)
+    #expect(secondView.entranceTime != nil)
+    second.close()
+    #expect(secondView.entranceTime == nil)
+    // 視差効果を減らす設定では、止まった見た目でその場に出す。
+    controller.animatesEntrance = { false }
+    let still = controller.show(try pinImage(width: 200, height: 100), scale: 1, anchor: nil, screen: NSScreen.main)
+    #expect((still.panel.contentView as? ImagePinView)?.entranceTime == nil)
+}
+
+@MainActor @Test func pinEntranceKeepsGoingWhileZoomedAndWhileAnotherPinCloses() async throws {
+    let controller = ImagePinController()
+    // 浮かべると前面になる。試験ではアプリを前面へ出さない。
+    controller.activate = {}
+    controller.animatesEntrance = { true }
+    defer { controller.closeAll() }
+    let first = controller.show(try pinImage(width: 200, height: 100), scale: 1, anchor: nil, screen: NSScreen.main)
+    let second = controller.show(try pinImage(width: 200, height: 100), scale: 1, anchor: nil, screen: NSScreen.main)
+    let firstView = try #require(first.panel.contentView as? ImagePinView)
+    let secondView = try #require(second.panel.contentView as? ImagePinView)
+    // 刺さって影が広がり始めてから、1枚目を拡大し、2枚目を閉じる。
+    try await waitFor { (firstView.entranceTime ?? 0) > ImagePinEntrance.approach + 0.05 }
+    let start = first.imageFrame
+    first.zoom(by: 2, around: CGPoint(x: start.midX, y: start.midY))
+    let zoomed = first.imageFrame
+    #expect(zoomed.size == CGSize(width: 400, height: 200))
+    second.close()
+    #expect(secondView.entranceTime == nil)
+    // 1枚目は止まらずに進み、拡大した枠のまま止まった見た目へ戻る。
+    #expect(firstView.entranceTime != nil)
+    try await waitFor { firstView.entranceTime == nil }
+    #expect(first.imageFrame == zoomed)
+    #expect(first.panel.frame == ImagePinGeometry.panelFrame(image: zoomed))
+}
+
+@MainActor @Test func pinLeavesTransparentPartsOfTheImageTransparent() throws {
+    let context = try AnnotationRenderer.bitmap(width: 200, height: 100)
+    context.setFillColor(CGColor(red: 0.26, green: 0.44, blue: 0.75, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: 200, height: 20))
+    let image = try #require(context.makeImage())
+    for animates in [false, true] {
+        let controller = ImagePinController()
+        // 浮かべると前面になる。試験ではアプリを前面へ出さない。
+        controller.activate = {}
+        controller.animatesEntrance = { animates }
+        defer { controller.closeAll() }
+        let pin = controller.show(image, scale: 1, anchor: nil, screen: NSScreen.main)
+        let view = try #require(pin.panel.contentView as? ImagePinView)
+        // 止まった見た目と、影が広がっている途中。
+        if animates { view.entranceTime = ImagePinEntrance.approach + ImagePinEntrance.lift / 2 }
+        // 画面では影・画像のビューがそれぞれの層で重なるので、影のビューが自分で描く分だけを見る。
+        // cacheDisplayは子のビューも同じ描き先へ描き、画像の.copyが下地を消してしまうので使わない。
+        let width = Int(view.bounds.width), height = Int(view.bounds.height)
+        let context = try AnnotationRenderer.bitmap(width: width, height: height)
+        context.translateBy(x: 0, y: CGFloat(height)); context.scaleBy(x: 1, y: -1)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        view.draw(view.bounds)
+        NSGraphicsContext.restoreGraphicsState()
+        let shadows = NSBitmapImageRep(cgImage: try #require(context.makeImage()))
+        let rest = ImagePinGeometry.shadowMargin + ImagePinGeometry.mat
+        // 画像の下は抜けていて、透明な上側から影の下地が透けない。
+        let under = try #require(shadows.colorAt(x: Int(rest + 40), y: Int(rest + 30)))
+        #expect(under.alphaComponent < 0.05)
+        // 画像の外には影が落ちている。
+        let below = try #require(shadows.colorAt(x: Int(rest + 100), y: Int(rest + 100 + 2)))
+        #expect(below.alphaComponent > 0.05)
+    }
+}
+
+/// 任意のプレビュー出力先は検証用。出てくる途中の見た目を時刻ごとに描く。
+@MainActor @Test func pinEntrancePreviews() throws {
+    guard let directory = ProcessInfo.processInfo.environment["UTSUSHIE_UI_PREVIEW_DIR"] else { return }
+    let controller = ImagePinController()
+    controller.activate = {}
+    controller.animatesEntrance = { false }
+    defer { controller.closeAll() }
+    let pin = controller.show(try pinImage(width: 640, height: 360), scale: 2, anchor: nil, screen: NSScreen.main)
+    let view = try #require(pin.panel.contentView as? ImagePinView)
+    for time in [0.0, 0.08, 0.16, 0.22, 0.26, 0.29, 0.33, 0.4, 0.5, 0.6] {
+        view.entranceTime = time
+        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try bitmap.representation(using: .png, properties: [:])?
+            .write(to: URL(fileURLWithPath: directory).appendingPathComponent(String(format: "entrance-%03d.png", Int(time * 100))))
     }
 }
 
