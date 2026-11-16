@@ -40,6 +40,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 選択画面を出す前に全画面を撮っている間。ホットキーの連打で二重に開かない。
     private var freezing = false
     private var warningItem: NSMenuItem!
+    /// Finderの右クリックから渡されたファイル。起動の準備が終わるまで溜め、1回ずつ順に取り込む。
+    private let finderImport = FinderImportService()
+    private var launched = false
+    private var pendingImports: [URL] = []
+    private var importTask: Task<Void, Never>?
     private var configURL: URL { ConfigLoader.defaultPath() }
     private var lastURL: URL { ConfigLoader.directory().appendingPathComponent("last-area.json") }
 
@@ -53,6 +58,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return image
     }()
 
+    /// 起動していないときの右クリックでも受け取れるよう、起動直後の依頼より先に受け手を置く。
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        finderImport.onFiles = { [weak self] in self?.importFiles($0) }
+        NSApp.servicesProvider = finderImport
+    }
+    /// 「このアプリケーションで開く」から渡されたファイル。
+    func application(_ application: NSApplication, open urls: [URL]) { importFiles(urls) }
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         annotationNavigationDiagnostics.start()
@@ -88,6 +100,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // AppKitが初期化中の例外を捕捉しても、メニューと撮影の準備は完了した状態にする。
         captureLibrary = CaptureLibraryController(directory: { [weak self] in self?.config.outputURL() ?? UtsushieConfig().outputURL() },
             config: { [weak self] in self?.config ?? UtsushieConfig() }, thumbnails: thumbnails)
+        NSUpdateDynamicServices()
+        launched = true
+        if !pendingImports.isEmpty { let urls = pendingImports; pendingImports = []; importFiles(urls) }
+    }
+    /// 撮影と同じく保存フォルダへ写してカードを出し、最初の1件だけ編集画面を開く。元のファイルは変えない。
+    func importFiles(_ urls: [URL]) {
+        importLog.debug("import requested: files=\(urls.count, privacy: .public) launched=\(self.launched, privacy: .public)")
+        guard launched else { pendingImports += urls; return }
+        let previous = importTask
+        importTask = Task {
+            await previous?.value
+            await runImport(urls)
+        }
+    }
+    private func runImport(_ urls: [URL]) async {
+        reloadConfig()
+        let snapshot = config
+        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
+        var cardIDs: [UUID] = []
+        var failures: [(name: String, reason: String)] = []
+        // 取り込みと知らせの間はカードを隠して寿命を止める。撮影の操作で選択画面を開閉しても、この間は戻さない。
+        thumbnails.setHoldingForImport(true)
+        for url in urls {
+            guard let media = CaptureImporter.media(of: url) else {
+                failures.append((url.lastPathComponent, "画像か動画ではありません")); continue
+            }
+            do {
+                let action = CaptureImport.action(for: url, media: media, outputDirectory: snapshot.outputURL())
+                if action == .editInPlace {
+                    cardIDs.append(try await thumbnails.restore(url, seconds: snapshot.thumbnailSeconds, screen: screen))
+                    continue
+                }
+                let imported = try await CaptureImporter.importFile(url, media: media, action: action, config: snapshot)
+                if imported.usedDefaultName { addWarning(CaptureFileNaming.fallbackWarning) }
+                // 元の画像はFinderにあるので、取り込んだだけではクリップボードを変えない。保存したときに撮影と同じく載せる。
+                cardIDs.append(thumbnails.add(imported.artifact, image: imported.image, copied: false,
+                    seconds: snapshot.thumbnailSeconds, screen: screen))
+            } catch {
+                importLog.notice("import failed: \(error.localizedDescription, privacy: .public)")
+                failures.append((url.lastPathComponent, error.localizedDescription))
+            }
+        }
+        importLog.debug("import finished: cards=\(cardIDs.count, privacy: .public) failures=\(failures.count, privacy: .public)")
+        // 知らせを読んで閉じてから編集画面を開き、モーダルの下に隠さない。
+        if !failures.isEmpty {
+            alert(cardIDs.isEmpty ? "取り込めませんでした" : "一部のファイルを取り込めませんでした", CaptureImport.failureMessage(failures))
+        }
+        // 全部をカードにしてから開く。キーの受け手を開くカードにするので、続けて出すカードは編集画面のキーを取らない。
+        if let first = cardIDs.first { thumbnails.edit(first) }
+        // 撮影・録画で隠している間は、そちらが解けたときに戻る。
+        thumbnails.setHoldingForImport(false)
     }
     /// 設定や保存先を読まず、一覧の生成より先に完全なメニューを取り付ける。
     func installStatusMenu() {

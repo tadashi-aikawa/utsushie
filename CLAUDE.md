@@ -32,6 +32,7 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
   - `ToolbarPresentation.swift`: 編集画面の手引きの優先順位、範囲選択のツールバーの2段の配置と幅。
   - `UIPresentation.swift`: 範囲選択の寸法表示の配置と文言、共有カードの隅と積み方・ボタンの矩形・状態の文言、録画の表示文言。
   - `ImagePin.swift`: 浮かべた画像の見た目の寸法、撮った範囲への配置と画面への制限、カーソルを固定する拡大縮小、不透明度、×の矩形、出てくる演出の経過秒ごとの見た目。
+  - `CaptureImport.swift`: Finderから取り込むファイルの写し方、dpiからの倍率、WebPの寸法の上限、動画のfps、失敗の文言。
 - `Sources/Utsushie/`: AppKit・ScreenCaptureKit・ApplicationServicesの実行ターゲット。Swift 6。
   - `Main.swift`: アプリの入口。NSApplicationにAppDelegateを付けて走らせる。
   - `AppDelegate.swift`: メニュー、権限、設定の再読込、撮影から共有までの流れ。
@@ -62,6 +63,8 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
   - `ThumbnailController.swift`: 非アクティブカード、寿命、D&D、追加保存、2回押しのゴミ箱。
   - `ImagePinController.swift`: 撮った画像を最前面に浮かべる非アクティブのパネル、移動・拡大縮小・透かし・閉じる操作、影・画像・ピンの3枚に分けた出てくる演出。
   - `RecentCaptureStore.swift`: 保存フォルダの一覧、WebP・MP4の寸法とサムネイル、再表示用の元画像と注釈履歴。
+  - `CaptureImporter.swift`: Finderから渡された画像のWebP化と動画のMP4化、保存フォルダへの書き込み。
+  - `FinderImportService.swift`: 右クリックのサービス「UTSUSHIEで編集」の受け口。
   - `CaptureLibraryController.swift`: 撮影の一覧ウィンドウ、セルの再利用、可視項目の縮小読み込み、Quick Lookとキー操作。
   - `CaptureLibraryFileActions.swift`: 一括のゴミ箱移動の結果、画像と動画が混ざる複数コピーの準備。
   - `AnnotationEditorController.swift`: 注釈編集ウィンドウ、ジェスチャー、標準文字入力、表示時のアプリのアクティベーション。
@@ -388,6 +391,30 @@ UTSUSHIE(写絵)は、画面をWebP画像またはMP4動画で保存し、クリ
     - 削除の確認中: 最後は「Esc 確認解除」にします。
   - ホットキー: 任意の[libraryHotkey]を使います。未指定・不正・撮影と重複なら一覧分だけ登録しません。
     - Carbon: 撮影と一覧で別IDを使い、受信イベントのIDを照合します。
+- Finderの右クリックから、画像・動画を保存フォルダへ写して撮影と同じ流れに乗せます。
+  - 理由: 外の画像を直接編集すると、実体の置き場所と元を書き換えるかを決めることになるためです。写せば以後はカード・編集・一覧をそのまま使えます。
+  - 入口: `NSServices`の「UTSUSHIEで編集」と、`CFBundleDocumentTypes`の`LSHandlerRank = Alternate`による「このアプリケーションで開く」です。
+    - 受け手: どちらも`AppDelegate.importFiles`へ集めます。サービスの受け手は`applicationWillFinishLaunching`で置き、起動の準備が終わるまで溜めます。
+      - 理由: 起動していないときの右クリックでは、起動の途中で依頼が届くためです。
+    - Alternate: 既定のアプリを奪わずに候補へ並べるだけです。
+  - 写し方: `CaptureImport.action`が決めます。
+    - 画像: ImageIOで最初の1枚をEXIFの向きどおりに読み、設定の品質でWebPにします。1辺16383pxを超えれば取り込みません。
+    - WebP: 読めることを確かめてからバイト列をそのまま写します。再圧縮で劣化させないためです。
+    - 動画: MP4はそのまま写し、MOVなどはpassthroughでMP4へ入れ替えます。入らなければ再エンコードします。
+      - 向き: 映像トラックに向きの指定があれば、`AVVideoComposition`で焼き込みます。
+        - 理由: 編集の書き出しは向きの指定をWriterへ引き継ぎますが、ズームの矩形と早送りの印は回す前の画素の向きで計算するためです。向きの指定が残ると、編集画面で見た位置とずれます。
+      - 公開: 録画と同じく隠し一時ファイル`.utsushie-import-<UUID>.mp4`へ書き、`publishVideo`で改名します。
+    - 保存フォルダ直下のWebP・MP4: 写さず、`thumbnails.restore`でそのファイルのカードを出します。隠しファイルと`.recording.mp4`は写します。
+  - 名前: 撮影と同じ`[file] name`の書式で、取り込んだ日時です。
+  - 倍率: 144dpiの画像だけ2x、それ以外は1xです。Retinaのスクリーンショットが144dpiで書かれるためです。
+  - クリップボード: 取り込みでは変えません。元の画像はFinderにあるためです。保存したときに撮影の編集と同じく載せます。
+  - 複数: 全部をカードにしてから、最初の1件だけ編集画面を開きます。
+    - キー: `ThumbnailController.edit`がキーの受け手を開くカードにします。後から出すカードが編集画面から入力を奪わないためです。
+    - 寿命: 取り込みと知らせの間は`setHoldingForImport`でカードを隠して寿命を止めます。動画の変換を待つ間に、先に足したカードが消えないためです。
+      - 撮影: 撮影・録画の`setSuspended`とは別に持ち、どちらも解けたときだけカードを出します。取り込みの途中で選択画面を開閉しても保持が解けないためです。
+  - 失敗: 取り込めなかったファイルはまとめて1回のアラートで知らせ、閉じてから編集画面を開きます。写しかけのファイルは残しません。
+  - 診断: `Import`カテゴリのdebugログに、サービスで受けたペーストボードの型と件数、取り込みの件数を残します。失敗はnoticeです。
+    - 試験: `NSPerformService`で試すときは、Finderと同じく`NSFilenamesPboardType`も載せます。`NSURL`だけを書いたペーストボードは、空で届きました。
 - 再表示用の画像状態はRecentImageMemoryに保持します。
   - 上限: フォルダ内の最近10件に含まれる画像だけです。動画も10件の枠を使います。
   - 状態: 元のCGImageとAnnotationHistoryをカードと共有し、保存成功後だけ履歴を更新します。

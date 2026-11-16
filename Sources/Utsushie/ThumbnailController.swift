@@ -7,6 +7,8 @@ final class ThumbnailController {
     private var libraryCards: [ThumbnailCard] = []
     private var allCards: [ThumbnailCard] { cards + libraryCards }
     private var suspended = false
+    private var holdingForImport = false
+    private var hidden: Bool { suspended || holdingForImport }
     private var editingCards: Set<UUID> = []
     private var removingURLs: Set<URL> = []
     private var keyboardTargetID: UUID?
@@ -68,7 +70,7 @@ final class ThumbnailController {
             guard let card else { return }
             self?.onLibraryExportStatus?(card.artifact.url, status)
         }
-        card.canShow = { [weak self] in !libraryOnly && self?.suspended == false }
+        card.canShow = { [weak self] in !libraryOnly && self?.hidden == false }
         card.prepareToShow = { [weak self, weak card] in
             guard let prepare = self?.beforeShowingCard, let card else { return nil }
             return Task { await prepare(card.panel) }
@@ -104,7 +106,7 @@ final class ThumbnailController {
         if !libraryOnly {
             keyboardTargetID = card.id
             updateKeyboardTarget(); layout()
-            if !suspended { card.show() }
+            if !hidden { card.show() }
             onCardAdded?()
         }
         return card.id
@@ -116,9 +118,25 @@ final class ThumbnailController {
     func remove(_ id: UUID) {
         cards.first { $0.id == id }?.onClose?()
     }
+    /// 撮影したカードのEと同じく、カードを隠して編集画面を開く。一覧専用のカードも、restoreが返したものを開く。
+    /// キーの受け手もこのカードにし、後から表示するほかのカードに編集画面のキーを取らせない。
+    /// 一覧専用のカードはキーを持たないので、表示中のカードはどれも受け手でなくなる。
+    func edit(_ id: UUID) {
+        guard let card = allCards.first(where: { $0.id == id }) else { return }
+        keyboardTargetID = id; updateKeyboardTarget()
+        // 同じファイルの編集画面が開いていれば、新しく開かずに前へ出す。
+        if card.editor != nil || card.videoEditor != nil { card.bringForward() } else { card.edit() }
+    }
+    /// 撮影・録画の間はカードを隠す。取り込みの保持とは別に持ち、どちらも解けたときだけ戻す。
     func setSuspended(_ value: Bool) {
-        suspended = value
-        cards.forEach { value ? $0.hide() : $0.show() }
+        suspended = value; applyVisibility()
+    }
+    /// Finderからの取り込みの間はカードを隠して寿命を止める。動画の変換を待つ間に、先に足したカードが消えないため。
+    func setHoldingForImport(_ value: Bool) {
+        holdingForImport = value; applyVisibility()
+    }
+    private func applyVisibility() {
+        cards.forEach { hidden ? $0.hide() : $0.show() }
     }
     func card(for url: URL) -> ThumbnailCard? {
         allCards.first { $0.artifact.url.standardizedFileURL == url.standardizedFileURL }
@@ -221,7 +239,7 @@ final class ThumbnailController {
     private func bringForward(_ card: ThumbnailCard) {
         keyboardTargetID = card.id; updateKeyboardTarget()
         card.restartLifetime()
-        if !suspended { card.bringForward() }
+        if !hidden { card.bringForward() }
     }
     private func updateKeyboardTarget() {
         for card in cards { card.setKeyboardTarget(card.id == keyboardTargetID) }
