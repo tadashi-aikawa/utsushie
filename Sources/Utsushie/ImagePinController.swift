@@ -222,12 +222,13 @@ final class ImagePinView: NSView {
             (NSColor.black.withAlphaComponent(0.5), CGSize(width: 0, height: 10), 28),
             (NSColor.black.withAlphaComponent(0.35), CGSize(width: 0, height: 1), 3),
         ]
-        static let pin = ImagePinLook.orange
+        static let pin = ImagePinLook.red
     }
     /// 台紙と外縁の色。見た目の案を差し替えて描けるよう、ビューごとに持つ。
     var paper: NSColor = Style.paper { didSet { redraw() } }
     var edgeColor: NSColor = Style.edge { didSet { redraw() } }
     var edgeWidth: CGFloat = 1 { didSet { redraw() } }
+    var pinLook: ImagePinLook = Style.pin { didSet { redraw() } }
     /// 影と、縁・ピン・×・値のバッジを描き直す。画像は寸法が変わったときだけ描き直す。
     private func redraw() { needsDisplay = true; overlay.needsDisplay = true }
     /// 今の見た目。演出の外では止まった見た目。
@@ -342,7 +343,10 @@ final class ImagePinView: NSView {
     @objc private func stepEntrance(_ link: CADisplayLink) {
         let start = entranceStart ?? link.timestamp
         entranceStart = start
-        let time = link.targetTimestamp - start
+        advanceEntrance(to: link.targetTimestamp - start)
+    }
+    /// 経過秒を進める。演出の長さに着いたら更新を止め、止まった見た目へ戻す。
+    func advanceEntrance(to time: Double) {
         if time >= ImagePinEntrance.duration { endEntrance() } else { entranceTime = time }
     }
     func endEntrance() {
@@ -417,7 +421,7 @@ final class ImagePinView: NSView {
     /// `tip`は針の先。頭は時計回りに傾けて右上へ出し、紙のすぐ上に立つ硬い影を落とす。
     /// 出てくるときは針の先を中心に手前で大きく、影は遠く薄く落とし、刺さるにつれて止まったときの影へ寄せる。
     private func drawPin(tip: CGPoint, entrance: ImagePinEntrance.Frame = .rest) {
-        let look = Style.pin
+        let look = pinLook
         guard entrance.pinOpacity > 0, let context = NSGraphicsContext.current?.cgContext else { return }
         context.saveGState()
         // 透明レイヤーは切り抜きの大きさで作られる。大きい画像で毎コマ全体を合成すると重いので、ピンと影の周りへ絞る。
@@ -499,6 +503,7 @@ struct ImagePinLook: Sendable {
     /// 針の先から頭の端まで。22ptでは控えめで目立たなかったため大きくした。
     var length: CGFloat = 30
 
-    /// 橙の頭。注釈のインクの橙を流用し、色の約束に当たらない。墨は暗い画像の上で沈み、地味だったため。
-    static let orange = ImagePinLook(head: NSColor(srgbRed: 0xF0 / 255, green: 0x8A / 255, blue: 0x24 / 255, alpha: 1))
+    /// 紅の頭。押しピンらしく目立たせる。橙は目立たず、墨は暗い画像の上で沈んだため。
+    /// 録画・削除の朱とは別の、少し青みに寄せた色にして、意味を持つ赤いUIと取り違えないようにする。
+    static let red = ImagePinLook(head: NSColor(srgbRed: 0xD4 / 255, green: 0x1E / 255, blue: 0x3C / 255, alpha: 1))
 }

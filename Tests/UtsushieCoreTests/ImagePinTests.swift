@@ -94,7 +94,7 @@ import Testing
     #expect(lifts.allSatisfy { $0.imageScale >= 1 && $0.imageScale <= E.swell })
     // 止まったときの見た目は、演出の無い浮かべた画像と同じ。
     #expect(E.frame(at: E.duration) == .rest && E.frame(at: 10) == .rest && E.frame(at: .nan) == .rest)
-    #expect(abs(E.duration - 0.6) < 0.0001)
+    #expect(abs(E.duration - 0.5) < 0.0001)
 }
 
 @Test func pinMarginHoldsThePinWhileItComesFromTheFront() {

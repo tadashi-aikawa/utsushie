@@ -138,11 +138,17 @@ import UtsushieCore
     // 出した直後から演出が進み、止まった見た目へ戻る。画像の枠は演出の間も動かさない。
     let frame = pin.imageFrame
     #expect(view.entranceTime != nil)
-    let started = ContinuousClock.now
+    // 画面の更新で経過秒が進む。保険の時間切れは途中の値を経ずに止めるので、途中の値が見えれば更新で進んでいる。
+    // 経過時間では測らない。ほかの試験と並ぶと更新が遅れ、時間切れと見分けられないため。
+    try await waitFor { (view.entranceTime ?? 0) > 0 }
     try await waitFor { view.entranceTime == nil }
-    // 画面の更新で進めて止まる。保険の時間切れ(演出の長さ+0.5秒)より前に終わる。
-    #expect(ContinuousClock.now - started < .seconds(ImagePinEntrance.duration + 0.3))
     #expect(pin.imageFrame == frame)
+    // 更新が演出の長さに着いたら、保険を待たずにその場で止まる。
+    view.beginEntrance()
+    view.advanceEntrance(to: ImagePinEntrance.duration / 2)
+    #expect(view.entranceTime == ImagePinEntrance.duration / 2)
+    view.advanceEntrance(to: ImagePinEntrance.duration)
+    #expect(view.entranceTime == nil)
     // 演出の途中で閉じても、画面の更新を止める。
     let second = controller.show(try pinImage(width: 200, height: 100), scale: 1, anchor: nil, screen: NSScreen.main)
     let secondView = try #require(second.panel.contentView as? ImagePinView)

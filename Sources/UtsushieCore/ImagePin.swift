@@ -104,18 +104,18 @@ public enum ImagePinGeometry {
 /// 画像は最初から影なしで出ているので、撮った範囲にぴったり重なっていれば初めは何も変わらないように見える。
 public enum ImagePinEntrance {
     /// ピンが手前から刺さるまで。
-    public static let approach: Double = 0.24
+    public static let approach: Double = 0.2
     /// 刺さった後に少し沈んで戻るまで。影と並んで進む。
-    public static let settle: Double = 0.09
+    public static let settle: Double = 0.075
     /// 刺さった瞬間から、影が広がりきるまで。
-    public static let lift: Double = 0.36
+    public static let lift: Double = 0.3
     public static var duration: Double { approach + lift }
     /// 手前にいるときのピンの大きさ。
     public static let startScale: Double = 2.4
     /// 刺さった瞬間に沈む大きさ。
     public static let impactScale: Double = 0.9
     /// 持ち上がる途中で画像が膨らむ大きさ。撮った範囲から一瞬ずれるが、近づいた感じを出す。
-    public static let swell: Double = 1.025
+    public static let swell: Double = 1.015
     /// 膨らみきる位置。持ち上がる長さのうちの割合。
     static let swellPeak: Double = 0.45
     /// ピンが見えるようになるまで。
