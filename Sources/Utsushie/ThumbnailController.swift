@@ -13,6 +13,8 @@ final class ThumbnailController {
     private var removingURLs: Set<URL> = []
     private var keyboardTargetID: UUID?
     let recentImages = RecentImageMemory()
+    /// ファイルへ書き出す・変換する非同期の作業。一覧を閉じてカードが外れても、終わるまで数える。
+    let backgroundWork = BackgroundWorkTracker()
     /// 設定の再読込で変わったら、表示中のカードも新しい隅へ積み直す。
     var corner: CardCorner = .bottomRight { didSet { if corner != oldValue { layout() } } }
     var annotationConfig: () -> UtsushieConfig = { ConfigLoader.load().config }
@@ -40,6 +42,7 @@ final class ThumbnailController {
         card.screen = screen ?? NSScreen.main ?? NSScreen.screens.first
         card.editorFocus = editorFocus
         card.makeVideoSession = makeVideoSession
+        card.backgroundWork = backgroundWork
         card.onEditingChange = { [weak self, weak card] editing in
             guard let self, let card else { return }
             if editing { editingCards.insert(card.id) } else { editingCards.remove(card.id) }
@@ -178,6 +181,8 @@ final class ThumbnailController {
                            anchor: artifact?.captureFrame, screen: screen)
     }
     func pruneMemory(to files: [RecentCaptureFile]) { recentImages.retain(files) }
+    /// 開いている編集画面。ファイルへ書く作業はカードの寿命と切り離して`backgroundWork`で数える。
+    var hasEditorOpen: Bool { !editingCards.isEmpty }
     func isRemoving(_ url: URL) -> Bool { removingURLs.contains(url.standardizedFileURL) }
     func canRemoveFromLibrary(_ url: URL) -> Bool {
         guard !removingURLs.contains(url.standardizedFileURL) else { return false }
@@ -202,7 +207,9 @@ final class ThumbnailController {
         guard canRemoveFromLibrary(url) else { return }
         reserveLibraryRemoval([url])
         let trash = trashFiles
+        backgroundWork.begin(.trash)
         trashTask = Task { [self] in
+            defer { backgroundWork.end(.trash) }
             // 移し終えたらforgetLibraryFilesがカードを閉じ、動画の隠し元も後片付けする。
             let result = await Task.detached(priority: .userInitiated) { trash([url]) }.value
             finishLibraryRemoval([url], removed: result.removed)
@@ -311,6 +318,8 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         ClipboardWriter.copy($0, mode: $1, to: .general, preservingOnFailure: true)
     }
     var makeVideoSession: (SharedArtifact, Int) -> VideoEditSession = { VideoEditSession(artifact: $0, fps: $1) }
+    /// 書き出しの開始から完了までを数える先。カードの寿命と切り離すため、コントローラーが持つ。
+    var backgroundWork: BackgroundWorkTracker?
     var canEdit: Bool { !finalizing && !removalPending && (artifact.kind == .mp4 || imageState != nil) }
     var canDrag: Bool { !finalizing && !removalPending }
     var canTrash: Bool { !finalizing && !removalPending && editor == nil && videoEditor == nil && !closed }
@@ -496,6 +505,10 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         onEditingChange?(true)
         controller.onComplete = { [weak self, weak controller] image, _ in
             guard let self, let controller else { return }
+            // 一覧を閉じて編集画面とカードが外れても、置き換え終わるまで数える。
+            let work = self.backgroundWork
+            work?.begin(.annotationSave)
+            defer { work?.end(.annotationSave) }
             let config = self.annotationConfig()
             let data = try await Task.detached(priority: .userInitiated) {
                 try WebPEncoder.encode(image, quality: config.quality, lossless: config.lossless)
@@ -538,8 +551,10 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             let config = annotationConfig()
             finalizing = true; pauseTimer(); view.copied = false; view.refreshControls(); view.needsDisplay = true
             onExportStatus?("書き出し中…")
+            let work = backgroundWork
+            work?.begin(.videoExport)
             Task { [self] in
-                defer { if closed { session.close() } }
+                defer { if closed { session.close() }; work?.end(.videoExport) }
                 do {
                     let result = try await session.finish(artifact: artifact, config: config) {
                         copyEntries($0, config.clipboard)
@@ -608,6 +623,9 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         disarmTrash(.click)
         guard !saving, !finalizing else { return }
         saving = true; pauseTimer(); releaseKeys()
+        // 保存先を選ぶパネルはカードと別に残るので、閉じて書き終えるまで数える。
+        let work = backgroundWork
+        work?.begin(.saveCopy)
         let save = NSSavePanel()
         save.nameFieldStringValue = artifact.url.lastPathComponent
         save.directoryURL = artifact.url.deletingLastPathComponent()
@@ -615,6 +633,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         save.canCreateDirectories = true
         NSApp.activate()
         save.begin { [weak self] response in
+            defer { work?.end(.saveCopy) }
             guard let self else { return }
             if response == .OK, let target = save.url, target != self.artifact.url {
                 do {

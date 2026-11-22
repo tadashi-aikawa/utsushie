@@ -13,6 +13,63 @@ import Testing
     #expect(result.warnings.isEmpty)
     #expect(result.config == UtsushieConfig())
 }
+@Test func ensureFileWritesTemplateOnlyWhenMissing() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("utsushie-config-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appendingPathComponent("nested/config.toml")
+    try ConfigLoader.ensureFileExists(at: url)
+    #expect(try String(contentsOf: url, encoding: .utf8) == ConfigLoader.template)
+    // 書き出した雛形を読むと、ファイルが無いときと同じ既定になる。
+    #expect(ConfigLoader.load(from: url).config == ConfigLoader.load(from: dir.appendingPathComponent("missing.toml")).config)
+    try "outputDir = \"/tmp/x\"\n".write(to: url, atomically: true, encoding: .utf8)
+    try ConfigLoader.ensureFileExists(at: url)
+    #expect(try String(contentsOf: url, encoding: .utf8) == "outputDir = \"/tmp/x\"\n")
+}
+@Test func ensureFileRejectsBrokenSymlinkWithoutReplacingIt() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("utsushie-config-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("config.toml")
+    try FileManager.default.createSymbolicLink(at: url, withDestinationURL: dir.appendingPathComponent("dotfiles/config.toml"))
+    #expect(ConfigLoader.isBrokenSymlink(url))
+    #expect(throws: ConfigFileError("設定ファイルのシンボリックリンクのリンク先がありません: \(url.path)")) { try ConfigLoader.ensureFileExists(at: url) }
+    #expect(ConfigLoader.isBrokenSymlink(url))
+    #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("dotfiles").path))
+}
+@Test func templateWriteKeepsFileMadeAfterTheCheck() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("utsushie-config-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    // 存在を確かめた後に別のプロセスが作った、という場面を直接書き込みで作る。
+    let file = dir.appendingPathComponent("config.toml")
+    try "outputDir = \"/tmp/x\"\n".write(to: file, atomically: true, encoding: .utf8)
+    try ConfigLoader.writeTemplate(to: file)
+    #expect(try String(contentsOf: file, encoding: .utf8) == "outputDir = \"/tmp/x\"\n")
+    let link = dir.appendingPathComponent("linked.toml")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: dir.appendingPathComponent("missing/config.toml"))
+    #expect(throws: ConfigFileError("設定ファイルのシンボリックリンクのリンク先がありません: \(link.path)")) { try ConfigLoader.writeTemplate(to: link) }
+    #expect(ConfigLoader.isBrokenSymlink(link))
+    // 置けなかった一時ファイルは残さない。
+    #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == ["config.toml", "linked.toml"])
+}
+@Test func templateWriteLeavesNoTemporaryFileWhenPlacementFails() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("utsushie-config-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    // 一時ファイルは書けるが、最終のパスは名前が長すぎて置けない。
+    let url = dir.appendingPathComponent(String(repeating: "a", count: 300) + ".toml")
+    #expect(throws: POSIXError(.ENAMETOOLONG)) { try ConfigLoader.writeTemplate(to: url) }
+    #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).isEmpty)
+}
+@Test func templateWritePlacesCompleteTemplate() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("utsushie-config-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("config.toml")
+    try ConfigLoader.writeTemplate(to: url)
+    #expect(try String(contentsOf: url, encoding: .utf8) == ConfigLoader.template)
+    #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["config.toml"])
+}
 @Test func customizedSettings() {
     let result = ConfigLoader.parse(toml: """
     outputDir = "/tmp/captures"

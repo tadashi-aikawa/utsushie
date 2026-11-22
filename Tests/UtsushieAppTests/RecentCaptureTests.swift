@@ -373,6 +373,63 @@ func libraryRestoresSavedFrameBeforeAttachingDelegateAndKeepsGridPositive(_ save
     #expect(menu.items.contains { $0.title == "UTSUSHIEを終了" && $0.target === delegate })
 }
 
+@MainActor @Test func applicationMenuStartsWithVersionAndUpdateCheck() throws {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    defer { delegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification, object: app)) }
+    delegate.installStatusMenu()
+    let menu = try #require(delegate.installedStatusMenu)
+    // 区切り線は"-"、警告は空の題で並ぶ。
+    let titles = menu.items.map { $0.isSeparatorItem ? "-" : $0.title }
+    #expect(titles.count == 11)
+    #expect(titles.first?.hasPrefix("UTSUSHIE ") == true && !menu.items[0].isEnabled)
+    #expect(Array(titles.dropFirst()) == ["アップデートを確認…", "-", "撮影", "-", "撮影の一覧を開く", "保存フォルダを開く", "設定ファイルを開く", "", "-", "UTSUSHIEを終了"])
+    #expect(menu.items[1].target === delegate && menu.items[1].action == NSSelectorFromString("checkForUpdates"))
+}
+
+@MainActor @Test func videoExportCountOutlivesLibraryCard() throws {
+    let thumbnails = recentController()
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
+    thumbnails.add(SharedArtifact(url: url, kind: .mp4, width: 2, height: 2, byteCount: 0, duration: 1),
+                   image: nil, copied: false, seconds: 100, screen: nil, libraryOnly: true)
+    let card = try #require(thumbnails.card(for: url))
+    let work = try #require(card.backgroundWork)
+    #expect(work === thumbnails.backgroundWork)
+    // 書き出しの途中で一覧を閉じ、一覧専用のカードが外れても数え続ける。
+    work.begin(.videoExport)
+    card.onClose?()
+    #expect(thumbnails.card(for: url) == nil)
+    #expect(thumbnails.backgroundWork.count.isActive(.videoExport))
+    work.end(.videoExport)
+    #expect(!thumbnails.backgroundWork.count.isActive(.videoExport))
+}
+
+@MainActor @Test func annotationSaveCountOutlivesLibraryCardAndEditor() async throws {
+    let dir = try recentDirectory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let original = try recentImage(), thumbnails = recentController()
+    let artifact = try recentArtifact(original, in: dir)
+    thumbnails.add(artifact, image: original, copied: false, seconds: 100, screen: nil, imageState: ImageEditState(original: original, scale: nil),
+                   libraryOnly: true)
+    let card = try #require(thumbnails.card(for: artifact.url))
+    card.edit()
+    let editor = try #require(card.editor)
+    let board = NSPasteboard.withUniqueName()
+    defer { board.releaseGlobally() }
+    var countedWhileClosing = false
+    card.copyImage = { entry, data, mode in
+        // エンコードの後、置き換えの途中で一覧を閉じ、編集画面と一覧専用のカードが外れた場面。
+        editor.window.close(); card.onClose?()
+        countedWhileClosing = thumbnails.card(for: artifact.url) == nil && !thumbnails.hasEditorOpen
+            && thumbnails.backgroundWork.count.isActive(.annotationSave)
+        return ClipboardWriter.copy(entry, data: data, mode: mode, to: board)
+    }
+    let image = try AnnotationRenderer.compose(original, document: editor.canvas.document)
+    try await editor.onComplete?(image, editor.canvas.document)
+    #expect(countedWhileClosing)
+    #expect(thumbnails.backgroundWork.count.isIdle)
+}
+
 @MainActor @Test func saveWarningStaysInMenuAfterConfigurationWarningsAreReplaced() throws {
     let app = NSApplication.shared
     let delegate = AppDelegate()

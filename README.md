@@ -31,9 +31,27 @@
 brew install --cask tadashi-aikawa/tap/utsushie
 ```
 
-アップデートは `brew upgrade --cask utsushie` です。
-
 手動で入れる場合は、[Releases](https://github.com/tadashi-aikawa/utsushie/releases/latest) から `UTSUSHIE-<version>.zip` をダウンロード・展開し、`UTSUSHIE.app` を `/Applications` に移動します。
+
+### アップデート
+
+メニューの「アップデートを確認…」で、新しいバージョンがあるかを確かめられます。
+
+Homebrewで入れた場合は、次のコマンドで更新します。
+
+```sh
+brew update && brew upgrade --cask utsushie && open -a UTSUSHIE
+```
+
+- メニューの「アップデートを確認…」で「コマンドをコピーして終了」を選ぶと、コマンドをコピーしてUTSUSHIEは終了します。そのままターミナルへ貼って実行してください。
+- 録画・保存・書き出し・取り込み・ゴミ箱への移動の途中と、編集画面を開いている間は「コマンドをコピー」になり、UTSUSHIEは終了しません。作業を終えてから自分でUTSUSHIEを終了し、コマンドを実行してください。
+- コマンドを直接実行するときは、先にUTSUSHIEを終了してください。
+
+手動で入れた場合は、次の順で入れ替えます。
+
+1. UTSUSHIEを終了する
+2. 新しい`UTSUSHIE.app`で`/Applications`の`UTSUSHIE.app`を置き換える
+3. UTSUSHIEを起動する
 
 > [!NOTE]
 > UTSUSHIEは自己署名の未公証アプリです。初回起動がブロックされた場合は、システム設定 → プライバシーとセキュリティ →「このまま開く」で許可してください。
@@ -331,6 +349,20 @@ Finderで画像・動画を右クリックして「UTSUSHIEで編集」を選ぶ
 | ⌘Z / ⇧⌘Z | 取り消し・やり直し |
 | ⌘↩ | 完了 |
 | Q / ⌘W | 破棄する。変更があれば2回押す |
+
+## メニュー
+
+メニューバーのアイコンから開きます。
+
+| 項目 | 動作 |
+| --- | --- |
+| UTSUSHIE \<version\> | 今のバージョン |
+| アップデートを確認… | 新しいバージョンがあるかを確かめる。Homebrewで入れた場合は、更新のコマンドをコピーしてUTSUSHIEを終了できる |
+| 撮影 | ホットキーと同じく範囲選択を開く |
+| 撮影の一覧を開く | 保存した画像・動画の一覧を開く |
+| 保存フォルダを開く | 保存フォルダをFinderで開く |
+| 設定ファイルを開く | 設定ファイルを開く。無ければ雛形を作る。`.toml`を開くアプリが無ければテキストエディットで開く |
+| UTSUSHIEを終了 | 終了する |
 
 ## 設定
 

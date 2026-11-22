@@ -61,11 +61,47 @@ public struct ConfigResult: Sendable {
     public var config: UtsushieConfig
     public var warnings: [String]
 }
+public struct ConfigFileError: LocalizedError, Equatable {
+    public let message: String
+    public init(_ message: String) { self.message = message }
+    public var errorDescription: String? { message }
+}
 public enum ConfigLoader {
     public static func directory(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
         home.appendingPathComponent(".config/utsushie", isDirectory: true)
     }
     public static func defaultPath() -> URL { directory().appendingPathComponent("config.toml") }
+    /// 設定ファイルがシンボリックリンクで、リンク先が無いか。
+    /// dotfilesでリンクにしている場合、雛形で実体を作るとリンクを潰すため。
+    public static func isBrokenSymlink(_ url: URL) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == .typeSymbolicLink else { return false }
+        return !FileManager.default.fileExists(atPath: url.path)
+    }
+    /// 開く前に、無ければ親ディレクトリと雛形を作る。リンク切れなら作らずにエラーにする。
+    public static func ensureFileExists(at url: URL = defaultPath()) throws {
+        if isBrokenSymlink(url) { throw brokenSymlinkError(url) }
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try writeTemplate(to: url)
+    }
+    /// 同じディレクトリの隠し一時ファイルへ最後まで書き、`link(2)`で最終のパスへ置く。
+    /// 途中までのファイルを設定として残さず、確かめてから置くまでに別のプロセスが作ったファイルやリンクも置き換えない。
+    /// できていたファイルはそのまま開く。リンク先の無いリンクならエラーにする。
+    static func writeTemplate(to url: URL) throws {
+        let temporary = url.deletingLastPathComponent().appendingPathComponent(".utsushie-config-\(UUID().uuidString).tmp")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try Data(template.utf8).write(to: temporary, options: .withoutOverwriting)
+        let code = temporary.withUnsafeFileSystemRepresentation { source in
+            url.withUnsafeFileSystemRepresentation { target in link(source!, target!) == 0 ? 0 : errno }
+        }
+        guard code != 0 else { return }
+        guard code == EEXIST else { throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO) }
+        if isBrokenSymlink(url) { throw brokenSymlinkError(url) }
+    }
+    private static func brokenSymlinkError(_ url: URL) -> ConfigFileError {
+        ConfigFileError("設定ファイルのシンボリックリンクのリンク先がありません: \(url.path)")
+    }
     public static func load(from url: URL = defaultPath()) -> ConfigResult {
         guard FileManager.default.fileExists(atPath: url.path) else { return ConfigResult(config: .init(), warnings: []) }
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {

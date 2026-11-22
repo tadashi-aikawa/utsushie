@@ -317,8 +317,10 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         thumbnails.reserveLibraryRemoval(targets)
         message = "ゴミ箱へ移しています \(targets.count)件"; updateFooter()
         let trash = trashFiles
+        let work = thumbnails.backgroundWork
+        work.begin(.trash)
         actionTask = Task { [self] in
-            defer { actionTask = nil }
+            defer { actionTask = nil; work.end(.trash) }
             // 開始済みの移動は一覧を閉じても完了させ、カードと元録画を必ず後片付けする。
             let result = await Task.detached(priority: .userInitiated) { trash(targets) }.value
             thumbnails.finishLibraryRemoval(targets, removed: result.removed)
@@ -387,7 +389,11 @@ final class CaptureLibraryController: NSWindowController, NSWindowDelegate, NSCo
         save.allowedContentTypes = [UTType(filenameExtension: url.pathExtension) ?? .data]
         save.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .OK, let target = save.url, target.standardizedFileURL != url.standardizedFileURL else { return }
+            // 一覧を閉じても書き終えるまで数える。
+            let work = thumbnails.backgroundWork
+            work.begin(.saveCopy)
             self.actionTask = Task { [weak self] in
+                defer { work.end(.saveCopy) }
                 guard let self else { return }; defer { actionTask = nil }
                 do {
                     try await Task.detached(priority: .userInitiated) {

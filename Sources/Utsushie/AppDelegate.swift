@@ -15,10 +15,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let capture = CaptureService()
     private let thumbnails = ThumbnailController()
     private var captureLibrary: CaptureLibraryController?
+    private let updater = UpdaterFeature()
     var installedStatusMenu: NSMenu? { statusItem?.menu }
     private let annotationNavigationDiagnostics = AnnotationNavigationDiagnostics()
     private let recordingBorder = RecordingBorder()
     private var recordingState = RecordingState()
+    /// 停止の操作から、録画・スクロール撮影のストリームが止まり切るまで。この間もアップデートのアラートを出さない。
+    private var stoppingStream = false
+    /// 選択画面を閉じてから、画像の撮影で実画面を取得し終えるまで。この間もアップデートのアラートを出さない。
+    private var capturingScreen = false
     private var activeRecording: RecordingService?
     /// スクロール撮影。録画と同じ`recordingState`・暗幕・メニューバーのバッジを使う。
     private var activeScroll: ScrollCaptureService?
@@ -109,7 +114,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         importLog.debug("import requested: files=\(urls.count, privacy: .public) launched=\(self.launched, privacy: .public)")
         guard launched else { pendingImports += urls; return }
         let previous = importTask
+        // 前の取り込みを待つ間も、写す前のファイルがあるので数える。
+        let work = thumbnails.backgroundWork
+        work.begin(.importFiles)
         importTask = Task {
+            defer { work.end(.importFiles) }
             await previous?.value
             await runImport(urls)
         }
@@ -159,21 +168,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.imageScaling = .scaleProportionallyDown
         statusItem.button?.image = Self.logoIcon ?? NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "UTSUSHIE")
         let menu = NSMenu(); menu.delegate = self; menu.autoenablesItems = false
-        for (title, selector) in [("撮影", #selector(shoot)), ("保存フォルダを開く", #selector(openFolder)), ("設定ファイルを開く", #selector(openConfig))] {
-            let item = NSMenuItem(title: title, action: selector, keyEquivalent: ""); item.target = self; menu.addItem(item)
-            if selector == #selector(shoot) { shootItem = item }
-            if selector == #selector(shoot) { menu.addItem(.separator()) }
+        func add(_ title: String, _ selector: Selector, key: String = "") -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: selector, keyEquivalent: key); item.target = self; menu.addItem(item)
+            return item
         }
-        libraryItem = NSMenuItem(title: "撮影の一覧を開く", action: #selector(openLibrary), keyEquivalent: "")
-        libraryItem.target = self; menu.insertItem(libraryItem, at: 2)
-        warningItem = NSMenuItem(title: "", action: #selector(showWarnings), keyEquivalent: "")
-        warningItem.target = self; menu.addItem(warningItem)
-        warningItem.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "設定の警告")
-        menu.addItem(.separator())
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "開発版"
         let versionItem = NSMenuItem(title: "UTSUSHIE \(version)", action: nil, keyEquivalent: "")
         versionItem.isEnabled = false; menu.addItem(versionItem)
-        let quit = NSMenuItem(title: "UTSUSHIEを終了", action: #selector(quitApp), keyEquivalent: "q"); quit.target = self; menu.addItem(quit)
+        _ = add("アップデートを確認…", #selector(checkForUpdates))
+        menu.addItem(.separator())
+        shootItem = add("撮影", #selector(shoot))
+        menu.addItem(.separator())
+        libraryItem = add("撮影の一覧を開く", #selector(openLibrary))
+        _ = add("保存フォルダを開く", #selector(openFolder))
+        _ = add("設定ファイルを開く", #selector(openConfig))
+        warningItem = add("", #selector(showWarnings))
+        warningItem.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: "設定の警告")
+        menu.addItem(.separator())
+        _ = add("UTSUSHIEを終了", #selector(quitApp), key: "q")
+        updater.workState = { [unowned self] in updateWorkState }
+        updater.quit = { [unowned self] in quitApp() }
         statusMenu = menu
         statusItem.menu = menu
         statusItem.button?.target = self; statusItem.button?.action = #selector(statusClicked)
@@ -390,8 +404,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordingBorder.close(); borderRect = nil; updateRecordingStatus()
         let screen = NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == session.displayID }
         let snapshot = recordingConfig
+        stoppingStream = true
         Task {
             await session.stop()
+            stoppingStream = false
             if let result = await session.finish() {
                 do {
                     let image = result.image
@@ -498,9 +514,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         thumbnails.setSuspended(true)
         recordingBorder.close(); borderRect = nil; updateRecordingStatus()
         let screen = NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == session.displayID }
+        stoppingStream = true
         Task {
             // 停止中の最後のコマへ新しいカードが写らないよう、停止完了を先に待つ。
             await session.stop()
+            stoppingStream = false
             thumbnails.beforeShowingCard = nil
             thumbnails.setSuspended(false)
             // finalizeが終わるまではファイルを共有させない。寿命も完了後から数える。
@@ -539,9 +557,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let snapshot = config
         let downscale = overlay.state.effectiveDownscale(config: snapshot)
         let frozen = overlay.frozen
+        // 止めた画面が無ければ、選択画面を閉じてから実画面を撮る。取り終えるまでアップデートのアラートを出さない。
+        // 選択画面が閉じた瞬間に待ちが解けないよう、閉じる前に立てる。
+        capturingScreen = frozen == nil
         overlay.close()
         let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: request.rect.midX, y: request.rect.midY)) }
+        let work = thumbnails.backgroundWork
+        work.begin(.captureSave)
         Task {
+            defer { work.end(.captureSave); capturingScreen = false }
             do {
                 let captured = if let frozen {
                     try await Task.detached(priority: .userInitiated) {
@@ -550,6 +574,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 } else {
                     try await capture.image(for: request, downscale: downscale, excluding: excluded)
                 }
+                capturingScreen = false
                 let image = captured.image
                 // エンコードとディスク書き込みはメインスレッドを塞がない。
                 let (data, saved) = try await Task.detached(priority: .userInitiated) {
@@ -583,14 +608,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSWorkspace.shared.open(config.outputURL())
         } catch { alert("保存フォルダを開けません", error.localizedDescription) }
     }
+    @objc private func checkForUpdates() { updater.checkForUpdates() }
+    /// ファイルへ書く作業はカードや一覧の寿命と切り離して`backgroundWork`で数える。
+    private var updateWorkState: UpdateWorkState {
+        UpdateWorkState(recording: recordingState.phase, stoppingStream: stoppingStream, fileWork: thumbnails.backgroundWork.count,
+                        editorOpen: thumbnails.hasEditorOpen, selecting: freezing || overlay.isVisible, capturingScreen: capturingScreen)
+    }
+    /// .tomlを開く既定のアプリが無いか開けなければ、テキストエディットで開く。
     @objc private func openConfig() {
-        do {
-            if !FileManager.default.fileExists(atPath: configURL.path) {
-                try FileManager.default.createDirectory(at: configURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try ConfigLoader.template.write(to: configURL, atomically: true, encoding: .utf8)
-            }
-            NSWorkspace.shared.open(configURL)
-        } catch { alert("設定ファイルを開けません", error.localizedDescription) }
+        let url = configURL
+        do { try ConfigLoader.ensureFileExists(at: url) }
+        catch { openConfigFailed(error.localizedDescription); return }
+        if NSWorkspace.shared.urlForApplication(toOpen: url) != nil, NSWorkspace.shared.open(url) { return }
+        guard let textEdit = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.TextEdit") else {
+            openConfigFailed(url.path); return
+        }
+        NSWorkspace.shared.open([url], withApplicationAt: textEdit, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            guard let error else { return }
+            let message = error.localizedDescription
+            Task { @MainActor in self.openConfigFailed("\(message)\n\n\(url.path)") }
+        }
+    }
+    private func openConfigFailed(_ detail: String) {
+        NSApp.activate()
+        let alert = NSAlert(); alert.messageText = "設定ファイルを開けません"; alert.informativeText = detail; alert.alertStyle = .warning
+        alert.runModal()
     }
     private func openPrivacy(_ anchor: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") { NSWorkspace.shared.open(url) }
