@@ -95,13 +95,14 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
         (CGPoint(x: 20, y: 100), .left, .horizontal),
     ]
     for mode in AnnotationTool.allCases {
+        // 選択ツールと同じ種類のツールだけ縁で変形し、別の種類のツールではその上へ置く。
+        let reshapes = mode == .selection || mode == areaTool
         for (point, handle, cursor) in locations {
-            let action = document.interaction(at: point, selected: [area.id], tool: mode, style: style, tolerance: 7)
-            #expect(action == .resize(area.id, handle))
-            #expect(action.cursor(tool: mode) == cursor)
-            let unselected = document.interaction(at: point, selected: [], tool: mode, style: style, tolerance: 7)
-            #expect(unselected == .resize(area.id, handle))
-            #expect(unselected.cursor(tool: mode) == cursor)
+            for selected: Set<UUID> in [[area.id], []] {
+                let action = document.interaction(at: point, selected: selected, tool: mode, style: style, tolerance: 7)
+                #expect(action == (reshapes ? .resize(area.id, handle) : .create))
+                #expect(action.cursor(tool: mode) == (reshapes ? cursor : AnnotationInteraction.create.cursor(tool: mode)))
+            }
         }
         let interior = document.interaction(at: CGPoint(x: 100, y: 80), selected: [area.id], tool: mode, style: style, tolerance: 7)
         #expect(interior == (mode == .selection ? .move(area.id) : .create))
@@ -130,7 +131,7 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
     #expect(AnnotationGeometry.resized(area, handle: .left, to: point).rect == CGRect(x: 5, y: 20, width: 175, height: 120))
     #expect(AnnotationGeometry.resized(area, handle: .right, to: point).rect == CGRect(x: 5, y: 20, width: 15, height: 120))
 }
-@Test func annotationCreationToolsPreferCreationOverMovingAndKeepEndpointHandles() {
+@Test func annotationCreationToolsPreferCreationOverMovingAndKeepSameKindEndpointHandles() {
     let arrow = Annotation(tool: .arrow, start: CGPoint(x: 20, y: 30), end: CGPoint(x: 120, y: 30))
     let label = Annotation(tool: .text, start: CGPoint(x: 20, y: 60), end: CGPoint(x: 120, y: 100), text: "ラベル")
     let number = Annotation(tool: .number, start: CGPoint(x: 160, y: 100))
@@ -147,15 +148,44 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
                 #expect(action.cursor(tool: mode) == (mode == .selection ? .move : mode.usesSampleCursor ? .sample : .crosshair))
             }
         }
-        #expect(document.interaction(at: arrow.start, selected: [arrow.id], tool: mode, style: style, tolerance: 7) == .resize(arrow.id, .arrowStart))
-        #expect(document.interaction(at: arrow.start, selected: [], tool: mode, style: style, tolerance: 7) == .resize(arrow.id, .arrowStart))
-        #expect(document.interaction(at: arrow.end, selected: [], tool: mode, style: style, tolerance: 7) == .resize(arrow.id, .arrowEnd))
+        // 端点を変えるのは選択ツールと同じ種類のツールだけ。番号ツールなら矢印の端へ番号を置く。
+        let arrowEnds = mode == .selection || mode == .arrow
+        let lineEnds = mode == .selection || mode == .line
+        #expect(document.interaction(at: arrow.start, selected: [arrow.id], tool: mode, style: style, tolerance: 7) == (arrowEnds ? .resize(arrow.id, .arrowStart) : .create))
+        #expect(document.interaction(at: arrow.start, selected: [], tool: mode, style: style, tolerance: 7) == (arrowEnds ? .resize(arrow.id, .arrowStart) : .create))
+        #expect(document.interaction(at: arrow.end, selected: [], tool: mode, style: style, tolerance: 7) == (arrowEnds ? .resize(arrow.id, .arrowEnd) : .create))
         let end = document.interaction(at: arrow.end, selected: [arrow.id], tool: mode, style: style, tolerance: 7)
-        #expect(end == .resize(arrow.id, .arrowEnd))
-        #expect(end.cursor(tool: mode) == .crosshair)
-        #expect(document.interaction(at: line.start, selected: [], tool: mode, style: style, tolerance: 7) == .resize(line.id, .arrowStart))
-        #expect(document.interaction(at: line.end, selected: [], tool: mode, style: style, tolerance: 7) == .resize(line.id, .arrowEnd))
+        #expect(end == (arrowEnds ? .resize(arrow.id, .arrowEnd) : .create))
+        #expect(end.cursor(tool: mode) == (arrowEnds ? .crosshair : AnnotationInteraction.create.cursor(tool: mode)))
+        #expect(document.interaction(at: line.start, selected: [], tool: mode, style: style, tolerance: 7) == (lineEnds ? .resize(line.id, .arrowStart) : .create))
+        #expect(document.interaction(at: line.end, selected: [], tool: mode, style: style, tolerance: 7) == (lineEnds ? .resize(line.id, .arrowEnd) : .create))
     }
+}
+@Test func annotationCreationToolReshapesSameKindEvenUnderAnotherKind() {
+    // 枠の上辺に番号が重なっていても、枠ツールなら枠の縁を直せる。選択ツールは手前の番号をつかむ。
+    let area = Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 180, y: 140))
+    let number = Annotation(tool: .number, start: CGPoint(x: 100, y: 20))
+    let document = AnnotationDocument(annotations: [area, number])
+    let style = AnnotationStyle()
+    let edge = CGPoint(x: 100, y: 20)
+    #expect(document.hit(at: edge, style: style, tolerance: 7) == number.id)
+    #expect(document.interaction(at: edge, selected: [], tool: .rectangle, style: style, tolerance: 7) == .resize(area.id, .top))
+    #expect(document.interaction(at: edge, selected: [], tool: .selection, style: style, tolerance: 7) == .move(number.id))
+    #expect(document.interaction(at: edge, selected: [], tool: .arrow, style: style, tolerance: 7) == .create)
+    // 同じ種類の中では、手前の文字のラベルが下の文字の指す点を覆っていればラベルを優先し、再編集できるよう作成に回す。
+    let below = Annotation(tool: .text, start: CGPoint(x: 300, y: 100), end: CGPoint(x: 360, y: 130), text: "下", leaderTarget: CGPoint(x: 250, y: 220))
+    let above = Annotation(tool: .text, start: CGPoint(x: 220, y: 200), end: CGPoint(x: 300, y: 240), text: "上")
+    let labels = AnnotationDocument(annotations: [below, above])
+    #expect(labels.hit(at: CGPoint(x: 250, y: 220), style: style, tolerance: 7, kind: .text) == above.id)
+    #expect(labels.interaction(at: CGPoint(x: 250, y: 220), selected: [], tool: .text, style: style, tolerance: 7) == .create)
+}
+@Test func annotationCreationToolKeepsSpotInnerWidthAtHighZoom() {
+    // 4倍表示でスポットの左の線から内側へ入った位置は、同じ種類のツールでも従来どおり新しく描く。外側の縁では変形する。
+    let spot = Annotation(tool: .spotlight, start: CGPoint(x: 100, y: 100), end: CGPoint(x: 300, y: 300))
+    let document = AnnotationDocument(annotations: [spot])
+    let style = AnnotationStyle()
+    #expect(document.interaction(at: CGPoint(x: 105, y: 200), selected: [], tool: .spotlight, style: style, tolerance: 7 / 4) == .create)
+    #expect(document.interaction(at: CGPoint(x: 95, y: 200), selected: [], tool: .spotlight, style: style, tolerance: 7 / 4) == .resize(spot.id, .left))
 }
 @Test func unchangedAnnotationDoesNotCreateUndoStep() {
     var history = AnnotationHistory()
@@ -259,7 +289,8 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
     #expect(circle.labelEdge.x > capsule.labelEdge.x)
     #expect(document.number(for: last.id) == 9)
     for tool in AnnotationTool.allCases {
-        #expect(document.interaction(at: last.leaderTarget!, selected: [], tool: tool, style: style, tolerance: 7) == .resize(last.id, .leaderTarget))
+        let reshapes = tool == .selection || tool == .number
+        #expect(document.interaction(at: last.leaderTarget!, selected: [], tool: tool, style: style, tolerance: 7) == (reshapes ? .resize(last.id, .leaderTarget) : .create))
         #expect(document.hit(at: CGPoint(x: 200, y: 120), style: style, tolerance: 7) == last.id)
     }
     let moved = last.translated(by: CGPoint(x: 30, y: 40))
@@ -275,7 +306,7 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
     let spot = Annotation(tool: .spotlight, start: CGPoint(x: 100, y: 100), end: CGPoint(x: 300, y: 300))
     let document = AnnotationDocument(annotations: [spot])
     let style = AnnotationStyle()
-    for tool in AnnotationTool.allCases {
+    for tool in [AnnotationTool.selection, .spotlight] {
         let action = document.interaction(at: CGPoint(x: 95, y: 200), selected: [], tool: tool, style: style, tolerance: 7 / 4)
         #expect(action == .resize(spot.id, .left))
         #expect(action.cursor(tool: tool) == .horizontal)
@@ -323,8 +354,9 @@ func annotationOversizedShapeWithCenterInsideIsKeptInside(_ tool: AnnotationTool
     #expect(document.hit(at: CGPoint(x: 100, y: 122), style: style, tolerance: 7) == label.id)
     #expect(document.hit(at: CGPoint(x: 100, y: 135), style: style, tolerance: 7) == nil)
     for tool in AnnotationTool.allCases {
+        let reshapes = tool == .selection || tool == .text
         for selected: Set<UUID> in [[], [label.id]] {
-            #expect(document.interaction(at: label.leaderTarget!, selected: selected, tool: tool, style: style, tolerance: 7) == .resize(label.id, .leaderTarget))
+            #expect(document.interaction(at: label.leaderTarget!, selected: selected, tool: tool, style: style, tolerance: 7) == (reshapes ? .resize(label.id, .leaderTarget) : .create))
         }
     }
     let moved = label.translated(by: CGPoint(x: 10, y: 30))

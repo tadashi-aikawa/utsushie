@@ -701,7 +701,20 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
            let id = document.hit(at: p, style: style, tolerance: 7 / displayScale, includeAreaInterior: true) {
             toggleOnClick = (id, selection)
         }
-        let interaction = document.interaction(at: p, selected: selection, tool: toggleOnClick == nil ? tool : .selection, style: style, tolerance: 7 / displayScale)
+        let own = document.interaction(at: p, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
+        var interaction = own
+        // ⇧のクリックは選択を切り替えるが、ドラッグの変形は持っているツールで判定する。
+        // 同じ種類の縁はカーソルどおり変形し、別の種類の縁は⇧付きでも変形しない。それ以外は選択ツールとして動かす。
+        if toggleOnClick != nil, tool != .selection {
+            if case .resize = own {} else {
+                let shifted = document.interaction(at: p, selected: selection, tool: .selection, style: style, tolerance: 7 / displayScale)
+                if case .resize(let id, _) = shifted, let annotation = document.annotations.first(where: { $0.id == id }), !tool.reshapes(annotation.tool) {
+                    interaction = own
+                } else {
+                    interaction = shifted
+                }
+            }
+        }
         switch interaction {
         case .resize(let id, let handle):
             guard let annotation = document.annotations.first(where: { $0.id == id }) else { return }
@@ -726,7 +739,15 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             }
         }
         selection = []
-        guard tool.allowsMargin || tool == .spotlight || CGRect(origin: .zero, size: imageSize).contains(p) else { changed(); return }
+        guard tool.allowsMargin || tool == .spotlight || CGRect(origin: .zero, size: imageSize).contains(p) else {
+            // 作れない余白でも、⇧のクリックは選択の切り替えとして効かせる。
+            if let toggle = toggleOnClick {
+                selection = toggle.previous
+                if !selection.insert(toggle.id).inserted { selection.remove(toggle.id) }
+                toggleOnClick = nil
+            }
+            changed(); return
+        }
         let start = AnnotationGeometry.creationStart(p, tool: tool, imageSize: imageSize, size: defaultSize, scale: styleScale)
         let annotation = Annotation(tool: tool, start: start, highlighterColor: Self.lastHighlighterColor,
                                     darkBackground: Self.lastHighlighterDarkBackground, inkColor: Self.lastInkColor, size: defaultSize)
@@ -1048,7 +1069,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             let border = NSBezierPath(rect: rect)
             NSColor.white.setStroke(); border.lineWidth = 3; border.stroke()
             UITheme.indigo.setStroke(); border.lineWidth = 2; border.stroke()
-            for handle in displayedSelection.count == 1 && marqueeRect == nil ? AnnotationGeometry.handles(for: selected) : [] {
+            // 別の種類の作成ツールではハンドルで変形しないので、押せないハンドルを見せない。
+            for handle in displayedSelection.count == 1 && marqueeRect == nil && tool.reshapes(selected.tool) ? AnnotationGeometry.handles(for: selected) : [] {
                 let p = viewPoint(handle), r = CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)
                 let circle = NSBezierPath(ovalIn: r)
                 NSColor.white.setFill(); circle.fill()

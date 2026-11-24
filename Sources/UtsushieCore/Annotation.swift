@@ -72,6 +72,9 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     /// 置かれる注釈の見本をカーソルにする。始点を合わせて引く枠・矢印などは十字のまま。
     /// 文字は引き出し線の起点を押した点に合わせるため十字。ラベルの見本はドラッグでラベルの位置とずれる。
     public var usesSampleCursor: Bool { [.freehand, .highlighter, .number].contains(self) }
+    /// 縁・角・端点・指す点で変形できる注釈の種類。選択ツールはすべて、作成ツールは同じ種類だけ。
+    /// 別の種類の注釈の縁では、その上へ番号や矢印を置くことを優先する。同じ種類を重ねることは少ないため。
+    public func reshapes(_ kind: AnnotationTool) -> Bool { self == .selection || self == kind }
 }
 
 public enum ColorCycleDirection: Int, Sendable {
@@ -304,7 +307,9 @@ public struct AnnotationDocument: Equatable, Sendable {
               !bounds(of: annotation, style: style).insetBy(dx: -style.edge, dy: -style.edge).contains(point) else { return false }
         return AnnotationGeometry.distance(point, toSegmentFrom: segment.target, to: segment.labelEdge) <= max(tolerance, style.lineWidth / 2 + style.edge)
     }
-    public func hit(at point: CGPoint, style: AnnotationStyle, tolerance: Double, includeAreaInterior: Bool = false) -> UUID? {
+    /// kindを渡すと、その種類の注釈だけを同じ優先順で判定する。
+    public func hit(at point: CGPoint, style: AnnotationStyle, tolerance: Double, includeAreaInterior: Bool = false, kind: AnnotationTool? = nil) -> UUID? {
+        let ordered = kind.map { kind in self.ordered.filter { $0.tool == kind } } ?? self.ordered
         // ラベルを線より先に判定する。別のラベルの上を通る線が入力を奪わない。
         if let label = ordered.reversed().first(where: { annotation in
             let style = style.forAnnotation(annotation)
@@ -340,27 +345,40 @@ public struct AnnotationDocument: Equatable, Sendable {
         }?.id
     }
     public func interaction(at point: CGPoint, selected: Set<UUID>, tool: AnnotationTool, style: AnnotationStyle, tolerance: Double) -> AnnotationInteraction {
-        if selected.count == 1, let annotation = annotations.first(where: { selected.contains($0.id) }),
+        if selected.count == 1, let annotation = annotations.first(where: { selected.contains($0.id) }), tool.reshapes(annotation.tool),
            let handle = AnnotationGeometry.resizeHandle(at: point, annotation: annotation, tolerance: tolerance) {
             return .resize(annotation.id, handle)
         }
+        // 作成ツールは同じ種類の注釈だけで当たりを取る。上に別の種類の注釈が重なっていても、その縁を直せるようにする。
+        // 当たりの幅とラベル優先の順はhitに任せ、同じ種類の中で手前のラベルが下の指す点を覆う場合も変えない。
+        if tool != .selection, selected.count <= 1,
+           let id = hit(at: point, style: style, tolerance: tolerance, kind: tool),
+           let annotation = annotations.first(where: { $0.id == id }),
+           let handle = reshapeHandle(of: annotation, at: point, selected: selected, style: style, tolerance: tolerance) {
+            return .resize(id, handle)
+        }
         if let id = hit(at: point, style: style, tolerance: tolerance, includeAreaInterior: tool == .selection || selected.count > 1),
            let annotation = annotations.first(where: { $0.id == id }) {
-            let style = style.forAnnotation(annotation)
-            let band: Double
-            if annotation.tool == .spotlight { band = max(tolerance, style.lineWidth + style.edge * 2) }
-            else if [.rectangle, .mosaic].contains(annotation.tool) { band = max(tolerance, style.lineWidth / 2 + style.edge) }
-            else { band = tolerance }
-            if selected.count <= 1, let handle = AnnotationGeometry.resizeHandle(at: point, annotation: annotation, tolerance: tolerance, edgeTolerance: band) {
-                // ラベルに隠れた指す点は、選択してつまみが見えるまではラベルの移動を奪わない。
-                if handle != .leaderTarget || selected.contains(annotation.id) || leaderSegment(for: annotation, style: style) != nil {
-                    return .resize(id, handle)
-                }
+            if tool == .selection, selected.count <= 1,
+               let handle = reshapeHandle(of: annotation, at: point, selected: selected, style: style, tolerance: tolerance) {
+                return .resize(id, handle)
             }
             guard tool == .selection || selected.count > 1 else { return .create }
             return .move(id, leader: hitsLeaderLine(annotation, at: point, style: style, tolerance: tolerance))
         }
         return tool == .selection ? .none : .create
+    }
+    /// 縁の帯・四隅・端点・指す点のうち、押した点にあるもの。
+    private func reshapeHandle(of annotation: Annotation, at point: CGPoint, selected: Set<UUID>, style: AnnotationStyle, tolerance: Double) -> AnnotationResizeHandle? {
+        let style = style.forAnnotation(annotation)
+        let band: Double
+        if annotation.tool == .spotlight { band = max(tolerance, style.lineWidth + style.edge * 2) }
+        else if [.rectangle, .mosaic].contains(annotation.tool) { band = max(tolerance, style.lineWidth / 2 + style.edge) }
+        else { band = tolerance }
+        guard let handle = AnnotationGeometry.resizeHandle(at: point, annotation: annotation, tolerance: tolerance, edgeTolerance: band) else { return nil }
+        // ラベルに隠れた指す点は、選択してつまみが見えるまではラベルの移動を奪わない。
+        guard handle != .leaderTarget || selected.contains(annotation.id) || leaderSegment(for: annotation, style: style) != nil else { return nil }
+        return handle
     }
     /// 余白は保存せず、外に中心があるラベル・枠と、外に端点がある矢印・外に点がある手書きから毎回求める。
     public func exportLayout(imageSize: CGSize) -> AnnotationExportLayout {

@@ -272,7 +272,7 @@ private func annotationMouseEvent(_ canvas: AnnotationCanvas, type: NSEvent.Even
     }
 }
 
-@MainActor @Test func annotationSelectionDoesNotCreateAndSelectedEdgeResizesWhileHoldingTool() throws {
+@MainActor @Test func annotationSelectionDoesNotCreateAndSelectedEdgeResizesWhileHoldingSameTool() throws {
     let area = Annotation(tool: .spotlight, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 140, y: 80))
     let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [area]), tool: .selection)
     canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
@@ -283,13 +283,68 @@ private func annotationMouseEvent(_ canvas: AnnotationCanvas, type: NSEvent.Even
     canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 60, y: 40)))
     canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 60, y: 40)))
     #expect(canvas.selection == [area.id])
-    canvas.tool = .rectangle
+    canvas.tool = .spotlight
     canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 80, y: 20)))
     canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 100, y: 10)))
     #expect(canvas.displayedSelection == [area.id])
     canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 100, y: 10)))
     #expect(canvas.document.annotations.count == 1)
     #expect(canvas.document.annotations.first?.rect == CGRect(x: 20, y: 10, width: 120, height: 70))
+    // 別の種類のツールでは、選択中のスポットの縁でも変形せずに新しく描く。
+    canvas.tool = .rectangle
+    #expect(canvas.selection == [area.id])
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 80, y: 10)))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 120, y: 40)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 120, y: 40)))
+    #expect(canvas.document.annotations.count == 2)
+    #expect(canvas.document.annotations.first?.rect == CGRect(x: 20, y: 10, width: 120, height: 70))
+    #expect(canvas.document.annotations.last?.tool == .rectangle)
+}
+
+@MainActor @Test func annotationShiftDragFromAnotherKindEdgeCreatesAndShiftClickToggles() throws {
+    let area = Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 140, y: 80))
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [area]), tool: .arrow)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    // ⇧のクリックは選択の切り替え。
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 140, y: 20), flags: .shift))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 140, y: 20), flags: .shift))
+    #expect(canvas.selection == [area.id])
+    #expect(canvas.document.annotations == [area])
+    // ⇧のドラッグは矢印ツールのまま、枠の角から矢印を引く。枠は変形しない。
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 140, y: 20), flags: .shift))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 200, y: 20), flags: .shift))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 200, y: 20), flags: .shift))
+    #expect(canvas.document.annotations.count == 2)
+    #expect(canvas.document.annotations.first?.rect == area.rect)
+    #expect(canvas.document.annotations.last?.tool == .arrow)
+}
+
+@MainActor @Test func annotationShiftDragReshapesSameKindUnderAnotherKind() throws {
+    // 枠の上辺に番号が重なっていても、枠ツールの⇧ドラッグは番号を動かさず枠を直す。
+    let area = Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 140, y: 80))
+    let number = Annotation(tool: .number, start: CGPoint(x: 80, y: 20))
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [area, number]), tool: .rectangle)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 80, y: 20), flags: .shift))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 80, y: 10), flags: .shift))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 80, y: 10), flags: .shift))
+    #expect(canvas.document.annotations.first?.rect == CGRect(x: 20, y: 10, width: 120, height: 70))
+    #expect(canvas.document.annotations.last?.start == number.start)
+}
+
+@MainActor @Test func annotationShiftClickTogglesInMarginWhereToolCannotCreate() throws {
+    // モザイクは余白に作れないが、余白にある矢印の端の⇧クリックは選択の切り替えとして効く。
+    let arrow = Annotation(tool: .arrow, start: CGPoint(x: 100, y: 50), end: CGPoint(x: 200, y: 50))
+    let area = Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 60, y: 60))
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [arrow, area]), tool: .mosaic)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 20, y: 40), flags: .shift))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 20, y: 40), flags: .shift))
+    #expect(canvas.selection == [area.id])
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: arrow.end, flags: .shift))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: arrow.end, flags: .shift))
+    #expect(canvas.selection == [area.id, arrow.id])
+    #expect(canvas.document.annotations == [arrow, area])
 }
 
 @MainActor @Test func annotationLeaderDragMovesTargetOnlyFromLineOrMultipleSelection() throws {
@@ -1531,7 +1586,7 @@ func annotationColorCycleKeysRememberDefaultsAndRejectOtherModifiers(tool: Annot
 
 @MainActor @Test func annotationUnselectedNumberTargetCanResizeAndBadgeMovesIndependently() throws {
     let number = Annotation(tool: .number, start: CGPoint(x: 120, y: 50), leaderTarget: CGPoint(x: 20, y: 50))
-    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [number]), tool: .rectangle)
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [number]), tool: .number)
     canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
     #expect(canvas.selection.isEmpty)
     canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: number.leaderTarget!))
@@ -1566,7 +1621,7 @@ func annotationColorCycleKeysRememberDefaultsAndRejectOtherModifiers(tool: Annot
 @MainActor @Test func annotationUnselectedAreaEdgeResizesWithoutMovingAndInteriorMovesOnlyInSelection() throws {
     for tool in [AnnotationTool.rectangle, .spotlight, .mosaic] {
         let area = Annotation(tool: tool, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 140, y: 80))
-        let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [area]), tool: .text)
+        let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [area]), tool: tool)
         canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
         canvas.zoom(to: 2, around: CGPoint(x: 320, y: 240))
         canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 80, y: 20)))
@@ -1575,6 +1630,13 @@ func annotationColorCycleKeysRememberDefaultsAndRejectOtherModifiers(tool: Annot
         let resized = try #require(canvas.document.annotations.first)
         #expect(resized.id == area.id && resized.rect == CGRect(x: 20, y: 10, width: 120, height: 70))
         #expect(!canvas.isEditingText && canvas.selection == [area.id])
+        // 番号のツールでは、選択中の枠の角にもそのまま番号を置く。
+        canvas.tool = .number
+        canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 140, y: 10)))
+        canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 140, y: 10)))
+        #expect(canvas.document.annotations.count == 2)
+        #expect(canvas.document.annotations.first?.rect == CGRect(x: 20, y: 10, width: 120, height: 70))
+        #expect(canvas.document.annotations.last?.tool == .number)
         canvas.tool = .selection
         canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 80, y: 40)))
         canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 90, y: 45)))
