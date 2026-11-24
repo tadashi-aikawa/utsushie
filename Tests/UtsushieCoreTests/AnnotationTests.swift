@@ -179,6 +179,40 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
     #expect(labels.hit(at: CGPoint(x: 250, y: 220), style: style, tolerance: 7, kind: .text) == above.id)
     #expect(labels.interaction(at: CGPoint(x: 250, y: 220), selected: [], tool: .text, style: style, tolerance: 7) == .create)
 }
+@Test func annotationOptionGrabsSameKindLabelOnlyInLabelTools() {
+    let number = Annotation(tool: .number, start: CGPoint(x: 200, y: 50), leaderTarget: CGPoint(x: 40, y: 50))
+    let text = Annotation(tool: .text, start: CGPoint(x: 100, y: 150), end: CGPoint(x: 180, y: 190), text: "説明")
+    let document = AnnotationDocument(annotations: [number, text])
+    let style = AnnotationStyle()
+    let badge = number.start, line = CGPoint(x: 120, y: 50), label = CGPoint(x: 140, y: 170)
+    func action(_ point: CGPoint, _ tool: AnnotationTool, _ option: Bool) -> AnnotationInteraction {
+        document.interaction(at: point, selected: [], tool: tool, style: style, tolerance: 7, grabsLabel: option)
+    }
+    // ⌥を押した同じ種類のラベルだけ、指す点を残して動かす。
+    #expect(action(badge, .number, true) == .move(number.id, leader: false))
+    #expect(action(badge, .number, true).cursor(tool: .number) == .move)
+    #expect(action(label, .text, true) == .move(text.id, leader: false))
+    // 修飾なしは、ラベルの中からでも新しく引き出し線を引く。
+    #expect(action(badge, .number, false) == .create)
+    #expect(action(label, .text, false) == .create)
+    // 引き出し線の上と、別の種類のラベルは⌥でも置く。
+    #expect(action(line, .number, true) == .create)
+    #expect(action(label, .number, true) == .create)
+    #expect(action(badge, .text, true) == .create)
+    #expect(action(badge, .rectangle, true) == .create)
+    // 円の番号の外接矩形の角は、円の外なのでつかまない。斜めの引き出し線が通る所。
+    let rect = document.bounds(of: number, style: style)
+    let corner = CGPoint(x: rect.maxX - 1, y: rect.minY + 1)
+    #expect(document.grabbedLabel(at: corner, tool: .number, style: style) == nil)
+    #expect(action(corner, .number, true) == .create)
+    // 手前の番号の下に隠れた文字は、文字のツールでもつかまない。
+    let cover = Annotation(tool: .number, start: label)
+    let covered = AnnotationDocument(annotations: [text, cover])
+    #expect(covered.grabbedLabel(at: label, tool: .text, style: style) == nil)
+    #expect(covered.grabbedLabel(at: label, tool: .number, style: style) == cover.id)
+    // 複数選択中でも、⌥は押したラベルをつかむ。
+    #expect(document.interaction(at: badge, selected: [number.id, text.id], tool: .number, style: style, tolerance: 7, grabsLabel: true) == .move(number.id, leader: false))
+}
 @Test func annotationCreationToolKeepsSpotInnerWidthAtHighZoom() {
     // 4倍表示でスポットの左の線から内側へ入った位置は、同じ種類のツールでも従来どおり新しく描く。外側の縁では変形する。
     let spot = Annotation(tool: .spotlight, start: CGPoint(x: 100, y: 100), end: CGPoint(x: 300, y: 300))

@@ -311,10 +311,7 @@ public struct AnnotationDocument: Equatable, Sendable {
     public func hit(at point: CGPoint, style: AnnotationStyle, tolerance: Double, includeAreaInterior: Bool = false, kind: AnnotationTool? = nil) -> UUID? {
         let ordered = kind.map { kind in self.ordered.filter { $0.tool == kind } } ?? self.ordered
         // ラベルを線より先に判定する。別のラベルの上を通る線が入力を奪わない。
-        if let label = ordered.reversed().first(where: { annotation in
-            let style = style.forAnnotation(annotation)
-            return [.text, .number].contains(annotation.tool) && bounds(of: annotation, style: style).insetBy(dx: -style.edge, dy: -style.edge).contains(point)
-        }) { return label.id }
+        if let label = ordered.reversed().first(where: { labelContains($0, point, style: style) }) { return label.id }
         if let leader = ordered.reversed().first(where: { annotation in
             let style = style.forAnnotation(annotation)
             guard let segment = leaderSegment(for: annotation, style: style) else { return false }
@@ -344,7 +341,14 @@ public struct AnnotationDocument: Equatable, Sendable {
             return rect.contains(point)
         }?.id
     }
-    public func interaction(at point: CGPoint, selected: Set<UUID>, tool: AnnotationTool, style: AnnotationStyle, tolerance: Double) -> AnnotationInteraction {
+    /// grabsLabelは⌥を押していること。文字・番号のツールでは、同じ種類のラベルを指す点を残して動かす。
+    public func interaction(at point: CGPoint, selected: Set<UUID>, tool: AnnotationTool, style: AnnotationStyle, tolerance: Double,
+                            grabsLabel: Bool = false) -> AnnotationInteraction {
+        // 修飾なしのドラッグは、既存のラベルの中からでも新しい引き出し線を引くために残す。
+        // ⌥は引き出し線の操作を変えない。線の上は次の注釈を置く場所のままで、⇧や複数選択では従来どおり移動する。
+        if grabsLabel, let id = grabbedLabel(at: point, tool: tool, style: style) {
+            return .move(id, leader: false)
+        }
         if selected.count == 1, let annotation = annotations.first(where: { selected.contains($0.id) }), tool.reshapes(annotation.tool),
            let handle = AnnotationGeometry.resizeHandle(at: point, annotation: annotation, tolerance: tolerance) {
             return .resize(annotation.id, handle)
@@ -367,6 +371,25 @@ public struct AnnotationDocument: Equatable, Sendable {
             return .move(id, leader: hitsLeaderLine(annotation, at: point, style: style, tolerance: tolerance))
         }
         return tool == .selection ? .none : .create
+    }
+    /// 文字・番号のツールで⌥を押したときにつかむラベル。描いた形で手前のラベルを決め、その種類がツールと同じときだけ返す。
+    /// 外接矩形で測ると、円の番号の角に入る斜めの引き出し線までつかむため。手前の別の種類の下にあるラベルもつかまない。
+    public func grabbedLabel(at point: CGPoint, tool: AnnotationTool, style: AnnotationStyle) -> UUID? {
+        guard [.text, .number].contains(tool),
+              let label = ordered.reversed().first(where: { annotation in
+                  guard [.text, .number].contains(annotation.tool) else { return false }
+                  let style = style.forAnnotation(annotation)
+                  let rect = bounds(of: annotation, style: style).insetBy(dx: -style.edge, dy: -style.edge)
+                  let radius = annotation.tool == .number ? rect.height / 2 : style.radius + style.edge
+                  let corner = min(radius, rect.width / 2, rect.height / 2)
+                  return CGPath(roundedRect: rect, cornerWidth: corner, cornerHeight: corner, transform: nil).contains(point)
+              }), label.tool == tool else { return nil }
+        return label.id
+    }
+    /// 文字・番号のラベルの面と縁。引き出し線は含めない。
+    private func labelContains(_ annotation: Annotation, _ point: CGPoint, style: AnnotationStyle) -> Bool {
+        let style = style.forAnnotation(annotation)
+        return [.text, .number].contains(annotation.tool) && bounds(of: annotation, style: style).insetBy(dx: -style.edge, dy: -style.edge).contains(point)
     }
     /// 縁の帯・四隅・端点・指す点のうち、押した点にあるもの。
     private func reshapeHandle(of annotation: Annotation, at point: CGPoint, selected: Set<UUID>, style: AnnotationStyle, tolerance: Double) -> AnnotationResizeHandle? {

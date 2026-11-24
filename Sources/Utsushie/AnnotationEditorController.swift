@@ -320,6 +320,9 @@ final class AnnotationEditorWindow: NSWindow {
         if event.type == .keyDown, editor?.handlePrivacyKey(event) == true { return }
         // IMEへ配送する前に大きさの物理キーを受ける。文字入力中は横取りしない。
         if event.type == .keyDown, editor?.canvas.handleSizeKey(event) == true { return }
+        // ⌥でラベルをつかめる所はカーソルが変わる。ツールバーにキーがあってもマウスを動かさずに決め直す。
+        // 配送は標準のまま続け、文字入力中はupdateCursorが何もしない。
+        if event.type == .flagsChanged { defer { editor?.canvas.updateCursorForModifiers() } ; super.sendEvent(event); return }
         if event.type == .magnify, let canvas = editor?.canvas {
             let location = canvas.convert(event.locationInWindow, from: nil)
             // first responderによらずキャンバス内のピンチを1回だけ処理する。
@@ -628,6 +631,14 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     override func mouseEntered(with event: NSEvent) { mouseMoved(with: event) }
     override func cursorUpdate(with event: NSEvent) { mouseMoved(with: event) }
     override func mouseExited(with event: NSEvent) { cursorPoint = nil; if window?.isKeyWindow == true { NSCursor.arrow.set() }; needsDisplay = true }
+    /// 修飾キーの押し離しで、今のポインタの位置からカーソルを決め直す。キーでズームした後はcursorPointが古いため。
+    func updateCursorForModifiers() {
+        guard let window, gesture == nil else { updateCursor(); return }
+        let local = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard bounds.contains(local) else { return }
+        cursorPoint = viewport.imagePoint(at: local)
+        updateCursor()
+    }
     private func updateCursor() {
         guard window?.isKeyWindow == true, window?.attachedSheet == nil, !isEditingText else { return }
         currentCursor?.set()
@@ -647,7 +658,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         case .move(_, _, let id, let leader): interaction = .move(id, leader: leader)
         case .resize(let annotation, let handle): interaction = .resize(annotation.id, handle)
         case .pan, .marquee, .crop: return nil
-        case nil: interaction = document.interaction(at: cursorPoint, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
+        case nil: interaction = document.interaction(at: cursorPoint, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale,
+                                                     grabsLabel: NSEvent.modifierFlags.contains(.option))
         }
         // 描いている途中でツールを変えても、描いている注釈の見本を出す。
         switch interaction.cursor(tool: drawingAnnotation?.tool ?? tool) {
@@ -701,11 +713,16 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
            let id = document.hit(at: p, style: style, tolerance: 7 / displayScale, includeAreaInterior: true) {
             toggleOnClick = (id, selection)
         }
-        let own = document.interaction(at: p, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
+        let own = document.interaction(at: p, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale,
+                                       grabsLabel: event.modifierFlags.contains(.option))
         var interaction = own
-        // ⇧のクリックは選択を切り替えるが、ドラッグの変形は持っているツールで判定する。
-        // 同じ種類の縁はカーソルどおり変形し、別の種類の縁は⇧付きでも変形しない。それ以外は選択ツールとして動かす。
-        if toggleOnClick != nil, tool != .selection {
+        let grabbedLabel = event.modifierFlags.contains(.option) ? document.grabbedLabel(at: p, tool: tool, style: style) : nil
+        if let grabbedLabel {
+            // ⌥のラベル移動は⇧や複数選択より優先し、押したラベル1件だけを動かす。⇧クリックの切り替えと⇧の軸の拘束は残る。
+            selection = [grabbedLabel]
+        } else if toggleOnClick != nil, tool != .selection {
+            // ⇧のクリックは選択を切り替えるが、ドラッグの変形は持っているツールで判定する。
+            // 同じ種類の縁はカーソルどおり変形し、別の種類の縁は⇧付きでも変形しない。それ以外は選択ツールとして動かす。
             if case .resize = own {} else {
                 let shifted = document.interaction(at: p, selected: selection, tool: .selection, style: style, tolerance: 7 / displayScale)
                 if case .resize(let id, _) = shifted, let annotation = document.annotations.first(where: { $0.id == id }), !tool.reshapes(annotation.tool) {
@@ -724,7 +741,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             if !selection.contains(id) {
                 if toggleOnClick != nil { selection.insert(id) } else { selection = [id] }
             }
-            if selection.count == 1, event.clickCount == 2, annotation.tool == .text { beginText(annotation); return }
+            // ⌥はラベルを動かす操作なので、続けて押しても再編集にしない。⇧⌥の選択の切り替えもmouseUpに任せる。
+            if selection.count == 1, event.clickCount == 2, annotation.tool == .text, grabbedLabel == nil { beginText(annotation); return }
             frozenImageRect = imageRect; gesture = .move(selection, p, id, leader: leader); changed(); return
         case .none:
             let previous = event.modifierFlags.contains(.shift) ? selection : []

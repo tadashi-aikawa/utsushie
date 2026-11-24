@@ -319,6 +319,60 @@ private func annotationMouseEvent(_ canvas: AnnotationCanvas, type: NSEvent.Even
     #expect(canvas.document.annotations.last?.tool == .arrow)
 }
 
+@MainActor @Test func annotationOptionDragMovesSameKindLabelKeepingTarget() throws {
+    let number = Annotation(tool: .number, start: CGPoint(x: 120, y: 50), leaderTarget: CGPoint(x: 20, y: 50))
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [number]), tool: .number)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: number.start, flags: .option))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 130, y: 70), flags: .option))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 130, y: 70), flags: .option))
+    #expect(canvas.document.annotations.count == 1)
+    #expect(canvas.document.annotations.first?.start == CGPoint(x: 130, y: 70))
+    #expect(canvas.document.annotations.first?.leaderTarget == number.leaderTarget)
+    #expect(canvas.tool == .number)
+    // 修飾なしのドラッグは、同じラベルの中から新しい番号の引き出し線を引く。
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: CGPoint(x: 130, y: 70)))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 140, y: 30)))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 140, y: 30)))
+    #expect(canvas.document.annotations.count == 2)
+    #expect(canvas.document.annotations.last?.leaderTarget == CGPoint(x: 130, y: 70))
+}
+
+@MainActor @Test func annotationOptionClickThenDragMovesTextLabelWithoutReediting() throws {
+    // ⌥でクリックした直後に、同じ所から⌥ドラッグしても再編集にせずラベルを動かす。
+    let label = Annotation(tool: .text, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 80, y: 60), text: "既存", leaderTarget: CGPoint(x: 140, y: 80))
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [label]), tool: .text)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    let point = CGPoint(x: 50, y: 40)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: point, flags: .option))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: point, flags: .option))
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: point, flags: .option, clickCount: 2))
+    #expect(!canvas.isEditingText)
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 60, y: 50), flags: .option))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 60, y: 50), flags: .option))
+    #expect(canvas.document.annotations.first?.rect == CGRect(x: 30, y: 30, width: 60, height: 40))
+    #expect(canvas.document.annotations.first?.leaderTarget == label.leaderTarget)
+}
+
+@MainActor @Test func annotationOptionDragMovesOnlyGrabbedLabelWithShiftAndMultipleSelection() throws {
+    // 指す点がラベルに隠れた番号を選んでいても、⇧⌥ドラッグはラベルだけ動かす。
+    let hidden = Annotation(tool: .number, start: CGPoint(x: 60, y: 50), leaderTarget: CGPoint(x: 60, y: 50))
+    let other = Annotation(tool: .number, start: CGPoint(x: 120, y: 50))
+    let canvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(annotations: [hidden, other]), tool: .number)
+    canvas.frame = CGRect(x: 0, y: 0, width: 640, height: 480)
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: hidden.start, flags: .shift))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: hidden.start, flags: .shift))
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: other.start, flags: .shift))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: other.start, flags: .shift))
+    #expect(canvas.selection == [hidden.id, other.id])
+    canvas.mouseDown(with: try annotationMouseEvent(canvas, type: .leftMouseDown, at: hidden.start, flags: [.shift, .option]))
+    canvas.mouseDragged(with: try annotationMouseEvent(canvas, type: .leftMouseDragged, at: CGPoint(x: 80, y: 50), flags: [.shift, .option]))
+    canvas.mouseUp(with: try annotationMouseEvent(canvas, type: .leftMouseUp, at: CGPoint(x: 80, y: 50), flags: [.shift, .option]))
+    #expect(canvas.document.annotations[0].start == CGPoint(x: 80, y: 50))
+    #expect(canvas.document.annotations[0].leaderTarget == hidden.leaderTarget)
+    #expect(canvas.document.annotations[1] == other)
+}
+
 @MainActor @Test func annotationShiftDragReshapesSameKindUnderAnotherKind() throws {
     // 枠の上辺に番号が重なっていても、枠ツールの⇧ドラッグは番号を動かさず枠を直す。
     let area = Annotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 140, y: 80))
