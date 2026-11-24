@@ -246,12 +246,15 @@ func allCardLifetimesPauseDuringEitherEditorAndResumeIndependently(_ video: Bool
     let artifact = try recentArtifact(image, in: dir)
     controller.add(artifact, image: image, copied: false, seconds: 10, screen: nil)
     let card = try #require(controller.card(for: artifact.url))
+    // 編集画面がキーを持っていても、一覧から開き直した編集ではカードがキーを取らないことを確かめる。
+    card.keepsEditorFocus = { _ in true }
     card.edit(); let editor = try #require(card.editor)
     var returned = false
     try await controller.editFromLibrary(artifact.url) { returned = true }
     #expect(controller.cards.count == 1 && card.editor === editor)
     editor.window.close()
-    #expect(returned && card.panel.isVisible)
+    // 一覧から開き直した編集を閉じたら、キーは一覧へ戻し、カードは取らない。
+    #expect(returned && card.panel.isVisible && !card.panel.receivesKeyboard)
 }
 
 @MainActor @Test func libraryPhysicalNavigationIgnoresIMECharactersAndCommandModifiers() async throws {

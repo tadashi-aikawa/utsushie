@@ -399,6 +399,61 @@ func libraryCopiesAllImagesAndVideosInDisplayOrderWithoutGeneralPasteboard(_ mod
     #expect(library.dragURLs(from: listed) == [listed])
 }
 
+/// 編集画面を閉じたら、撮影直後と同じくカードがキーを取り、続けてX・⏎などを押せる。
+@MainActor @Test func closingEditorGivesKeysBackToItsCardUnlessAnotherEditorStaysOpen() async throws {
+    let (thumbnails, url, directory) = try trashCardFixture()
+    defer { for card in thumbnails.cards { thumbnails.remove(card.id) }; try? FileManager.default.removeItem(at: directory) }
+    let image = try actionsImage()
+    let card = try #require(thumbnails.card(for: url))
+    // 試験ではアプリが前面にならないので、閉じる編集画面のキーがほかへ移っていないことにする。
+    var focusStays = true
+    card.keepsEditorFocus = { _ in focusStays }
+    card.edit()
+    #expect(card.editor != nil && !card.panel.receivesKeyboard)
+    // 編集中に足したカードが受け手になっても、閉じた編集画面のカードへ戻す。
+    let otherURL = try ArtifactStore.save(data: WebPEncoder.encode(image, quality: 80, lossless: true), kind: .webP, directory: directory).url
+    thumbnails.add(SharedArtifact(url: otherURL, kind: .webP, width: 32, height: 24, byteCount: 1),
+        image: image, copied: false, seconds: 100, screen: nil)
+    let other = try #require(thumbnails.card(for: otherURL))
+    other.keepsEditorFocus = { _ in focusStays }
+    #expect(other.panel.receivesKeyboard)
+    try #require(card.editor).window.close()
+    #expect(card.panel.isVisible && card.panel.receivesKeyboard && !other.panel.receivesKeyboard)
+
+    // ほかの編集画面が残っている間は、そちらからキーを取らない。
+    card.edit(); other.edit()
+    try #require(card.editor).window.close()
+    #expect(card.panel.isVisible && !card.panel.receivesKeyboard)
+    try #require(other.editor).window.close()
+    #expect(other.panel.receivesKeyboard && !card.panel.receivesKeyboard)
+
+    // 保存を待つ間に別のアプリへ移り、編集画面がキーを失っていたら、カードは出すだけでキーを取らない。
+    card.edit()
+    focusStays = false
+    try #require(card.editor).window.close()
+    #expect(card.panel.isVisible && !card.panel.receivesKeyboard && card.timer != nil)
+
+    // 録画中はフィルターの更新を待ってから出す。閉じる時点と出す時点の両方でキーが移っていないときだけ取る。
+    var continuation: CheckedContinuation<Bool, Never>?
+    card.prepareToShow = { Task { await withCheckedContinuation { continuation = $0 } } }
+    func closeWhileWaiting(atClose: Bool, atShow: Bool) async throws -> Bool {
+        continuation = nil
+        card.edit()
+        focusStays = atClose
+        try #require(card.editor).window.close()
+        #expect(!card.panel.isVisible)
+        focusStays = atShow
+        for _ in 0..<400 where continuation == nil { try await Task.sleep(for: .milliseconds(5)) }
+        try #require(continuation).resume(returning: true)
+        for _ in 0..<400 where !card.panel.isVisible { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(card.panel.isVisible)
+        return card.panel.receivesKeyboard
+    }
+    #expect(try await !closeWhileWaiting(atClose: true, atShow: false))
+    #expect(try await !closeWhileWaiting(atClose: false, atShow: true))
+    #expect(try await closeWhileWaiting(atClose: true, atShow: true))
+}
+
 @MainActor @Test func cardTrashIsDisabledWhileExportingOrEditing() throws {
     let (thumbnails, url, directory) = try trashCardFixture(finalizing: true)
     defer { for card in thumbnails.cards { thumbnails.remove(card.id) }; try? FileManager.default.removeItem(at: directory) }

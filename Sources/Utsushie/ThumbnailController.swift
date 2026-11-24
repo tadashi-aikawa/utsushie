@@ -311,6 +311,15 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     var annotationConfig: () -> UtsushieConfig = { UtsushieConfig() }
     var canShow: () -> Bool = { true }
     var editorFocus = AnnotationApplicationFocus()
+    /// 閉じる編集画面のキーが、ほかへ移っていないか。閉じる時点と、カードを出す時点の両方で確かめる。
+    /// テストではアプリが前面にならず、編集画面がキーにならないので差し替える。
+    var keepsEditorFocus: (NSWindow?) -> Bool = { ThumbnailCard.keepsEditorFocus($0) }
+    /// 自分が前面のまま、キーが閉じる編集画面にあるか、どこにも無い。閉じた後は編集画面が解放されてnilになる。
+    static func keepsEditorFocus(_ editor: NSWindow?) -> Bool {
+        guard NSApp.isActive else { return false }
+        guard let key = NSApp.keyWindow else { return true }
+        return key === editor
+    }
     var copyImage: (SharedArtifact, Data, ClipboardMode) -> Bool = {
         ClipboardWriter.copy($0, data: $1, mode: $2, to: .general, preservingOnFailure: true)
     }
@@ -355,7 +364,9 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         onArtifactChange?()
         resumeTimer()
     }
-    func show(claimKeyboard: Bool = true) {
+    func show(claimKeyboard: Bool = true) { show(claimingKeys: { claimKeyboard }) }
+    /// キーを取るかは、表示する時点で決める。録画中はフィルターの更新を待つので、その間に変わりうる。
+    private func show(claimingKeys: @escaping () -> Bool) {
         guard editor == nil, videoEditor == nil, !closed else { return }
         showTask?.cancel()
         if let preparation = prepareToShow?() {
@@ -363,10 +374,10 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
                 let ready = await preparation.value
                 guard ready, !Task.isCancelled, let self, self.canShow(),
                       self.editor == nil, self.videoEditor == nil, !self.closed else { return }
-                self.showPrepared(claimKeyboard: claimKeyboard)
+                self.showPrepared(claimKeyboard: claimingKeys())
                 self.showTask = nil
             }
-        } else { showPrepared(claimKeyboard: claimKeyboard) }
+        } else { showPrepared(claimKeyboard: claimingKeys()) }
     }
     private func showPrepared(claimKeyboard: Bool) {
         visible = true; panel.orderFrontRegardless()
@@ -471,6 +482,32 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
         if panel.isKeyWindow { panel.resignKey() }
         panel.receivesKeyboard = false
     }
+    /// 閉じた後のカードがキーを持つので、カードを閉じたときは編集を開く直前の前面アプリへ返す。
+    /// 自分が前面だったら返さない。撮影時のアプリへ戻すと、開いている一覧から別のアプリへ移ってしまう。
+    private func rememberApplicationBeforeEditing() {
+        let front = NSWorkspace.shared.frontmostApplication
+        previousApplication = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
+    }
+    /// 編集画面を閉じたら、撮影直後と同じくキーを取って出し直す。完了・Escの後に、続けてX・⏎などを押せるようにする。
+    /// 閉じた編集画面のキーがほかへ移っていないときだけ取る。保存や録画のフィルターの更新を待つ間に、
+    /// 別のアプリやウィンドウへ移ったら、そちらから奪わない。そのアプリを返す先として覚え直すこともしない。
+    /// ほかの編集画面が開いている間と、一覧から開いた編集では取らない。一覧から開いた編集は一覧へキーを戻す。
+    private func reappearAfterEditing(from editor: NSWindow?) {
+        onEditingChange?(false)
+        // 動画は書き出しを終えるとlibraryEditingを戻すので、閉じた時点の値で決める。
+        let fromLibrary = libraryEditing
+        let claims = { [weak self, weak editor] in
+            guard let self, !fromLibrary, !editingSuspended else { return false }
+            return keepsEditorFocus(editor)
+        }
+        // 閉じた時点で見送ったら、出す時点でキーがどこにも無くなっていても取らない。
+        guard claims() else {
+            if canShow() { show(claimKeyboard: false) }
+            return
+        }
+        onRequestKeys?()
+        if canShow() { show(claimingKeys: claims) }
+    }
     private func restoreFocus() {
         guard let previousApplication, previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
         NSApp.yieldActivation(to: previousApplication)
@@ -498,6 +535,7 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
     private func startEdit() {
         if artifact.kind == .mp4 { editVideo(); return }
         guard canEdit, editor == nil, let imageState else { return }
+        rememberApplicationBeforeEditing()
         hide()
         let controller = AnnotationEditorController(image: imageState.original, document: imageState.history.document, screen: screen,
             applicationFocus: editorFocus, privacyConfig: annotationConfig().privacy, history: imageState.history)
@@ -518,18 +556,18 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             imageState.history = controller.canvas.history
             self.complete(artifact: updated, image: image, copied: config.clipboard.copiesAutomatically)
         }
-        controller.onClose = { [weak self] in
+        controller.onClose = { [weak self, weak controller] in
             guard let self else { return }
+            let window = controller?.window
             self.editor = nil; self.remaining = self.lifetime
-            // 編集パネルが手放したキーを貼り付け先へ返す。ホバー時には再び取得できる。
-            if self.canShow() { self.show(claimKeyboard: false) }
-            self.onEditingChange?(false)
+            self.reappearAfterEditing(from: window)
             self.returnToLibrary()
         }
         controller.show()
     }
     private func editVideo() {
         guard canEdit, videoEditor == nil, let duration = artifact.duration, duration > 0 else { return }
+        rememberApplicationBeforeEditing()
         hide()
         if videoSession == nil { videoSession = makeVideoSession(artifact, annotationConfig().video.fps) }
         guard let session = videoSession else { return }
@@ -537,11 +575,11 @@ final class ThumbnailCard: NSObject, NSWindowDelegate {
             copiesStills: annotationConfig().clipboard.copiesAutomatically)
         videoEditor = controller
         onEditingChange?(true)
-        controller.onClose = { [weak self] in
+        controller.onClose = { [weak self, weak controller] in
             guard let self else { return }
+            let window = controller?.window
             videoEditor = nil; remaining = lifetime
-            if canShow() { show(claimKeyboard: false) }
-            onEditingChange?(false)
+            reappearAfterEditing(from: window)
             returnToLibrary()
         }
         controller.onComplete = { [weak self] document in
