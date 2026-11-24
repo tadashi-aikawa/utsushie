@@ -75,6 +75,9 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     /// 縁・角・端点・指す点で変形できる注釈の種類。選択ツールはすべて、作成ツールは同じ種類だけ。
     /// 別の種類の注釈の縁では、その上へ番号や矢印を置くことを優先する。同じ種類を重ねることは少ないため。
     public func reshapes(_ kind: AnnotationTool) -> Bool { self == .selection || self == kind }
+    /// ⌥を押している間は、どのツールも選択ツールとして振る舞う。持ち替えずに、置いた注釈を動かして直すため。
+    /// 範囲選択の前回枠や動画のズームの枠と同じく、⌥を「つかんで動かす」の意味にそろえる。
+    public func acting(option: Bool) -> AnnotationTool { option ? .selection : self }
 }
 
 public enum ColorCycleDirection: Int, Sendable {
@@ -303,8 +306,7 @@ public struct AnnotationDocument: Equatable, Sendable {
     /// ラベルの上はラベルとして扱う。線の途中だけを、指す点ごと動かす場所にする。
     public func hitsLeaderLine(_ annotation: Annotation, at point: CGPoint, style: AnnotationStyle, tolerance: Double) -> Bool {
         let style = style.forAnnotation(annotation)
-        guard let segment = leaderSegment(for: annotation, style: style),
-              !bounds(of: annotation, style: style).insetBy(dx: -style.edge, dy: -style.edge).contains(point) else { return false }
+        guard let segment = leaderSegment(for: annotation, style: style), !labelContains(annotation, point, style: style) else { return false }
         return AnnotationGeometry.distance(point, toSegmentFrom: segment.target, to: segment.labelEdge) <= max(tolerance, style.lineWidth / 2 + style.edge)
     }
     /// kindを渡すと、その種類の注釈だけを同じ優先順で判定する。
@@ -338,17 +340,12 @@ public struct AnnotationDocument: Equatable, Sendable {
                 let outer = annotation.tool == .spotlight ? max(tolerance, style.lineWidth + style.edge * 2) : inset
                 return rect.insetBy(dx: -outer, dy: -outer).contains(point) && (includeAreaInterior || !rect.insetBy(dx: inset, dy: inset).contains(point))
             }
-            return rect.contains(point)
+            // 文字・番号のラベルは先頭のlabelContainsで描いた形どおりに判定済み。円の外の角を外接矩形で拾い直さない。
+            return ![.text, .number].contains(annotation.tool) && rect.contains(point)
         }?.id
     }
-    /// grabsLabelは⌥を押していること。文字・番号のツールでは、同じ種類のラベルを指す点を残して動かす。
-    public func interaction(at point: CGPoint, selected: Set<UUID>, tool: AnnotationTool, style: AnnotationStyle, tolerance: Double,
-                            grabsLabel: Bool = false) -> AnnotationInteraction {
-        // 修飾なしのドラッグは、既存のラベルの中からでも新しい引き出し線を引くために残す。
-        // ⌥は引き出し線の操作を変えない。線の上は次の注釈を置く場所のままで、⇧や複数選択では従来どおり移動する。
-        if grabsLabel, let id = grabbedLabel(at: point, tool: tool, style: style) {
-            return .move(id, leader: false)
-        }
+    /// ⌥を押している間は、toolへ`acting(option:)`を通した選択ツールを渡す。
+    public func interaction(at point: CGPoint, selected: Set<UUID>, tool: AnnotationTool, style: AnnotationStyle, tolerance: Double) -> AnnotationInteraction {
         if selected.count == 1, let annotation = annotations.first(where: { selected.contains($0.id) }), tool.reshapes(annotation.tool),
            let handle = AnnotationGeometry.resizeHandle(at: point, annotation: annotation, tolerance: tolerance) {
             return .resize(annotation.id, handle)
@@ -372,24 +369,16 @@ public struct AnnotationDocument: Equatable, Sendable {
         }
         return tool == .selection ? .none : .create
     }
-    /// 文字・番号のツールで⌥を押したときにつかむラベル。描いた形で手前のラベルを決め、その種類がツールと同じときだけ返す。
-    /// 外接矩形で測ると、円の番号の角に入る斜めの引き出し線までつかむため。手前の別の種類の下にあるラベルもつかまない。
-    public func grabbedLabel(at point: CGPoint, tool: AnnotationTool, style: AnnotationStyle) -> UUID? {
-        guard [.text, .number].contains(tool),
-              let label = ordered.reversed().first(where: { annotation in
-                  guard [.text, .number].contains(annotation.tool) else { return false }
-                  let style = style.forAnnotation(annotation)
-                  let rect = bounds(of: annotation, style: style).insetBy(dx: -style.edge, dy: -style.edge)
-                  let radius = annotation.tool == .number ? rect.height / 2 : style.radius + style.edge
-                  let corner = min(radius, rect.width / 2, rect.height / 2)
-                  return CGPath(roundedRect: rect, cornerWidth: corner, cornerHeight: corner, transform: nil).contains(point)
-              }), label.tool == tool else { return nil }
-        return label.id
-    }
     /// 文字・番号のラベルの面と縁。引き出し線は含めない。
+    /// 描いた角丸・円の形で測る。外接矩形では、円の番号の角を通る斜めの引き出し線までラベルとしてつかむため。
     private func labelContains(_ annotation: Annotation, _ point: CGPoint, style: AnnotationStyle) -> Bool {
+        guard [.text, .number].contains(annotation.tool) else { return false }
         let style = style.forAnnotation(annotation)
-        return [.text, .number].contains(annotation.tool) && bounds(of: annotation, style: style).insetBy(dx: -style.edge, dy: -style.edge).contains(point)
+        let rect = bounds(of: annotation, style: style).insetBy(dx: -style.edge, dy: -style.edge)
+        guard rect.contains(point) else { return false }
+        let radius = annotation.tool == .number ? rect.height / 2 : style.radius + style.edge
+        let corner = min(radius, rect.width / 2, rect.height / 2)
+        return CGPath(roundedRect: rect, cornerWidth: corner, cornerHeight: corner, transform: nil).contains(point)
     }
     /// 縁の帯・四隅・端点・指す点のうち、押した点にあるもの。
     private func reshapeHandle(of annotation: Annotation, at point: CGPoint, selected: Set<UUID>, style: AnnotationStyle, tolerance: Double) -> AnnotationResizeHandle? {

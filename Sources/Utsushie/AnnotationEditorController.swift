@@ -405,6 +405,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private var spacePressed = false
     private var scrollZooming = false
     private var highlighterStraight = false
+    /// mouseDownで決めた判定用のツール。⌥で始めたドラッグは、離すまで選択ツール。
+    private var gestureTool: AnnotationTool?
     private var clipboard = AnnotationClipboard()
     private enum Gesture {
         case create(Annotation)
@@ -608,7 +610,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         updateCursor()
     }
     private func cancelGesture() {
-        gesture = nil; preview = nil; frozenImageRect = nil; marqueeRect = nil; marqueeSelection = nil; toggleOnClick = nil; cropRect = nil
+        gesture = nil; gestureTool = nil; preview = nil; frozenImageRect = nil; marqueeRect = nil; marqueeSelection = nil; toggleOnClick = nil; cropRect = nil
     }
     func finishGesture() {
         if let preview { history.commit(preview) }
@@ -633,11 +635,18 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     override func mouseExited(with event: NSEvent) { cursorPoint = nil; if window?.isKeyWindow == true { NSCursor.arrow.set() }; needsDisplay = true }
     /// 修飾キーの押し離しで、今のポインタの位置からカーソルを決め直す。キーでズームした後はcursorPointが古いため。
     func updateCursorForModifiers() {
+        // ⌥で選択ツールの扱いになると、選択中の注釈のハンドルも出し入れする。ポインタがツールバーの上でも描き直す。
+        needsDisplay = true
         guard let window, gesture == nil else { updateCursor(); return }
         let local = convert(window.mouseLocationOutsideOfEventStream, from: nil)
         guard bounds.contains(local) else { return }
         cursorPoint = viewport.imagePoint(at: local)
         updateCursor()
+    }
+    /// 判定に使うツール。ドラッグ中は押した時点の⌥で決め、それ以外は今の⌥で決める。
+    private var actingTool: AnnotationTool {
+        if gesture != nil, let gestureTool { return gestureTool }
+        return tool.acting(option: NSEvent.modifierFlags.contains(.option))
     }
     private func updateCursor() {
         guard window?.isKeyWindow == true, window?.attachedSheet == nil, !isEditingText else { return }
@@ -646,8 +655,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     /// 今の状態で出すカーソル。nilなら今のカーソルを変えない。
     var currentCursor: NSCursor? {
         if case .pan = gesture { return .closedHand }
-        if spacePressed { return .openHand }
+        // ドラッグの途中で押したスペースは、そのドラッグを変えないのでカーソルも変えない。
+        if spacePressed, gesture == nil { return .openHand }
         guard let cursorPoint else { return nil }
+        let tool = actingTool
         // トリミングは注釈をつかまない。どこでも範囲のドラッグを始める。
         if gesture == nil, tool == .crop { return .crosshair }
         let interaction: AnnotationInteraction
@@ -658,8 +669,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         case .move(_, _, let id, let leader): interaction = .move(id, leader: leader)
         case .resize(let annotation, let handle): interaction = .resize(annotation.id, handle)
         case .pan, .marquee, .crop: return nil
-        case nil: interaction = document.interaction(at: cursorPoint, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale,
-                                                     grabsLabel: NSEvent.modifierFlags.contains(.option))
+        case nil: interaction = document.interaction(at: cursorPoint, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
         }
         // 描いている途中でツールを変えても、描いている注釈の見本を出す。
         switch interaction.cursor(tool: drawingAnnotation?.tool ?? tool) {
@@ -697,12 +707,16 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         commitText(); window?.makeFirstResponder(self)
         selectionBeforeGesture = selection
         viewportBeforeGesture = manualViewport
+        gestureTool = nil
         if spacePressed {
             gesture = .pan(viewport, convert(event.locationInWindow, from: nil)); updateCursor(); return
         }
         let p = point(event)
         cursorPoint = p
         toggleOnClick = nil
+        // ⌥で始めたドラッグは、離すまで選択ツールとして扱う。途中で⌥を離しても切り替えない。
+        let tool = self.tool.acting(option: event.modifierFlags.contains(.option))
+        gestureTool = tool
         if tool == .crop {
             // 範囲は元画像の中だけ。余白からドラッグしても画像の端から始める。
             selection = []; frozenImageRect = imageRect
@@ -713,14 +727,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
            let id = document.hit(at: p, style: style, tolerance: 7 / displayScale, includeAreaInterior: true) {
             toggleOnClick = (id, selection)
         }
-        let own = document.interaction(at: p, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale,
-                                       grabsLabel: event.modifierFlags.contains(.option))
+        let own = document.interaction(at: p, selected: selection, tool: tool, style: style, tolerance: 7 / displayScale)
         var interaction = own
-        let grabbedLabel = event.modifierFlags.contains(.option) ? document.grabbedLabel(at: p, tool: tool, style: style) : nil
-        if let grabbedLabel {
-            // ⌥のラベル移動は⇧や複数選択より優先し、押したラベル1件だけを動かす。⇧クリックの切り替えと⇧の軸の拘束は残る。
-            selection = [grabbedLabel]
-        } else if toggleOnClick != nil, tool != .selection {
+        if toggleOnClick != nil, tool != .selection {
             // ⇧のクリックは選択を切り替えるが、ドラッグの変形は持っているツールで判定する。
             // 同じ種類の縁はカーソルどおり変形し、別の種類の縁は⇧付きでも変形しない。それ以外は選択ツールとして動かす。
             if case .resize = own {} else {
@@ -741,8 +750,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             if !selection.contains(id) {
                 if toggleOnClick != nil { selection.insert(id) } else { selection = [id] }
             }
-            // ⌥はラベルを動かす操作なので、続けて押しても再編集にしない。⇧⌥の選択の切り替えもmouseUpに任せる。
-            if selection.count == 1, event.clickCount == 2, annotation.tool == .text, grabbedLabel == nil { beginText(annotation); return }
+            if selection.count == 1, event.clickCount == 2, annotation.tool == .text { beginText(annotation); return }
             frozenImageRect = imageRect; gesture = .move(selection, p, id, leader: leader); changed(); return
         case .none:
             let previous = event.modifierFlags.contains(.shift) ? selection : []
@@ -832,6 +840,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     }
     override func mouseUp(with event: NSEvent) {
         guard let gesture else { return }
+        // 離したあと余白が変わると画像の表示位置も変わる。今のポインタの位置でカーソルを決め直す。
+        defer { updateCursorForModifiers() }
         if case .pan = gesture { cancelGesture(); viewChanged(); return }
         if case .crop(let anchor) = gesture {
             let end = AnnotationGeometry.clamped(point(event), to: imageSize)
@@ -930,7 +940,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             if !event.isARepeat { applyHighlighterAction(action) }
             return
         }
-        if flags.isEmpty, event.keyCode == 49 { spacePressed = true; updateCursor(); return }
+        // ⌥を先に押していても、スペースはパンを優先する。押す順で操作が入れ替わらないため。
+        if flags.subtracting(.option).isEmpty, event.keyCode == 49 { spacePressed = true; updateCursor(); return }
         if flags.isEmpty, event.keyCode == 4 {
             if !event.isARepeat { onPrivacy?() }
             return
@@ -939,7 +950,10 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             if !event.isARepeat { onFinish?() }
             return
         }
-        if flags.isEmpty, event.keyCode == 53 { if !event.isARepeat { escape() }; return }
+        // ⌥・⇧を押したままのドラッグでも、Escで取り消せるようにする。
+        if event.keyCode == 53, flags.isEmpty || (gesture != nil && flags.isDisjoint(with: [.command, .control])) {
+            if !event.isARepeat { escape() }; return
+        }
         if flags.isEmpty, let next = AnnotationTool.allCases.first(where: { $0.keyCode == event.keyCode }) {
             selectTool(next); return
         }
@@ -1088,7 +1102,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
             NSColor.white.setStroke(); border.lineWidth = 3; border.stroke()
             UITheme.indigo.setStroke(); border.lineWidth = 2; border.stroke()
             // 別の種類の作成ツールではハンドルで変形しないので、押せないハンドルを見せない。
-            for handle in displayedSelection.count == 1 && marqueeRect == nil && tool.reshapes(selected.tool) ? AnnotationGeometry.handles(for: selected) : [] {
+            for handle in displayedSelection.count == 1 && marqueeRect == nil && actingTool.reshapes(selected.tool) ? AnnotationGeometry.handles(for: selected) : [] {
                 let p = viewPoint(handle), r = CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)
                 let circle = NSBezierPath(ovalIn: r)
                 NSColor.white.setFill(); circle.fill()

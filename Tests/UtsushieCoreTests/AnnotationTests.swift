@@ -179,39 +179,56 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
     #expect(labels.hit(at: CGPoint(x: 250, y: 220), style: style, tolerance: 7, kind: .text) == above.id)
     #expect(labels.interaction(at: CGPoint(x: 250, y: 220), selected: [], tool: .text, style: style, tolerance: 7) == .create)
 }
-@Test func annotationOptionGrabsSameKindLabelOnlyInLabelTools() {
+@Test func annotationOptionActsAsSelectionToolInEveryTool() {
     let number = Annotation(tool: .number, start: CGPoint(x: 200, y: 50), leaderTarget: CGPoint(x: 40, y: 50))
     let text = Annotation(tool: .text, start: CGPoint(x: 100, y: 150), end: CGPoint(x: 180, y: 190), text: "説明")
-    let document = AnnotationDocument(annotations: [number, text])
+    let area = Annotation(tool: .rectangle, start: CGPoint(x: 300, y: 100), end: CGPoint(x: 400, y: 200))
+    let document = AnnotationDocument(annotations: [number, text, area])
     let style = AnnotationStyle()
     let badge = number.start, line = CGPoint(x: 120, y: 50), label = CGPoint(x: 140, y: 170)
-    func action(_ point: CGPoint, _ tool: AnnotationTool, _ option: Bool) -> AnnotationInteraction {
-        document.interaction(at: point, selected: [], tool: tool, style: style, tolerance: 7, grabsLabel: option)
+    let corner = CGPoint(x: 400, y: 200), inside = CGPoint(x: 350, y: 150), empty = CGPoint(x: 250, y: 300)
+    for tool in AnnotationTool.allCases {
+        #expect(tool.acting(option: true) == .selection)
+        #expect(tool.acting(option: false) == tool)
     }
-    // ⌥を押した同じ種類のラベルだけ、指す点を残して動かす。
-    #expect(action(badge, .number, true) == .move(number.id, leader: false))
-    #expect(action(badge, .number, true).cursor(tool: .number) == .move)
-    #expect(action(label, .text, true) == .move(text.id, leader: false))
+    func action(_ point: CGPoint, _ tool: AnnotationTool, _ option: Bool) -> AnnotationInteraction {
+        document.interaction(at: point, selected: [], tool: tool.acting(option: option), style: style, tolerance: 7)
+    }
+    for tool in AnnotationTool.allCases where tool.createsAnnotation {
+        // ⌥の間は種類を問わず、ラベルは指す点を残し、引き出し線は指す点ごと動かす。
+        #expect(action(badge, tool, true) == .move(number.id, leader: false))
+        #expect(action(label, tool, true) == .move(text.id, leader: false))
+        #expect(action(line, tool, true) == .move(number.id, leader: true))
+        #expect(action(inside, tool, true) == .move(area.id, leader: false))
+        // 別の種類の縁も直し、何も無い所からは矩形選択にする。
+        #expect(action(corner, tool, true) == .resize(area.id, .bottomRight))
+        #expect(action(empty, tool, true) == AnnotationInteraction.none)
+        #expect(action(empty, tool, true).cursor(tool: tool.acting(option: true)) == .arrow)
+    }
     // 修飾なしは、ラベルの中からでも新しく引き出し線を引く。
     #expect(action(badge, .number, false) == .create)
     #expect(action(label, .text, false) == .create)
-    // 引き出し線の上と、別の種類のラベルは⌥でも置く。
-    #expect(action(line, .number, true) == .create)
-    #expect(action(label, .number, true) == .create)
-    #expect(action(badge, .text, true) == .create)
-    #expect(action(badge, .rectangle, true) == .create)
-    // 円の番号の外接矩形の角は、円の外なのでつかまない。斜めの引き出し線が通る所。
-    let rect = document.bounds(of: number, style: style)
-    let corner = CGPoint(x: rect.maxX - 1, y: rect.minY + 1)
-    #expect(document.grabbedLabel(at: corner, tool: .number, style: style) == nil)
-    #expect(action(corner, .number, true) == .create)
-    // 手前の番号の下に隠れた文字は、文字のツールでもつかまない。
-    let cover = Annotation(tool: .number, start: label)
-    let covered = AnnotationDocument(annotations: [text, cover])
-    #expect(covered.grabbedLabel(at: label, tool: .text, style: style) == nil)
-    #expect(covered.grabbedLabel(at: label, tool: .number, style: style) == cover.id)
-    // 複数選択中でも、⌥は押したラベルをつかむ。
-    #expect(document.interaction(at: badge, selected: [number.id, text.id], tool: .number, style: style, tolerance: 7, grabsLabel: true) == .move(number.id, leader: false))
+    #expect(action(line, .number, false) == .create)
+}
+@Test func annotationLabelHitFollowsDrawnCircleSoDiagonalLeaderMovesTarget() {
+    // 円の番号の外接矩形の角は円の外。そこを通る斜めの引き出し線は、ラベルでなく線としてつかむ。
+    let number = Annotation(tool: .number, start: CGPoint(x: 200, y: 200), leaderTarget: CGPoint(x: 100, y: 100))
+    let document = AnnotationDocument(annotations: [number])
+    let style = AnnotationStyle()
+    let rect = document.bounds(of: number, style: style).insetBy(dx: -style.edge, dy: -style.edge)
+    let offset = rect.height / 2 * 1.25 / 2.squareRoot()
+    let corner = CGPoint(x: 200 - offset, y: 200 - offset)
+    #expect(rect.contains(corner))
+    #expect(document.hitsLeaderLine(number, at: corner, style: style, tolerance: 7))
+    #expect(document.interaction(at: corner, selected: [], tool: .selection, style: style, tolerance: 7) == .move(number.id, leader: true))
+    #expect(document.interaction(at: number.start, selected: [], tool: .selection, style: style, tolerance: 7) == .move(number.id, leader: false))
+    // 引き出し線の無い番号では、円の外の角は何も無い所として矩形選択を始める。
+    // 縁を足す前の外接矩形の中でも、円の外なら拾わない。
+    let lone = Annotation(tool: .number, start: CGPoint(x: 200, y: 200))
+    let plain = AnnotationDocument(annotations: [lone])
+    let inner = CGPoint(x: 188, y: 188)
+    #expect(plain.bounds(of: lone, style: style).contains(inner))
+    #expect(plain.interaction(at: inner, selected: [], tool: .selection, style: style, tolerance: 1) == AnnotationInteraction.none)
 }
 @Test func annotationCreationToolKeepsSpotInnerWidthAtHighZoom() {
     // 4倍表示でスポットの左の線から内側へ入った位置は、同じ種類のツールでも従来どおり新しく描く。外側の縁では変形する。
