@@ -368,6 +368,11 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     private static var lastInkColor: InkColor = .red
     // 各ツールの大きさを、編集画面を開き直しても同じプロセス内で保つ。
     private static var lastSizes: [AnnotationTool: AnnotationSize] = [:]
+    // 選択ツールで開いた編集画面の、Vで戻る先。プロセス内で最後に使った作成ツール。
+    private static var lastCreationTool: AnnotationTool?
+    // 選択ツール中のVで戻る先。編集画面ごとに持ち、同時に開いたほかの画面の持ち替えで変えない。
+    // トリミングから選択ツールへ移った後も、その前の作成ツールへ戻す。
+    private var returnTool: AnnotationTool?
     /// 撮影時の画像。トリミングしても切り詰めず、履歴の範囲から今の画像を切り出す。
     let source: CGImage
     private var cropped: (rect: CGRect, image: CGImage)?
@@ -532,6 +537,8 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     init(image: CGImage, document: AnnotationDocument, tool: AnnotationTool, history: AnnotationHistory? = nil) {
         source = image; self.history = history ?? AnnotationHistory(document); self.tool = tool
+        if tool.createsAnnotation { Self.lastCreationTool = tool }
+        returnTool = Self.lastCreationTool
         super.init(frame: .zero)
         // macOS 14以降のNSViewは既定でクリップしない。文字入力の子ビューも領域内に留める。
         clipsToBounds = true
@@ -954,8 +961,9 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         if event.keyCode == 53, flags.isEmpty || (gesture != nil && flags.isDisjoint(with: [.command, .control])) {
             if !event.isARepeat { escape() }; return
         }
-        if flags.isEmpty, let next = AnnotationTool.allCases.first(where: { $0.keyCode == event.keyCode }) {
-            selectTool(next); return
+        if flags.isEmpty, let key = AnnotationTool.allCases.first(where: { $0.keyCode == event.keyCode }) {
+            if let next = tool.pressing(key, returnTo: returnTool, isRepeat: event.isARepeat) { selectTool(next) }
+            return
         }
         interpretKeyEvents([event])
     }
@@ -967,6 +975,7 @@ final class AnnotationCanvas: NSView, NSTextViewDelegate {
         // 作成ツールの記憶したサイズを示すため、持ち替え時に前の注釈の選択を外す。
         if tool != next { selection = [] }
         tool = next
+        if next.createsAnnotation { returnTool = next; Self.lastCreationTool = next }
         onToolChange?(tool)
         changed()
     }

@@ -504,6 +504,34 @@ private func annotationKeyEvent(keyCode: UInt16, characters: String = "q", flags
         windowNumber: 0, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: repeating, keyCode: keyCode))
 }
 
+@MainActor @Test func annotationSelectionKeyReturnsToEachEditorsLastCreationTool() throws {
+    let numberCanvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .number)
+    let arrowCanvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .arrow)
+    let v = try annotationKeyEvent(keyCode: 9, characters: "v")
+    let vRepeat = try annotationKeyEvent(keyCode: 9, characters: "v", repeating: true)
+    arrowCanvas.keyDown(with: v)
+    #expect(arrowCanvas.tool == .selection)
+    // 押したままほかの画面へ移っても、繰り返しでは持ち替えず、戻り先も変えない。
+    numberCanvas.keyDown(with: vRepeat)
+    arrowCanvas.keyDown(with: vRepeat)
+    #expect(numberCanvas.tool == .number && arrowCanvas.tool == .selection)
+    // 繰り返しは共有の初期値も変えない。選択で開いた画面は、最後に開いた矢印へ戻る。
+    let selectionCanvas = AnnotationCanvas(image: try annotationFixture(), document: AnnotationDocument(), tool: .selection)
+    selectionCanvas.keyDown(with: v)
+    #expect(selectionCanvas.tool == .arrow)
+    // 同時に開いたほかの画面の持ち替えでは、戻り先を変えない。
+    numberCanvas.keyDown(with: v)
+    numberCanvas.keyDown(with: v)
+    #expect(numberCanvas.tool == .number)
+    arrowCanvas.keyDown(with: v)
+    #expect(arrowCanvas.tool == .arrow)
+    // ボタンと同じ持ち替えでも戻り先を覚える。
+    arrowCanvas.selectTool(.line)
+    arrowCanvas.selectTool(.selection)
+    arrowCanvas.keyDown(with: v)
+    #expect(arrowCanvas.tool == .line)
+}
+
 @MainActor @Test func annotationSizeKeysRememberEachToolDefaultAndRespectTextInput() throws {
     let canvas = AnnotationCanvas(image: try annotationFixture(width: 960, height: 600), document: AnnotationDocument(), tool: .number)
     canvas.frame = CGRect(x: 0, y: 0, width: 1100, height: 800)
@@ -2099,6 +2127,11 @@ private final class AnnotationRunningApplication: NSRunningApplication, @uncheck
     #expect(canvas.document.annotations.first?.start == CGPoint(x: 20, y: 10))
     #expect(canvas.original.width == 80 && canvas.original.height == 60)
     #expect(canvas.exportLayout.bounds == CGRect(x: 0, y: 0, width: 80, height: 60))
+    // 押したままのKの繰り返しでは選択に留まり、Vで切る前の枠へ戻る。
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 40, characters: "k", repeating: true))
+    #expect(canvas.tool == .selection)
+    canvas.keyDown(with: try annotationKeyEvent(keyCode: 9, characters: "v"))
+    #expect(canvas.tool == .rectangle)
     let composed = try AnnotationRenderer.compose(canvas.original, document: AnnotationDocument(crop: canvas.document.crop))
     #expect(try pixel(composed, x: 0, y: 0) == pixel(source, x: 40, y: 20))
     #expect(try pixel(composed, x: 79, y: 59) == pixel(source, x: 119, y: 79))

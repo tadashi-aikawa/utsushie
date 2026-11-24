@@ -78,6 +78,14 @@ public enum AnnotationTool: String, CaseIterable, Sendable {
     /// ⌥を押している間は、どのツールも選択ツールとして振る舞う。持ち替えずに、置いた注釈を動かして直すため。
     /// 範囲選択の前回枠や動画のズームの枠と同じく、⌥を「つかんで動かす」の意味にそろえる。
     public func acting(option: Bool) -> AnnotationTool { option ? .selection : self }
+    /// ツールのキーを押したときの持ち替え先。選択ツール中のVは、最後に使った作成ツールへ戻る。
+    /// 選択で少し直した後、押し直すキーを思い出さずに元のツールで続けるため。
+    /// 長押しの繰り返しではnilを返し、持ち替えも戻り先の記憶もしない。選択と元のツールを行き来しないため。
+    public func pressing(_ key: AnnotationTool, returnTo last: AnnotationTool?, isRepeat: Bool) -> AnnotationTool? {
+        if isRepeat { return nil }
+        guard self == .selection, key == .selection, let last, last.createsAnnotation else { return key }
+        return last
+    }
 }
 
 public enum ColorCycleDirection: Int, Sendable {

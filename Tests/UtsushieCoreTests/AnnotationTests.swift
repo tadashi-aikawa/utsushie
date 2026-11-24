@@ -210,6 +210,24 @@ func annotationAreaInteractionResizesUnselectedEdgesAndMovesInteriorInSelection(
     #expect(action(label, .text, false) == .create)
     #expect(action(line, .number, false) == .create)
 }
+@Test func annotationSelectionKeyReturnsToLastCreationTool() {
+    // 番号から選択へ持ち替え、もう一度Vで番号へ戻る。
+    #expect(AnnotationTool.number.pressing(.selection, returnTo: .number, isRepeat: false) == .selection)
+    #expect(AnnotationTool.selection.pressing(.selection, returnTo: .number, isRepeat: false) == .number)
+    // 戻る先が無いか、作成ツールでなければ選択のまま。
+    #expect(AnnotationTool.selection.pressing(.selection, returnTo: nil, isRepeat: false) == .selection)
+    #expect(AnnotationTool.selection.pressing(.selection, returnTo: .crop, isRepeat: false) == .selection)
+    // 長押しの繰り返しではどのキーでも持ち替えず、選択と元のツールを行き来しない。
+    for key in AnnotationTool.allCases {
+        #expect(AnnotationTool.selection.pressing(key, returnTo: .number, isRepeat: true) == nil)
+        #expect(AnnotationTool.number.pressing(key, returnTo: .number, isRepeat: true) == nil)
+    }
+    // V以外のキーは従来どおりそのツールへ持ち替える。
+    for key in AnnotationTool.allCases where key != .selection {
+        #expect(AnnotationTool.selection.pressing(key, returnTo: .number, isRepeat: false) == key)
+        #expect(AnnotationTool.rectangle.pressing(key, returnTo: .rectangle, isRepeat: false) == key)
+    }
+}
 @Test func annotationLabelHitFollowsDrawnCircleSoDiagonalLeaderMovesTarget() {
     // 円の番号の外接矩形の角は円の外。そこを通る斜めの引き出し線は、ラベルでなく線としてつかむ。
     let number = Annotation(tool: .number, start: CGPoint(x: 200, y: 200), leaderTarget: CGPoint(x: 100, y: 100))
