@@ -50,6 +50,20 @@ public enum OverlayPresentation {
             : CaptureGeometry.outputSize(points: points, scale: scale, downscale: downscale)
         return "\(size.width)×\(size.height)"
     }
+    /// 前回枠のバッジ。⌥で動かす・リサイズするときに今の寸法を確かめられるよう、動かしていないときも寸法を添える。
+    /// 書式はウィンドウの強調の「アプリ名 · 寸法」とそろえる。
+    public static func lastLabel(dimensions: String) -> String { "前回 ⏎ · \(dimensions)" }
+    /// AppKit座標。前回枠の左上の内側へ置き、置き場所の画面からはみ出す分だけ縦横とも内側へ戻す。
+    /// 画面は全パネルで同じものを渡す。パネルごとに戻すと、隣の画面へ続く切れ端が残るため。
+    public static func lastLabelFrame(last: CGRect, screens: [CGRect], size: CGSize) -> CGRect {
+        var frame = CGRect(x: last.minX + 8, y: last.maxY - 30, width: size.width, height: size.height)
+        // 起点が画面の外に出る細い枠・低い枠は、枠と最も広く重なる画面へ戻す。
+        let overlapping = RecordingPresentation.badgeScreen(selection: last, screens: screens).map { screens[$0] }
+        guard let screen = screens.first(where: { $0.contains(frame.origin) }) ?? overlapping else { return frame }
+        frame.origin.x = max(screen.minX + 4, min(frame.minX, screen.maxX - size.width - 4))
+        frame.origin.y = max(screen.minY + 4, min(frame.minY, screen.maxY - size.height - 4))
+        return frame
+    }
 }
 
 public enum CardAction: Int, CaseIterable, Sendable { case annotate, pin, save, reveal, trash }

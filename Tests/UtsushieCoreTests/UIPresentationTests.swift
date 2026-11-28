@@ -62,6 +62,27 @@ import Testing
     #expect(OverlayPresentation.dimensions(points: points, scale: 2, output: .video, downscale: false) == "662×422")
 }
 
+@Test func lastLabelAddsDimensionsAfterKey() {
+    #expect(OverlayPresentation.lastLabel(dimensions: "662×422") == "前回 ⏎ · 662×422")
+}
+
+@Test func lastLabelFrameStaysInsideTheScreenOfItsOrigin() {
+    let left = CGRect(x: 0, y: 0, width: 1000, height: 800), right = CGRect(x: 1000, y: 0, width: 1000, height: 800)
+    let size = CGSize(width: 140, height: 22)
+    let inner = OverlayPresentation.lastLabelFrame(last: CGRect(x: 100, y: 100, width: 300, height: 200), screens: [left, right], size: size)
+    #expect(inner == CGRect(x: 108, y: 270, width: 140, height: 22))
+    // 狭い枠を右端へ寄せても、寸法を画面の中へ戻す。隣の画面があっても同じ画面で戻す。
+    let edge = OverlayPresentation.lastLabelFrame(last: CGRect(x: 950, y: 100, width: 50, height: 200), screens: [left, right], size: size)
+    #expect(edge.maxX == 996)
+    // 起点が画面の外に出る細い枠・低い枠も、重なる画面の中へ戻す。
+    let thin = OverlayPresentation.lastLabelFrame(last: CGRect(x: 1995, y: 100, width: 5, height: 200), screens: [left, right], size: size)
+    #expect(right.contains(thin))
+    let low = OverlayPresentation.lastLabelFrame(last: CGRect(x: 900, y: 0, width: 100, height: 24), screens: [left, right], size: size)
+    #expect(left.contains(low))
+    let outside = OverlayPresentation.lastLabelFrame(last: CGRect(x: 3000, y: 100, width: 50, height: 200), screens: [left, right], size: size)
+    #expect(outside.minX == 3008)
+}
+
 @Test func hudSeparatesSelectedOutputAndTargetAndDisablesMissingLast() {
     let initial = OverlayPresentation.items(output: .image, target: .area, hasLast: false)
     #expect(initial.filter(\.selected).map(\.title) == ["画像", "範囲"])

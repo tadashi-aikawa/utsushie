@@ -582,7 +582,11 @@ final class OverlayView: NSView {
             UITheme.ink.setStroke(); outline.stroke()
             outline.setLineDash([6, 4], count: 2, phase: 0)
             NSColor.white.withAlphaComponent(0.85).setStroke(); outline.stroke()
-            label("前回 ⏎", at: CGPoint(x: rect.minX + 8, y: rect.maxY - 30))
+            let title = OverlayPresentation.lastLabel(dimensions: controller.dimensions(last))
+            let width = ceil((title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .medium)]).width) + 16
+            let placement = OverlayPresentation.lastLabelFrame(last: last, screens: NSScreen.screens.map(\.frame),
+                                                               size: CGSize(width: width, height: 22))
+            label(title, in: local(placement))
         }
         if let rect = selected, !controller.highlightedDisplay || rect == screenFrame {
             let area = local(rect)
