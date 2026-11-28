@@ -53,15 +53,30 @@ public enum OverlayPresentation {
     /// 前回枠のバッジ。⌥で動かす・リサイズするときに今の寸法を確かめられるよう、動かしていないときも寸法を添える。
     /// 書式はウィンドウの強調の「アプリ名 · 寸法」とそろえる。
     public static func lastLabel(dimensions: String) -> String { "前回 ⏎ · \(dimensions)" }
-    /// AppKit座標。前回枠の左上の内側へ置き、置き場所の画面からはみ出す分だけ縦横とも内側へ戻す。
-    /// 画面は全パネルで同じものを渡す。パネルごとに戻すと、隣の画面へ続く切れ端が残るため。
-    public static func lastLabelFrame(last: CGRect, screens: [CGRect], size: CGSize) -> CGRect {
-        var frame = CGRect(x: last.minX + 8, y: last.maxY - 30, width: size.width, height: size.height)
-        // 起点が画面の外に出る細い枠・低い枠は、枠と最も広く重なる画面へ戻す。
-        let overlapping = RecordingPresentation.badgeScreen(selection: last, screens: screens).map { screens[$0] }
-        guard let screen = screens.first(where: { $0.contains(frame.origin) }) ?? overlapping else { return frame }
-        frame.origin.x = max(screen.minX + 4, min(frame.minX, screen.maxX - size.width - 4))
-        frame.origin.y = max(screen.minY + 4, min(frame.minY, screen.maxY - size.height - 4))
+    /// AppKit座標。`dimensionLabel`を、範囲と最も広く重なる画面1つで決める。全パネルで同じ位置を描くときに使う。
+    /// 理由: パネルごとに自分の画面へ収めると、範囲の無い画面の端にもバッジが出るため。
+    /// 上下に並んだ画面で範囲が上の画面へ跨いでも、基準の画面の上端で止め、上の画面へ切れ端を出さない。
+    public static func badgeFrame(selection: CGRect, screens: [CGRect], size: CGSize) -> CGRect {
+        guard let index = RecordingPresentation.badgeScreen(selection: selection, screens: screens) else {
+            return CGRect(x: selection.minX, y: selection.maxY + 10, width: size.width, height: size.height)
+        }
+        let screen = screens[index]
+        var frame = dimensionLabel(selection: selection, screen: screen, size: size)
+        frame.origin.y = min(frame.minY, screen.maxY - size.height - 4)
+        return frame
+    }
+    /// AppKit座標。選択範囲の寸法のバッジと同じく、枠の上の外へ置く。
+    /// `avoiding`はカーソル下のウィンドウなどの強調の範囲とバッジの寸法。重なれば、その上か下へずらして読めるようにする。
+    /// 強調のバッジはパネルごとに決まるので、前回のバッジを置く画面で描かれる位置と比べる。ウィンドウが画面を跨いでも隠れないため。
+    public static func lastLabelFrame(last: CGRect, screens: [CGRect], size: CGSize,
+                                      avoiding: (selection: CGRect, size: CGSize)? = nil) -> CGRect {
+        var frame = badgeFrame(selection: last, screens: screens, size: size)
+        guard let avoiding, let index = RecordingPresentation.badgeScreen(selection: last, screens: screens) else { return frame }
+        let screen = screens[index]
+        let other = dimensionLabel(selection: avoiding.selection, screen: screen, size: avoiding.size)
+        guard frame.intersects(other) else { return frame }
+        let above = other.maxY + 4
+        frame.origin.y = above + size.height <= screen.maxY - 4 ? above : other.minY - size.height - 4
         return frame
     }
 }

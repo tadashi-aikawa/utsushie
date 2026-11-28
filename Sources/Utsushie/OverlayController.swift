@@ -576,6 +576,13 @@ final class OverlayView: NSView {
         func local(_ rect: CGRect) -> CGRect { rect.offsetBy(dx: -screenFrame.minX, dy: -screenFrame.minY) }
         let selected = controller.selection ?? controller.highlighted?.rect
         UIDrawing.curtain(bounds, selection: (controller.adjustingLast ?? selected).map(local))
+        let screens = NSScreen.screens.map(\.frame)
+        let isDisplay = controller.highlightedDisplay
+        let isHighlighted = controller.selection == nil && controller.highlighted != nil
+        let selectedTitle = selected.map { rect in
+            let dimensions = controller.dimensions(rect, window: isHighlighted && !isDisplay)
+            return isHighlighted ? "\(controller.highlightedApp) · \(dimensions)" : dimensions
+        }
         if let last = controller.displayedLast {
             let rect = local(last)
             let outline = NSBezierPath(rect: rect); outline.lineWidth = 1.5
@@ -583,19 +590,21 @@ final class OverlayView: NSView {
             outline.setLineDash([6, 4], count: 2, phase: 0)
             NSColor.white.withAlphaComponent(0.85).setStroke(); outline.stroke()
             let title = OverlayPresentation.lastLabel(dimensions: controller.dimensions(last))
-            let width = ceil((title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .medium)]).width) + 16
-            let placement = OverlayPresentation.lastLabelFrame(last: last, screens: NSScreen.screens.map(\.frame),
-                                                               size: CGSize(width: width, height: 22))
+            // ウィンドウの強調のバッジも範囲の上の外に出るので、重なれば前回のバッジをずらす。全パネルで同じ位置にするため画面1つで決める。
+            var avoiding: (selection: CGRect, size: CGSize)?
+            // ディスプレイの強調のバッジは、強調した画面にだけ描く。前回枠の画面と違えば避けない。
+            let lastScreen = RecordingPresentation.badgeScreen(selection: last, screens: screens).map { screens[$0] }
+            if let rect = selected, let selectedTitle, !isDisplay || rect == lastScreen {
+                avoiding = (rect, CGSize(width: Self.labelWidth(selectedTitle), height: 22))
+            }
+            let placement = OverlayPresentation.lastLabelFrame(last: last, screens: screens,
+                                                               size: CGSize(width: Self.labelWidth(title), height: 22), avoiding: avoiding)
             label(title, in: local(placement))
         }
-        if let rect = selected, !controller.highlightedDisplay || rect == screenFrame {
+        if let rect = selected, let title = selectedTitle, !isDisplay || rect == screenFrame {
             let area = local(rect)
-            let isDisplay = controller.highlightedDisplay
             UIDrawing.selection(area, video: controller.state.output == .video, inside: isDisplay)
-            let isHighlighted = controller.selection == nil && controller.highlighted != nil
-            let dimensions = controller.dimensions(rect, window: isHighlighted && !isDisplay)
-            let title = isHighlighted ? "\(controller.highlightedApp) · \(dimensions)" : dimensions
-            let width = min(bounds.width - 16, ceil((title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .medium)]).width) + 16)
+            let width = min(bounds.width - 16, Self.labelWidth(title))
             let placement = OverlayPresentation.dimensionLabel(selection: area, screen: bounds, size: CGSize(width: width, height: 22))
             label(title, in: placement)
         }
@@ -604,9 +613,11 @@ final class OverlayView: NSView {
         let visible = local(NSScreen.screens.first { $0.frame == screenFrame }?.visibleFrame ?? screenFrame)
         drawHUD(controller, visible: visible)
     }
+    private static func labelWidth(_ string: String) -> CGFloat {
+        ceil((string as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .medium)]).width) + 16
+    }
     private func label(_ string: String, at point: CGPoint) {
-        let width = ceil((string as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11.5, weight: .medium)]).width) + 16
-        label(string, in: CGRect(origin: point, size: CGSize(width: width, height: 22)))
+        label(string, in: CGRect(origin: point, size: CGSize(width: Self.labelWidth(string), height: 22)))
     }
     private func label(_ string: String, in rect: CGRect) {
         UIDrawing.fill(rect, color: UITheme.ink.withAlphaComponent(0.94), radius: 6)

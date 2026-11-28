@@ -66,21 +66,66 @@ import Testing
     #expect(OverlayPresentation.lastLabel(dimensions: "662×422") == "前回 ⏎ · 662×422")
 }
 
-@Test func lastLabelFrameStaysInsideTheScreenOfItsOrigin() {
+@Test func lastLabelFrameMatchesTheSelectionBadgeOnItsScreen() {
     let left = CGRect(x: 0, y: 0, width: 1000, height: 800), right = CGRect(x: 1000, y: 0, width: 1000, height: 800)
     let size = CGSize(width: 140, height: 22)
-    let inner = OverlayPresentation.lastLabelFrame(last: CGRect(x: 100, y: 100, width: 300, height: 200), screens: [left, right], size: size)
-    #expect(inner == CGRect(x: 108, y: 270, width: 140, height: 22))
-    // 狭い枠を右端へ寄せても、寸法を画面の中へ戻す。隣の画面があっても同じ画面で戻す。
+    // 選択範囲の寸法のバッジと同じく、枠の上10ptの外で左端をそろえる。
+    let area = CGRect(x: 100, y: 100, width: 300, height: 200)
+    let placed: CGRect = OverlayPresentation.lastLabelFrame(last: area, screens: [left, right], size: size)
+    let selection: CGRect = OverlayPresentation.dimensionLabel(selection: area, screen: left, size: size)
+    #expect(placed == selection)
+    #expect(placed == CGRect(x: 100, y: 310, width: 140, height: 22))
+    // 狭い枠を右端へ寄せても、枠のある画面の中へ戻す。隣の画面へははみ出さない。
     let edge = OverlayPresentation.lastLabelFrame(last: CGRect(x: 950, y: 100, width: 50, height: 200), screens: [left, right], size: size)
     #expect(edge.maxX == 996)
-    // 起点が画面の外に出る細い枠・低い枠も、重なる画面の中へ戻す。
-    let thin = OverlayPresentation.lastLabelFrame(last: CGRect(x: 1995, y: 100, width: 5, height: 200), screens: [left, right], size: size)
-    #expect(right.contains(thin))
-    let low = OverlayPresentation.lastLabelFrame(last: CGRect(x: 900, y: 0, width: 100, height: 24), screens: [left, right], size: size)
-    #expect(left.contains(low))
-    let outside = OverlayPresentation.lastLabelFrame(last: CGRect(x: 3000, y: 100, width: 50, height: 200), screens: [left, right], size: size)
-    #expect(outside.minX == 3008)
+    // 跨ぐ枠は最も広く重なる画面を基準にする。
+    let spanning = OverlayPresentation.lastLabelFrame(last: CGRect(x: 900, y: 100, width: 400, height: 200), screens: [left, right], size: size)
+    #expect(right.contains(spanning))
+    // 上端の枠は選択範囲と同じく内側へ回る。
+    let top = OverlayPresentation.lastLabelFrame(last: CGRect(x: 100, y: 600, width: 300, height: 200), screens: [left, right], size: size)
+    #expect(left.contains(top))
+}
+
+@Test func badgeFrameStopsAtTheTopOfItsScreenWhenSpanningUpward() {
+    let lower = CGRect(x: 0, y: 0, width: 1000, height: 800), upper = CGRect(x: 0, y: 800, width: 1000, height: 800)
+    let size = CGSize(width: 140, height: 22)
+    // 下の画面が基準で、枠の上端だけ上の画面へ跨ぐ。上の画面へ切れ端を出さない。
+    let frame = OverlayPresentation.badgeFrame(selection: CGRect(x: 100, y: 300, width: 300, height: 520), screens: [lower, upper], size: size)
+    #expect(lower.contains(frame))
+}
+
+@Test func lastLabelFrameMovesOffTheHighlightBadge() {
+    let screen = CGRect(x: 0, y: 0, width: 1000, height: 800)
+    let size = CGSize(width: 140, height: 22)
+    let last = CGRect(x: 100, y: 100, width: 300, height: 200)
+    let highlightSize = CGSize(width: 180, height: 22)
+    // 前回枠とウィンドウの左上がそろうと、強調のバッジと同じ所になる。強調のバッジの上へずらす。
+    let highlight: CGRect = OverlayPresentation.dimensionLabel(selection: last, screen: screen, size: highlightSize)
+    let moved: CGRect = OverlayPresentation.lastLabelFrame(last: last, screens: [screen], size: size, avoiding: (last, highlightSize))
+    #expect(!moved.intersects(highlight))
+    #expect(moved.minY > highlight.maxY)
+    // 上に入らなければ下へずらす。
+    let top = CGRect(x: 100, y: 500, width: 300, height: 270)
+    let topHighlight: CGRect = OverlayPresentation.dimensionLabel(selection: top, screen: screen, size: highlightSize)
+    let below: CGRect = OverlayPresentation.lastLabelFrame(last: top, screens: [screen], size: size, avoiding: (top, highlightSize))
+    #expect(!below.intersects(topHighlight))
+    #expect(screen.contains(below))
+    // 重ならなければ動かさない。
+    let far = CGRect(x: 600, y: 100, width: 300, height: 200)
+    let kept: CGRect = OverlayPresentation.lastLabelFrame(last: last, screens: [screen], size: size, avoiding: (far, size))
+    let plain: CGRect = OverlayPresentation.badgeFrame(selection: last, screens: [screen], size: size)
+    #expect(kept == plain)
+}
+
+@Test func lastLabelFrameAvoidsTheHighlightBadgeDrawnOnItsOwnScreen() {
+    let left = CGRect(x: 0, y: 0, width: 1000, height: 800), right = CGRect(x: 1000, y: 0, width: 1000, height: 800)
+    let size = CGSize(width: 140, height: 22), highlightSize = CGSize(width: 180, height: 22)
+    // ウィンドウの大半は右の画面でも、左の画面のパネルは強調のバッジを左の画面の中へ収めて描く。
+    let last = CGRect(x: 830, y: 100, width: 160, height: 200)
+    let window = CGRect(x: 900, y: 100, width: 900, height: 200)
+    let drawnOnLeft: CGRect = OverlayPresentation.dimensionLabel(selection: window, screen: left, size: highlightSize)
+    let placed: CGRect = OverlayPresentation.lastLabelFrame(last: last, screens: [left, right], size: size, avoiding: (window, highlightSize))
+    #expect(!placed.intersects(drawnOnLeft))
 }
 
 @Test func hudSeparatesSelectedOutputAndTargetAndDisablesMissingLast() {
